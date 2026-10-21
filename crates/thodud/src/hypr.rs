@@ -124,8 +124,8 @@ pub fn monitors() -> Result<Vec<MonitorEntry>, String> {
         .collect())
 }
 
-/// The monitor Hyprland has focused.
-pub fn focused_monitor() -> Result<Monitor, String> {
+/// The monitor Hyprland has focused, with its id.
+pub fn focused_monitor() -> Result<MonitorEntry, String> {
     let list = json("monitors")?;
     let focused = list
         .as_array()
@@ -137,7 +137,6 @@ pub fn focused_monitor() -> Result<Monitor, String> {
     monitors()?
         .into_iter()
         .find(|m| m.id == focused)
-        .map(|m| m.monitor)
         .ok_or_else(|| format!("no monitor {focused}"))
 }
 

@@ -33,13 +33,11 @@ impl fmt::Display for Input {
     }
 }
 
-/// The inputs for `act`: a move to its point unless it repeats the click
-/// before it, Control around the clicks when asked, and `count` clicks.
+/// The inputs for `act`: a move to its point, Control around the clicks
+/// when asked, and `count` clicks. The second click of a double click moves
+/// too, so a mouse nudged in between does not carry it elsewhere.
 pub fn plan(act: &Act) -> Vec<Input> {
-    let mut inputs = Vec::new();
-    if !act.again {
-        inputs.push(Input::Move(act.point.0, act.point.1));
-    }
+    let mut inputs = vec![Input::Move(act.point.0, act.point.1)];
     if act.ctrl {
         inputs.push(Input::Ctrl(true));
     }

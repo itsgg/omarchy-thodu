@@ -624,13 +624,11 @@ fn req_act_02_key_cases() {
         assert_eq!(inputs, expected, "{name}");
         let state = serde_json::to_value(s.state).expect("state");
         assert_eq!(state, case["state"], "{name}");
-        if s.state == State::Acting {
-            assert_eq!(
-                first,
-                case["linger"].as_bool(),
-                "{name}: whether the overlay keeps the keyboard"
-            );
-        }
+        assert_eq!(
+            first,
+            case["linger"].as_bool(),
+            "{name}: whether the overlay keeps the keyboard after the first click"
+        );
     }
 }
 

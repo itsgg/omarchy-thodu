@@ -161,18 +161,25 @@ impl Daemon {
 
     fn start(&self, window: Option<String>, mode: &str, overlay: bool, test: bool) -> Res<Reply> {
         let grid = mode == "grid";
-        // The grid needs no window: on an empty workspace it covers the
-        // focused monitor.
+        let named = window.is_some();
         let window = match self.window(window.as_deref()) {
             Ok(w) => Some(w),
             Err(_) if grid => None,
             Err(e) => return Err(e),
         };
-        let monitor = match &window {
-            Some(w) => hypr::monitor_of(w),
-            None => hypr::focused_monitor(),
-        }
-        .map_err(internal)?;
+        // The grid covers the focused monitor unless a window is named; it
+        // needs no window, as on an empty workspace.
+        let (window, monitor) = if grid && !named {
+            let focused = hypr::focused_monitor().map_err(internal)?;
+            (grid_window(window, focused.id), focused.monitor)
+        } else {
+            let monitor = match &window {
+                Some(w) => hypr::monitor_of(w),
+                None => hypr::focused_monitor().map(|m| m.monitor),
+            }
+            .map_err(internal)?;
+            (window, monitor)
+        };
         let began = Instant::now();
         let (targets, status) = match &window {
             Some(w) if !grid => self.collect(w, &monitor)?,
@@ -621,6 +628,12 @@ impl Daemon {
     }
 }
 
+/// The window a grid with no window named belongs to: the active window
+/// when it is on the focused monitor the grid covers, else none.
+fn grid_window(active: Option<Window>, focused_monitor: i64) -> Option<Window> {
+    active.filter(|w| w.monitor == focused_monitor)
+}
+
 fn parse_key(name: &str, shift: bool, ctrl: bool) -> Option<Key> {
     let key = match name {
         "Return" | "Enter" => Key::Return { shift, ctrl },
@@ -714,5 +727,34 @@ fn main() {
     for stream in listener.incoming().flatten() {
         let daemon = Arc::clone(&daemon);
         thread::spawn(move || serve(&daemon, stream));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use thodu_core::model::Window;
+
+    use super::grid_window;
+
+    fn on(monitor: i64) -> Window {
+        Window {
+            address: "0x1".into(),
+            class: "app".into(),
+            title: String::new(),
+            pid: 1,
+            at: (0, 0),
+            size: (10, 10),
+            workspace: 1,
+            monitor,
+        }
+    }
+
+    // REQ-GRID-01: thodu grid covers the focused monitor; an active window
+    // on another one does not move it there.
+    #[test]
+    fn req_grid_01_the_grid_covers_the_focused_monitor() {
+        assert_eq!(grid_window(Some(on(0)), 0), Some(on(0)));
+        assert_eq!(grid_window(Some(on(1)), 0), None);
+        assert_eq!(grid_window(None, 0), None);
     }
 }

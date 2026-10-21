@@ -9,7 +9,7 @@ Why: task 0004 found two things the spec left out. GG's Hyprland has `input:foll
 When Return is pressed with a focused target, the system shall move the pointer to the target's center, click the left button there through the virtual pointer, end the session and return the pointer to where it was, unless Hyprland's focus follows the mouse and that point is not over the clicked window, where returning it would take the keyboard from that window; then the pointer stays on the target. A session started with `test` always returns it.
 Acceptance:
 - scenario: WHEN a session on a recorded tree focuses a button at bounds (100, 200, 80, 30) on a monitor at scale 1.25 THEN the fake pointer receives a move to (140, 215) logical and one left click.
-- scenario: WHEN focus follows the mouse and the pointer was over another window, or over none, THEN it is not returned; over the same window, or with focus on click, it is.
+- scenario: WHEN focus follows the mouse and the pointer was over another window, or over none while the click was on a window, THEN it is not returned; over the same window, over none after a click on none, or with focus on click, it is.
 
 ### REQ-ACT-02: The other clicks
 When Shift-Return is pressed the system shall right-click, when Return is pressed twice within 300 ms it shall double-click, and when Control-Return is pressed it shall click with Control held. After a plain Return on a target that is not an entry, the overlay keeps the keyboard for 300 ms, drawing nothing and letting the pointer through, so a second Return can come; any other key ends the session. After an entry, a right click or a Control click it gives the keyboard back at once.
