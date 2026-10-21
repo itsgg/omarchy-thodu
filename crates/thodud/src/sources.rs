@@ -8,7 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use thodu_core::model::{Monitor, Target, Window};
+use thodu_core::model::{ActionKind, Monitor, Rect, Role, Source as From, Target, Window};
+use thodu_core::protocol::ShellItem;
 use thodu_core::tree;
 
 use crate::atspi;
@@ -132,10 +133,74 @@ impl Source for Atspi {
     }
 }
 
+/// The Omarchy bar's clickable items, as the overlay plugin's bar widget
+/// last reported them for each monitor (REQ-SHELL-01).
+pub struct Shell {
+    pub items: Mutex<std::collections::HashMap<String, Vec<ShellItem>>>,
+    pub budget: Duration,
+}
+
+/// The bar's targets on `monitor`, its items placed at the bar's origin.
+pub fn shell_targets(items: &[ShellItem], origin: (i32, i32), monitor: &Monitor) -> Vec<Target> {
+    let area = monitor.logical();
+    items
+        .iter()
+        .filter_map(|it| {
+            let bounds =
+                Rect::new(origin.0 + it.x, origin.1 + it.y, it.w, it.h).intersect(&area)?;
+            Some((bounds, it.text.clone()))
+        })
+        .enumerate()
+        .map(|(i, (bounds, text))| Target {
+            id: format!("b{i}"),
+            bounds,
+            role: Role::Button,
+            text,
+            source: From::Shell,
+            actions: vec![ActionKind::Click, ActionKind::Right],
+            window: String::new(),
+        })
+        .collect()
+}
+
+impl Source for Shell {
+    fn name(&self) -> &'static str {
+        "shell"
+    }
+
+    fn budget(&self) -> Duration {
+        self.budget
+    }
+
+    fn collect(&self, _: &Window, monitor: &Monitor) -> Found {
+        let items = self
+            .items
+            .lock()
+            .map_err(|_| "shell lock".to_string())?
+            .get(&monitor.name)
+            .cloned()
+            .unwrap_or_default();
+        if items.is_empty() {
+            return Ok((
+                Vec::new(),
+                format!("no bar items reported on {}", monitor.name),
+            ));
+        }
+        let Some(origin) = crate::hypr::layer_origin(&monitor.name, BAR_NAMESPACE) else {
+            return Ok((Vec::new(), format!("no bar on {}", monitor.name)));
+        };
+        let targets = shell_targets(&items, origin, monitor);
+        let said = format!("{} targets from the bar", targets.len());
+        Ok((targets, said))
+    }
+}
+
+/// The layer-shell namespace of Omarchy's bar.
+const BAR_NAMESPACE: &str = "omarchy-bar";
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use thodu_core::model::{Rect, Role, Source as From};
 
     struct Fake {
         name: &'static str,
@@ -223,6 +288,61 @@ mod tests {
         assert!(
             took < Duration::from_millis(200),
             "waited {took:?} for a source past its budget"
+        );
+    }
+
+    // REQ-SHELL-01: the bar's items become shell targets at the bar's
+    // origin on the monitor, clipped to it, with no window.
+    #[test]
+    fn req_shell_01_bar_items_become_shell_targets() {
+        let items = vec![
+            ShellItem {
+                x: 10,
+                y: 2,
+                w: 30,
+                h: 22,
+                text: "1".into(),
+            },
+            ShellItem {
+                x: 40,
+                y: 2,
+                w: 30,
+                h: 22,
+                text: "2".into(),
+            },
+            ShellItem {
+                x: 72,
+                y: 3,
+                w: 40,
+                h: 20,
+                text: "omarchy.tray".into(),
+            },
+        ];
+        let m = Monitor {
+            name: "B".into(),
+            x: 1536,
+            y: 0,
+            width: 100,
+            height: 50,
+            scale: 1.0,
+        };
+        let got = shell_targets(&items, (1536, 0), &m);
+        let summary: Vec<(Rect, From, &str, &str)> = got
+            .iter()
+            .map(|t| (t.bounds, t.source, t.text.as_str(), t.window.as_str()))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                (Rect::new(1546, 2, 30, 22), From::Shell, "1", ""),
+                (Rect::new(1576, 2, 30, 22), From::Shell, "2", ""),
+                (Rect::new(1608, 3, 28, 20), From::Shell, "omarchy.tray", ""),
+            ],
+            "the tray icon is clipped at the monitor's right edge"
+        );
+        assert_eq!(
+            got.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            ["b0", "b1", "b2"]
         );
     }
 

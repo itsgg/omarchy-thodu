@@ -31,7 +31,7 @@ Out of this milestone, and designed for so that no code assumes they never come:
 Four components, each with one job:
 
 1. `thodud`, the service: collects targets from the sources, assigns labels, owns sessions, performs actions, and answers the IPC of section 7. It runs as a systemd user service started with the session.
-2. The overlay, `io.github.itsgg.thodu`: an omarchy-shell plugin of kind overlay (QML). It draws one session's labels on the focused window's monitor, takes the keyboard exclusively, reports keys to `thodud`, and lists the shell's own items for the `shell` source. It holds no target logic. It is kept loaded and listens on `thodud`'s socket, so `thodud` pushes each session to it and summons it through omarchy-shell only when nothing listens.
+2. The overlay, `io.github.itsgg.thodu`: an omarchy-shell plugin of kind overlay (QML). It draws one session's labels on the focused window's monitor, takes the keyboard exclusively, reports keys to `thodud`, and lists the shell's own items for the `shell` source. It holds no target logic. It is kept loaded and listens on `thodud`'s socket, so `thodud` pushes each session to it and summons it through omarchy-shell only when nothing listens. The same plugin is a bar widget too: `BarProbe.qml`, which draws nothing, finds the bar's clickable items once a second and sends them to `thodud` when they change.
 3. `thodu`, the command line: starts sessions (`thodu hints`, `thodu grid`), and reads and acts for agents (`thodu targets`). Hyprland keybindings call it.
 4. Later, the Chromium extension (SEED section 5); not in this milestone.
 
@@ -200,6 +200,8 @@ A `window` is a Hyprland address, or `class:NAME` for the first window of that c
 
 `start` with mode grid needs no focused window and covers the focused monitor; `thodu grid [--window W] [--test] [--no-overlay]` starts one. The view carries `generation`, bumped when the targets change, and `linger`, true while the overlay keeps the keyboard after a click (REQ-ACT-02); a `key` reply carries the new targets when the key changed them. Below the monitor's level the overlay draws the grid's cells again, magnified, beside the outlined area.
 
+`{"v":1,"op":"shell-items","screen":NAME,"items":[{"x","y","w","h","text"}]}` carries the bar's items on the monitor NAME, relative to the bar's window; the shell source places them at the bar's layer (namespace `omarchy-bar`) as Hyprland reports it. Labels go to the window's targets before the bar's, so the window keeps the shortest ones.
+
 `{"v":1,"op":"record","window":W}` returns every frame of the window's process, walked in full and woken if dormant, as `snapshot` in the shape of `spec/cases/atspi/*.json`; `thodu record-tree --out FILE [--window W]` writes it. A recorded node carries `action`, the name of its first action; an element whose first action is "click" is a target, with the role button when its own role is not a clickable one.
 
 Errors are `{"v":1,"ok":false,"error":KIND,"message":TEXT}` with KIND one of no-window, no-tree, busy, stale, internal, bad-request. The command line prints an ERROR line with the message and exits 1 on any error, 2 on bad arguments.
@@ -257,6 +259,7 @@ Unit tests and properties cover labels, search, the grid, coordinates and the st
 - 2026-10-21: change 0003, sessions pushed to a listening overlay, the bench, and O1's first measurement.
 - 2026-10-21: change 0004, where the pointer goes back to, the wait for a second Return, and the grid's interface.
 - 2026-10-21: change 0005, recording trees, and the action that marks a clickable element.
+- 2026-10-21: change 0007, the bar's items come from a bar widget of the overlay plugin.
 
 ### Retired
 

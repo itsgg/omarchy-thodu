@@ -59,6 +59,12 @@ pub enum Request {
         #[serde(default)]
         window: Option<String>,
     },
+    /// The bar's clickable items on the monitor `screen`, from the overlay
+    /// plugin's bar widget, in the bar window's coordinates (REQ-SHELL-01).
+    ShellItems {
+        screen: String,
+        items: Vec<ShellItem>,
+    },
     /// The window's process's whole accessibility tree, for record-tree.
     Record {
         #[serde(default)]
@@ -67,6 +73,17 @@ pub enum Request {
     Close {
         session: String,
     },
+}
+
+/// One of the bar's clickable items, relative to the bar's window.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShellItem {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    #[serde(default)]
+    pub text: String,
 }
 
 fn hints() -> String {

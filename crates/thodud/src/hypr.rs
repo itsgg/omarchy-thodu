@@ -160,6 +160,22 @@ pub fn cursor() -> Result<(i32, i32), String> {
     Ok((get("x"), get("y")))
 }
 
+/// Where the layer-shell surface `namespace` sits on the monitor `name`,
+/// in logical coordinates.
+pub fn layer_origin(name: &str, namespace: &str) -> Option<(i32, i32)> {
+    let layers = json("layers").ok()?;
+    let levels = layers.get(name)?.get("levels")?.as_object()?;
+    levels
+        .values()
+        .flat_map(|l| l.as_array().into_iter().flatten())
+        .find_map(|l| {
+            (l.get("namespace")?.as_str()? == namespace).then(|| {
+                let get = |k: &str| l.get(k).and_then(Value::as_i64).unwrap_or_default() as i32;
+                (get("x"), get("y"))
+            })
+        })
+}
+
 /// Whether moving the pointer moves the keyboard focus
 /// (`input:follow_mouse` above 0).
 pub fn follows_mouse() -> bool {

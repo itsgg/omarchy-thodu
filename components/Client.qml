@@ -13,6 +13,9 @@ Item {
     property string path: ""
     property var wire: null
     property var waiting: []
+    // Hold only the newest request while the connection is down, for a
+    // sender that repeats itself.
+    property bool keepLatest: false
     readonly property bool connected: wire !== null && wire.connected
 
     signal reply(var reply)
@@ -39,7 +42,7 @@ Item {
     function send(request) {
         const line = JSON.stringify(Object.assign({ v: 1 }, request)) + "\n";
         if (!client.connected) {
-            client.waiting = client.waiting.concat([line]);
+            client.waiting = client.keepLatest ? [line] : client.waiting.concat([line]);
             return;
         }
         client.wire.write(line);

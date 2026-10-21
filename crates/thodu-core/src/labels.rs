@@ -1,6 +1,6 @@
 //! Labels and where they are drawn (REQ-LABEL-01, REQ-LABEL-02).
 
-use crate::model::{Rect, Target};
+use crate::model::{Rect, Source, Target};
 
 /// The home row first, then the rest of the letters.
 pub const ALPHABET: &str = "asdfghjklqwertyuiopzxcvbnm";
@@ -26,10 +26,11 @@ pub fn assign(n: usize) -> Vec<String> {
     labels[offset..offset + n].to_vec()
 }
 
-/// Reading order: top to bottom, then left to right, so the targets nearest
-/// the window's top-left get the shortest labels.
+/// Reading order: the window's own targets first, then the bar's, each top
+/// to bottom and then left to right, so the targets nearest the window's
+/// top-left get the shortest labels (REQ-LABEL-01).
 pub fn reading_order(targets: &mut [Target]) {
-    targets.sort_by_key(|t| (t.bounds.y, t.bounds.x));
+    targets.sort_by_key(|t| (t.source != Source::Atspi, t.bounds.y, t.bounds.x));
 }
 
 /// REQ-LABEL-02: where a label of `size` sits for a target: inside the

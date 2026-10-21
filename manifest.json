@@ -5,9 +5,20 @@
   "version": "0.1.0",
   "author": "Ganesh Gunasegaran <me@itsgg.com>",
   "description": "Keyboard hints for everything on an Omarchy screen: Homerow for Omarchy",
-  "kinds": ["overlay"],
+  "kinds": [
+    "overlay",
+    "bar-widget"
+  ],
   "keepLoaded": true,
   "entryPoints": {
-    "overlay": "Thodu.qml"
+    "overlay": "Thodu.qml",
+    "barWidget": "BarProbe.qml"
+  },
+  "barWidget": {
+    "displayName": "Thodu",
+    "description": "Draws nothing; tells Thodu where the bar's buttons are, so a session can label them.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
   }
 }

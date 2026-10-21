@@ -32,6 +32,8 @@ use thodu_core::stale::is_stale;
 
 /// How long the accessibility source may take (REQ-SRC-05, provisional).
 const ATSPI_BUDGET: Duration = Duration::from_millis(80);
+/// How long the bar source may take (REQ-SRC-05, provisional).
+const SHELL_BUDGET: Duration = Duration::from_millis(40);
 /// How long record-tree may walk.
 const RECORD_BUDGET: Duration = Duration::from_secs(5);
 /// How long an action waits for the overlay to say it is gone.
@@ -72,6 +74,7 @@ struct Daemon {
     changed: Condvar,
     next: AtomicU64,
     atspi: Arc<sources::Atspi>,
+    shell: Arc<sources::Shell>,
     sources: Vec<Arc<dyn sources::Source>>,
     /// The overlay listening for sessions (SPEC section 7, `listen`).
     listeners: Mutex<listeners::Listeners<UnixStream>>,
@@ -403,7 +406,9 @@ impl Daemon {
             return;
         };
         let Some((window, monitor, test, grid)) = sessions.get(id).map(|e| {
-            let grid = e.session.targets[act.target].source == Source::Grid;
+            // Grid and bar targets are points on the monitor, not in the
+            // window, so the window moving does not make them stale.
+            let grid = e.session.targets[act.target].source != Source::Atspi;
             (e.window.clone(), e.monitor.clone(), e.test, grid)
         }) else {
             return;
@@ -609,6 +614,12 @@ impl Daemon {
             Request::Listen => Ok(Reply::ok()),
             Request::Targets { window } => self.targets(window),
             Request::Record { window } => self.record(window),
+            Request::ShellItems { screen, items } => {
+                if let Ok(mut known) = self.shell.items.lock() {
+                    known.insert(screen, items);
+                }
+                Ok(Reply::ok())
+            }
             Request::Close { session } => {
                 self.finish(&session);
                 Ok(Reply::ok())
@@ -710,13 +721,18 @@ fn main() {
         woken: Mutex::new(HashSet::new()),
         budget: ATSPI_BUDGET,
     });
+    let shell = Arc::new(sources::Shell {
+        items: Mutex::new(HashMap::new()),
+        budget: SHELL_BUDGET,
+    });
     let daemon = Arc::new(Daemon {
         socket,
         sessions: Mutex::new(HashMap::new()),
         changed: Condvar::new(),
         next: AtomicU64::new(1),
         atspi: Arc::clone(&atspi),
-        sources: vec![atspi],
+        shell: Arc::clone(&shell),
+        sources: vec![atspi, shell],
         listeners: Mutex::new(listeners::Listeners::new()),
         keyboard: Mutex::new(None),
     });
