@@ -79,14 +79,20 @@ pub fn active_window() -> Result<Option<Window>, String> {
     Ok(window_from(&json("activewindow")?))
 }
 
+/// The window at `address`, or with `class:NAME` the first window of that
+/// class, for live checks and bench on a window that is not focused.
 pub fn window(address: &str) -> Result<Option<Window>, String> {
     let clients = json("clients")?;
+    let class = address.strip_prefix("class:");
     Ok(clients
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(window_from)
-        .find(|w| w.address == address))
+        .find(|w| match class {
+            Some(c) => w.class.eq_ignore_ascii_case(c),
+            None => w.address == address,
+        }))
 }
 
 pub struct MonitorEntry {

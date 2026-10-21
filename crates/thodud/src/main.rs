@@ -15,12 +15,12 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use thodu_core::labels;
 use thodu_core::model::{Monitor, Target, Window};
 use thodu_core::protocol::{
-    self, Envelope, ErrorKind, LabeledTarget, MonitorInfo, Reply, Request, View,
+    self, Envelope, ErrorKind, LabeledTarget, MonitorInfo, OpenEvent, Reply, Request, Timing, View,
 };
 use thodu_core::session::{Act, Key, Session, State};
 use thodu_core::stale::is_stale;
@@ -30,6 +30,8 @@ use thodu_core::tree;
 const ATSPI_BUDGET: Duration = Duration::from_millis(400);
 /// How long an action waits for the overlay to say it is gone.
 const HIDE_WAIT: Duration = Duration::from_millis(400);
+/// How long a push to a listening overlay may block.
+const LISTENER_WRITE: Duration = Duration::from_millis(100);
 /// Sessions nobody finished are dropped after this.
 const SESSION_LIFE: Duration = Duration::from_secs(120);
 
@@ -42,6 +44,7 @@ struct Entry {
     test: bool,
     hidden: bool,
     created: Instant,
+    timing: Timing,
 }
 
 struct Daemon {
@@ -50,6 +53,15 @@ struct Daemon {
     hidden: Condvar,
     next: AtomicU64,
     bus: Mutex<Option<atspi::Bus>>,
+    /// Overlays listening for sessions (SPEC section 7, `listen`).
+    listeners: Mutex<Vec<UnixStream>>,
+}
+
+fn now_us() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_micros() as u64)
+        .unwrap_or_default()
 }
 
 type Res<T> = Result<T, Box<Reply>>;
@@ -69,7 +81,10 @@ impl Daemon {
             None => hypr::active_window(),
         }
         .map_err(internal)?;
-        found.ok_or_else(|| fail(ErrorKind::NoWindow, "no window is focused"))
+        found.ok_or_else(|| match address {
+            Some(address) => fail(ErrorKind::NoWindow, format!("no window {address}")),
+            None => fail(ErrorKind::NoWindow, "no window is focused"),
+        })
     }
 
     /// Targets of `window` from its accessibility tree, and a status line.
@@ -107,7 +122,9 @@ impl Daemon {
     fn start(&self, window: Option<String>, overlay: bool, test: bool) -> Res<Reply> {
         let window = self.window(window.as_deref())?;
         let monitor = hypr::monitor_of(&window).map_err(internal)?;
+        let began = Instant::now();
         let (targets, status) = self.collect(&window, &monitor)?;
+        let collect_ms = began.elapsed().as_millis() as u64;
         let session = Session::new(targets, false);
         let area = monitor.logical();
         let labeled = session
@@ -139,10 +156,17 @@ impl Daemon {
                     test,
                     hidden: false,
                     created: Instant::now(),
+                    timing: Timing {
+                        collect_ms,
+                        drawn_at_us: None,
+                    },
                 },
             );
         }
-        if overlay && let Err(e) = overlay::summon(&id, &self.socket, test) {
+        if overlay
+            && !self.push(&id, test)
+            && let Err(e) = overlay::summon(&id, &self.socket, test)
+        {
             self.sessions
                 .lock()
                 .map_err(|_| internal("session lock"))?
@@ -154,6 +178,44 @@ impl Daemon {
             status: Some(status),
             ..Reply::ok()
         })
+    }
+
+    /// Hand the session to a listening overlay, which is much faster than
+    /// summoning it (REQ-PERF-01). False when no overlay is listening.
+    fn push(&self, id: &str, test: bool) -> bool {
+        let Ok(reply) = self.session(id, false) else {
+            return false;
+        };
+        let event = OpenEvent {
+            v: protocol::VERSION,
+            event: "open".into(),
+            session: id.to_string(),
+            test,
+            reply,
+        };
+        let Ok(mut line) = serde_json::to_string(&event) else {
+            return false;
+        };
+        line.push('\n');
+        let Ok(mut listeners) = self.listeners.lock() else {
+            return false;
+        };
+        // A listener that cannot take the line is gone; the next one may.
+        while let Some(mut stream) = listeners.pop() {
+            if stream.write_all(line.as_bytes()).is_ok() {
+                listeners.push(stream);
+                return true;
+            }
+        }
+        false
+    }
+
+    fn drawn(&self, id: &str) -> Res<Reply> {
+        let mut sessions = self.sessions.lock().map_err(|_| internal("session lock"))?;
+        if let Some(entry) = sessions.get_mut(id) {
+            entry.timing.drawn_at_us.get_or_insert_with(now_us);
+        }
+        Ok(Reply::ok())
     }
 
     fn view(entry: &Entry) -> View {
@@ -177,6 +239,7 @@ impl Daemon {
             return Ok(Reply {
                 session: Some(id.to_string()),
                 view: Some(Self::view(entry)),
+                timing: Some(entry.timing.clone()),
                 ..Reply::ok()
             });
         }
@@ -191,6 +254,7 @@ impl Daemon {
             targets: Some(entry.labeled.clone()),
             view: Some(Self::view(entry)),
             status: Some(entry.status.clone()),
+            timing: Some(entry.timing.clone()),
             ..Reply::ok()
         })
     }
@@ -324,6 +388,9 @@ impl Daemon {
                 ctrl,
             } => self.key(&session, &key, shift, ctrl),
             Request::Hidden { session } => self.hidden(&session),
+            Request::Drawn { session } => self.drawn(&session),
+            // serve() registers the connection once the reply is written.
+            Request::Listen => Ok(Reply::ok()),
             Request::Targets { window } => self.targets(window),
             Request::Close { session } => {
                 if let Ok(mut s) = self.sessions.lock() {
@@ -377,6 +444,22 @@ fn serve(daemon: &Arc<Daemon>, stream: UnixStream) {
         if writer.write_all(text.as_bytes()).is_err() {
             return;
         }
+        // A listening overlay's connection carries pushed sessions from
+        // here on; nothing else writes to it.
+        if reply.ok
+            && matches!(
+                serde_json::from_str::<Envelope>(&line).map(|e| e.request),
+                Ok(Request::Listen)
+            )
+        {
+            // A hung overlay must not hold up every later session.
+            if let Ok(stream) = writer.try_clone()
+                && stream.set_write_timeout(Some(LISTENER_WRITE)).is_ok()
+                && let Ok(mut listeners) = daemon.listeners.lock()
+            {
+                listeners.push(stream);
+            }
+        }
     }
 }
 
@@ -408,6 +491,7 @@ fn main() {
         hidden: Condvar::new(),
         next: AtomicU64::new(1),
         bus: Mutex::new(None),
+        listeners: Mutex::new(Vec::new()),
     });
     for stream in listener.incoming().flatten() {
         let daemon = Arc::clone(&daemon);

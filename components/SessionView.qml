@@ -45,7 +45,9 @@ FocusScope {
     // then hide and say so with a hidden request.
     signal finished(string why, bool acting)
 
-    function begin(id) {
+    // Start drawing session `id`; `reply` is its full session reply when
+    // thodud pushed it, else the view asks for it.
+    function begin(id, reply) {
         view.session = id;
         view.targets = [];
         view.loaded = false;
@@ -59,7 +61,10 @@ FocusScope {
         view.active = true;
         view.focus = true;
         silence.restart();
-        view.send({ op: "session", session: id });
+        if (reply)
+            view.apply(reply);
+        else
+            view.send({ op: "session", session: id });
     }
 
     function end(why, acting) {

@@ -4,11 +4,12 @@ import Quickshell.Wayland
 import qs.Commons
 import "components"
 
-// Thodu's overlay, loaded by omarchy-shell (SPEC section 4, item 2). thodud
-// summons it with {"session", "socket", "test"}; it draws that session on
-// the session's monitor, takes the keyboard and reports keys to thodud.
-// With test set it leaves the keyboard alone, for live checks that send
-// keys over the IPC.
+// Thodu's overlay, loaded by omarchy-shell (SPEC section 4, item 2). Kept
+// loaded, it listens on thodud's socket and thodud pushes each session to
+// it; when nothing listens, thodud summons it with {"session", "socket",
+// "test"} instead. It draws the session on the session's monitor, takes
+// the keyboard and reports keys to thodud. With test set it leaves the
+// keyboard alone, for live checks that send keys over the IPC.
 Item {
     id: root
 
@@ -17,6 +18,13 @@ Item {
     property bool opened: false
     property bool test: false
     property string session: ""
+    property bool drawnSent: false
+    readonly property string socketPath: Quickshell.env("XDG_RUNTIME_DIR") + "/thodu.sock"
+
+    Component.onCompleted: {
+        listener.start(root.socketPath);
+        client.connectTo(root.socketPath);
+    }
 
     function open(payloadJson) {
         let payload = {};
@@ -30,12 +38,19 @@ Item {
             console.warn("thodu: a summon needs a session and a socket; start one with thodu hints");
             return;
         }
+        root.show(String(payload.session), payload.test === true, null, String(payload.socket));
+        listener.start(String(payload.socket));
+    }
+
+    // Draw a session: `reply` is its full session reply when pushed.
+    function show(session, test, reply, socket) {
         view.end("replaced", false);
-        root.test = payload.test === true;
-        root.session = String(payload.session);
-        client.connectTo(String(payload.socket));
+        root.test = test;
+        root.session = session;
+        root.drawnSent = false;
+        client.connectTo(socket);
         root.opened = true;
-        view.begin(root.session);
+        view.begin(session, reply);
         view.forceActiveFocus();
     }
 
@@ -56,6 +71,11 @@ Item {
         return null;
     }
 
+    Listener {
+        id: listener
+        onOpened: event => root.show(String(event.session), event.test === true, event.reply, listener.path)
+    }
+
     Client {
         id: client
         onReply: reply => view.apply(reply)
@@ -69,6 +89,19 @@ Item {
         property string session: ""
         interval: 40
         onTriggered: client.send({ op: "hidden", session: hidden.session })
+    }
+
+    // The first frame with the labels, for REQ-PERF-01's measurement.
+    Connections {
+        target: view.Window.window
+        ignoreUnknownSignals: true
+
+        function onFrameSwapped() {
+            if (!root.opened || !view.loaded || root.drawnSent)
+                return;
+            root.drawnSent = true;
+            client.send({ op: "drawn", session: view.session });
+        }
     }
 
     PanelWindow {

@@ -48,6 +48,13 @@ pub enum Request {
     Hidden {
         session: String,
     },
+    /// The overlay drew the session's labels for the first time.
+    Drawn {
+        session: String,
+    },
+    /// The overlay's standing connection: `thodud` pushes each new session
+    /// down it as an [`OpenEvent`] instead of summoning the overlay.
+    Listen,
     Targets {
         #[serde(default)]
         window: Option<String>,
@@ -93,6 +100,29 @@ pub struct LabeledTarget {
     pub placed: Rect,
 }
 
+/// How long a session took to appear (REQ-PERF-01).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Timing {
+    /// Collecting the targets, in milliseconds.
+    pub collect_ms: u64,
+    /// When the overlay said it drew the labels, in microseconds since the
+    /// Unix epoch, so a caller in another process can measure from its own
+    /// start.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub drawn_at_us: Option<u64>,
+}
+
+/// What `thodud` pushes to a listening overlay when a session starts: the
+/// session's full reply, so the overlay draws it with no further request.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OpenEvent {
+    pub v: u32,
+    pub event: String,
+    pub session: String,
+    pub test: bool,
+    pub reply: Reply,
+}
+
 /// The parts of a session the overlay draws.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct View {
@@ -133,6 +163,8 @@ pub struct Reply {
     pub view: Option<View>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub timing: Option<Timing>,
 }
 
 impl Reply {

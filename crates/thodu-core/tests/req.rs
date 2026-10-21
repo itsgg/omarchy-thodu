@@ -9,7 +9,8 @@ use proptest::prelude::*;
 use serde_json::Value;
 use thodu_core::labels::{self, ALPHABET};
 use thodu_core::model::{Monitor, Rect, Role, Source, Target, Window};
-use thodu_core::protocol::{Envelope, Request};
+use thodu_core::perf;
+use thodu_core::protocol::{Envelope, OpenEvent, Reply, Request, Timing};
 use thodu_core::session::{Button, Key, Session, State};
 use thodu_core::stale::is_stale;
 use thodu_core::tree::{self, App, Snapshot};
@@ -415,6 +416,81 @@ fn overlay_requests_parse() {
             key: "s".into(),
             shift: true,
             ctrl: false
+        }
+    );
+}
+
+// REQ-PERF-01: the thresholds bench holds sessions to, and its percentiles.
+#[test]
+fn req_perf_01_thresholds_and_percentiles() {
+    assert_eq!(perf::MEDIAN_MS, 100.0);
+    assert_eq!(perf::P95_MS, 250.0);
+    let samples: Vec<f64> = (1..=100).map(f64::from).collect();
+    assert_eq!(perf::percentile(&samples, 50.0), Some(50.0));
+    assert_eq!(perf::percentile(&samples, 95.0), Some(95.0));
+    assert_eq!(perf::percentile(&[7.0], 95.0), Some(7.0));
+    assert_eq!(perf::percentile(&[], 50.0), None);
+    let unsorted = [30.0, 10.0, 20.0];
+    assert_eq!(perf::percentile(&unsorted, 50.0), Some(20.0));
+    assert_eq!(perf::percentile(&unsorted, 95.0), Some(30.0));
+}
+
+// REQ-PERF-01: bench fails a run over either threshold, and passes one at
+// them.
+#[test]
+fn req_perf_01_verdict() {
+    let at = |median_ms, p95_ms| perf::Summary {
+        sessions: 50,
+        median_ms,
+        p95_ms,
+    };
+    assert!(at(100.0, 250.0).within());
+    assert!(!at(100.1, 120.0).within());
+    assert!(!at(40.0, 250.1).within());
+    let mut slow_tail: Vec<f64> = vec![20.0; 47];
+    slow_tail.extend([300.0, 300.0, 300.0]);
+    let summary = perf::summarize(&slow_tail).expect("samples");
+    assert_eq!(summary.median_ms, 20.0);
+    assert_eq!(summary.p95_ms, 300.0);
+    assert!(
+        !summary.within(),
+        "three slow sessions in fifty fail the 95th percentile"
+    );
+}
+
+// The pushed session (changes/0003) carries the full reply.
+#[test]
+fn open_event_round_trips() {
+    let event = OpenEvent {
+        v: 1,
+        event: "open".into(),
+        session: "s1".into(),
+        test: true,
+        reply: Reply {
+            session: Some("s1".into()),
+            timing: Some(Timing {
+                collect_ms: 12,
+                drawn_at_us: None,
+            }),
+            ..Reply::ok()
+        },
+    };
+    let line = serde_json::to_string(&event).expect("serializes");
+    assert!(line.contains(r#""event":"open""#), "{line}");
+    let back: OpenEvent = serde_json::from_str(&line).expect("parses");
+    assert_eq!(back, event);
+    assert_eq!(
+        serde_json::from_str::<Envelope>(r#"{"v":1,"op":"listen"}"#)
+            .expect("listen")
+            .request,
+        Request::Listen
+    );
+    assert_eq!(
+        serde_json::from_str::<Envelope>(r#"{"v":1,"op":"drawn","session":"s1"}"#)
+            .expect("drawn")
+            .request,
+        Request::Drawn {
+            session: "s1".into()
         }
     );
 }

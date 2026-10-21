@@ -168,6 +168,19 @@ Item {
             verify(findChild(view, "label-a").visible);
         }
 
+        // A session thodud pushed draws from its reply, with no request.
+        function test_a_pushed_session_draws_at_once() {
+            view.end("test over", false);
+            top.sent = [];
+            top.ended = null;
+            const pushed = Object.assign({}, top.fullReply, { session: "s2" });
+            view.begin("s2", pushed);
+            verify(view.loaded, "drawn from the pushed reply");
+            compare(view.session, "s2");
+            compare(top.sent.filter(r => r.op === "session" && !r.brief).length, 0);
+            verify(findChild(view, "label-a") !== null);
+        }
+
         function test_replies_for_another_session_are_ignored() {
             view.apply({ v: 1, ok: false, session: "s0", message: "no session s0" });
             verify(view.active);

@@ -31,7 +31,7 @@ Out of this milestone, and designed for so that no code assumes they never come:
 Four components, each with one job:
 
 1. `thodud`, the service: collects targets from the sources, assigns labels, owns sessions, performs actions, and answers the IPC of section 7. It runs as a systemd user service started with the session.
-2. The overlay, `io.github.itsgg.thodu`: an omarchy-shell plugin of kind overlay (QML). It draws one session's labels on the focused window's monitor, takes the keyboard exclusively, reports keys to `thodud`, and lists the shell's own items for the `shell` source. It holds no target logic.
+2. The overlay, `io.github.itsgg.thodu`: an omarchy-shell plugin of kind overlay (QML). It draws one session's labels on the focused window's monitor, takes the keyboard exclusively, reports keys to `thodud`, and lists the shell's own items for the `shell` source. It holds no target logic. It is kept loaded and listens on `thodud`'s socket, so `thodud` pushes each session to it and summons it through omarchy-shell only when nothing listens.
 3. `thodu`, the command line: starts sessions (`thodu hints`, `thodu grid`), and reads and acts for agents (`thodu targets`). Hyprland keybindings call it.
 4. Later, the Chromium extension (SEED section 5); not in this milestone.
 
@@ -192,6 +192,10 @@ The IPC is JSON lines over the Unix socket `$XDG_RUNTIME_DIR/thodu.sock`, one re
 - `{"v":1,"op":"hidden","session":ID}`: the overlay's surface is gone, so a pending action may run (REQ-ACT-01); `thodud` acts anyway 400 ms after the action if none comes.
 - `{"v":1,"op":"targets"}` returns the focused window's targets without a session, or those of an optional `window`.
 - `{"v":1,"op":"close","session":ID}`.
+- `{"v":1,"op":"listen"}`: the overlay's standing connection. After its reply, `thodud` writes `{"v":1,"event":"open","session":ID,"test":B,"reply":R}` on it for each new session, R being the session's full `session` reply.
+- `{"v":1,"op":"drawn","session":ID}`: the overlay drew the session's labels for the first time. `session` replies carry `timing`: `collect_ms`, and `drawn_at_us` once drawn, in microseconds since the Unix epoch.
+
+A `window` is a Hyprland address, or `class:NAME` for the first window of that class. `thodu bench [--sessions N] [--window W]` times N sessions from `thodu hints` starting to `drawn`, with the overlay summoned without the keyboard, prints the median and the 95th percentile, keeps the samples under `~/.local/share/thodu/bench/`, and exits 1 above REQ-PERF-01's thresholds.
 
 Errors are `{"v":1,"ok":false,"error":KIND,"message":TEXT}` with KIND one of no-window, no-tree, busy, stale, internal, bad-request. The command line prints an ERROR line with the message and exits 1 on any error, 2 on bad arguments.
 
@@ -235,7 +239,7 @@ Unit tests and properties cover labels, search, the grid, coordinates and the st
 
 ## 12. Open questions
 
-- O1. Rust or another language for `thodud`: consequence, every later task; interim, Rust; next action, task 0001's measurement against REQ-PERF-01; owner, the coordinator, GG if it changes SEED.
+- O1. Rust or another language for `thodud`: consequence, every later task; interim, Rust, measured on the GTK3 reference window at 61.2 ms median and 72.6 ms at the 95th percentile (release build, 50 sessions, 2026-10-21); next action, Slack's window after task 0005; owner, the coordinator, GG if it changes SEED.
 - O2. An accessibility bus inside a private headless display, so live checks can run without GG's session: interim, recorded trees and nightly live checks on his session; next action, a task after 0004.
 - O3. Labels-only or search-first as the default: interim, search-first as Homerow does; next action, GG's use after the first slice.
 - O4. The keys that start a session: interim, none bound by default; next action, GG chooses from his free bindings at install.
@@ -243,8 +247,9 @@ Unit tests and properties cover labels, search, the grid, coordinates and the st
 ## 13. Changes and retired requirements
 
 - 2026-10-21: created.
-- 2026-10-21: change 0001, reference windows replace the widget-factory demos in REQ-SRC-02 and REQ-PERF-01.
+- 2026-10-21: change 0001, reference windows replace the widget-factory demos in the toolkit and latency requirements.
 - 2026-10-21: change 0002, the requests the overlay and live checks need, in section 7.
+- 2026-10-21: change 0003, sessions pushed to a listening overlay, the bench, and O1's first measurement.
 
 ### Retired
 
