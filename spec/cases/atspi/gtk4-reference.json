@@ -1,0 +1,445 @@
+{
+  "apps": [
+    {
+      "frames": [
+        {
+          "action": "window.close",
+          "children": [
+            {
+              "children": [
+                {
+                  "action": "click",
+                  "children": [
+                    {
+                      "action": "clipboard.copy",
+                      "children": [],
+                      "description": "",
+                      "extents": [
+                        0,
+                        0,
+                        336,
+                        24
+                      ],
+                      "name": "Open",
+                      "role": "label",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ]
+                    }
+                  ],
+                  "description": "",
+                  "extents": [
+                    0,
+                    0,
+                    370,
+                    34
+                  ],
+                  "name": "Open",
+                  "role": "button",
+                  "states": [
+                    "focusable",
+                    "sensitive",
+                    "showing",
+                    "visible"
+                  ]
+                },
+                {
+                  "action": "click",
+                  "children": [
+                    {
+                      "action": "clipboard.copy",
+                      "children": [],
+                      "description": "",
+                      "extents": [
+                        0,
+                        42,
+                        336,
+                        24
+                      ],
+                      "name": "Save",
+                      "role": "label",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ]
+                    }
+                  ],
+                  "description": "",
+                  "extents": [
+                    0,
+                    42,
+                    370,
+                    34
+                  ],
+                  "name": "Save",
+                  "role": "button",
+                  "states": [
+                    "focusable",
+                    "sensitive",
+                    "showing",
+                    "visible"
+                  ]
+                },
+                {
+                  "action": "click",
+                  "children": [
+                    {
+                      "action": "clipboard.copy",
+                      "children": [],
+                      "description": "",
+                      "extents": [
+                        0,
+                        84,
+                        336,
+                        24
+                      ],
+                      "name": "Close",
+                      "role": "label",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ]
+                    }
+                  ],
+                  "description": "",
+                  "extents": [
+                    0,
+                    84,
+                    370,
+                    34
+                  ],
+                  "name": "Close",
+                  "role": "button",
+                  "states": [
+                    "focusable",
+                    "sensitive",
+                    "showing",
+                    "visible"
+                  ]
+                },
+                {
+                  "action": "activate",
+                  "children": [],
+                  "description": "",
+                  "extents": [
+                    0,
+                    126,
+                    370,
+                    34
+                  ],
+                  "name": "",
+                  "role": "text box",
+                  "states": [
+                    "editable",
+                    "focusable",
+                    "sensitive",
+                    "showing",
+                    "visible"
+                  ]
+                },
+                {
+                  "children": [
+                    {
+                      "children": [],
+                      "description": "",
+                      "extents": [
+                        0,
+                        169,
+                        16,
+                        16
+                      ],
+                      "name": "",
+                      "role": "generic",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ]
+                    },
+                    {
+                      "action": "clipboard.copy",
+                      "children": [],
+                      "description": "",
+                      "extents": [
+                        20,
+                        168,
+                        342,
+                        18
+                      ],
+                      "name": "Remember",
+                      "role": "label",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ]
+                    }
+                  ],
+                  "description": "",
+                  "extents": [
+                    0,
+                    168,
+                    370,
+                    26
+                  ],
+                  "name": "Remember",
+                  "role": "checkbox",
+                  "states": [
+                    "focusable",
+                    "sensitive",
+                    "showing",
+                    "visible"
+                  ]
+                },
+                {
+                  "children": [
+                    {
+                      "action": "click",
+                      "children": [
+                        {
+                          "children": [
+                            {
+                              "children": [
+                                {
+                                  "children": [
+                                    {
+                                      "action": "listitem.scroll-to",
+                                      "children": [
+                                        {
+                                          "children": [
+                                            {
+                                              "action": "clipboard.copy",
+                                              "children": [],
+                                              "description": "",
+                                              "extents": [
+                                                0,
+                                                202,
+                                                39,
+                                                24
+                                              ],
+                                              "name": "Small",
+                                              "role": "label",
+                                              "states": [
+                                                "sensitive",
+                                                "showing",
+                                                "visible"
+                                              ]
+                                            }
+                                          ],
+                                          "description": "",
+                                          "extents": [
+                                            0,
+                                            202,
+                                            328,
+                                            24
+                                          ],
+                                          "name": "",
+                                          "role": "generic",
+                                          "states": [
+                                            "sensitive",
+                                            "showing",
+                                            "visible"
+                                          ]
+                                        }
+                                      ],
+                                      "description": "",
+                                      "extents": [
+                                        0,
+                                        202,
+                                        328,
+                                        24
+                                      ],
+                                      "name": "",
+                                      "role": "generic",
+                                      "states": [
+                                        "focusable",
+                                        "sensitive",
+                                        "showing",
+                                        "visible"
+                                      ]
+                                    }
+                                  ],
+                                  "description": "",
+                                  "extents": [
+                                    0,
+                                    202,
+                                    328,
+                                    24
+                                  ],
+                                  "name": "",
+                                  "role": "tab panel",
+                                  "states": [
+                                    "sensitive",
+                                    "showing",
+                                    "visible"
+                                  ]
+                                }
+                              ],
+                              "description": "",
+                              "extents": [
+                                0,
+                                202,
+                                328,
+                                24
+                              ],
+                              "name": "",
+                              "role": "generic",
+                              "states": [
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ]
+                            }
+                          ],
+                          "description": "",
+                          "extents": [
+                            0,
+                            202,
+                            350,
+                            24
+                          ],
+                          "name": "",
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ]
+                        }
+                      ],
+                      "description": "",
+                      "extents": [
+                        0,
+                        202,
+                        370,
+                        34
+                      ],
+                      "name": "Small",
+                      "role": "toggle button",
+                      "states": [
+                        "focusable",
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ]
+                    }
+                  ],
+                  "description": "",
+                  "extents": [
+                    0,
+                    202,
+                    370,
+                    34
+                  ],
+                  "name": "Small",
+                  "role": "combo box",
+                  "states": [
+                    "sensitive",
+                    "showing",
+                    "visible"
+                  ]
+                },
+                {
+                  "action": "click",
+                  "children": [
+                    {
+                      "action": "clipboard.copy",
+                      "children": [],
+                      "description": "",
+                      "extents": [
+                        0,
+                        244,
+                        336,
+                        24
+                      ],
+                      "name": "Docs",
+                      "role": "label",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ]
+                    }
+                  ],
+                  "description": "",
+                  "extents": [
+                    0,
+                    244,
+                    370,
+                    34
+                  ],
+                  "name": "Docs",
+                  "role": "link",
+                  "states": [
+                    "focusable",
+                    "sensitive",
+                    "showing",
+                    "visible"
+                  ]
+                }
+              ],
+              "description": "",
+              "extents": [
+                0,
+                0,
+                370,
+                400
+              ],
+              "name": "",
+              "role": "generic",
+              "states": [
+                "sensitive",
+                "showing",
+                "visible"
+              ]
+            }
+          ],
+          "description": "",
+          "extents": [
+            0,
+            0,
+            370,
+            400
+          ],
+          "name": "Thodu GTK4 reference",
+          "role": "window",
+          "states": [
+            "sensitive",
+            "showing",
+            "visible"
+          ]
+        }
+      ],
+      "name": "thodu-reference-gtk4",
+      "pid": 454352
+    }
+  ],
+  "monitor": {
+    "height": 1080,
+    "name": "THODUTEST",
+    "scale": 1.25,
+    "width": 1920,
+    "x": 1536,
+    "y": 0
+  },
+  "window": {
+    "address": "0x563a8949fb60",
+    "at": [
+      1548,
+      452
+    ],
+    "class": "thodu-reference-gtk4",
+    "monitor": 1,
+    "pid": 454352,
+    "size": [
+      370,
+      400
+    ],
+    "title": "Thodu GTK4 reference",
+    "workspace": 4
+  }
+}

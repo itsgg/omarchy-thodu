@@ -1,0 +1,1059 @@
+{
+  "apps": [
+    {
+      "frames": [
+        {
+          "action": "doDefault",
+          "children": [
+            {
+              "action": "doDefault",
+              "children": [
+                {
+                  "action": "doDefault",
+                  "children": [
+                    {
+                      "action": "doDefault",
+                      "children": [
+                        {
+                          "action": "doDefault",
+                          "children": [
+                            {
+                              "action": "doDefault",
+                              "children": [
+                                {
+                                  "action": "doDefault",
+                                  "children": [
+                                    {
+                                      "action": "doDefault",
+                                      "children": [],
+                                      "description": "",
+                                      "extents": [
+                                        0,
+                                        0,
+                                        0,
+                                        0
+                                      ],
+                                      "name": "",
+                                      "role": "panel",
+                                      "states": [
+                                        "enabled",
+                                        "sensitive"
+                                      ]
+                                    },
+                                    {
+                                      "action": "doDefault",
+                                      "children": [
+                                        {
+                                          "action": "doDefault",
+                                          "children": [
+                                            {
+                                              "action": "doDefault",
+                                              "children": [],
+                                              "description": "",
+                                              "extents": [
+                                                0,
+                                                0,
+                                                0,
+                                                38
+                                              ],
+                                              "name": "",
+                                              "role": "section",
+                                              "states": [
+                                                "enabled",
+                                                "sensitive",
+                                                "visible"
+                                              ]
+                                            },
+                                            {
+                                              "action": "doDefault",
+                                              "children": [
+                                                {
+                                                  "action": "click",
+                                                  "children": [
+                                                    {
+                                                      "action": "clickAncestor",
+                                                      "children": [],
+                                                      "description": "",
+                                                      "extents": [
+                                                        880,
+                                                        11,
+                                                        15,
+                                                        16
+                                                      ],
+                                                      "name": "",
+                                                      "role": "image",
+                                                      "states": [
+                                                        "enabled",
+                                                        "sensitive",
+                                                        "showing",
+                                                        "visible"
+                                                      ]
+                                                    }
+                                                  ],
+                                                  "description": "",
+                                                  "extents": [
+                                                    860,
+                                                    0,
+                                                    55,
+                                                    38
+                                                  ],
+                                                  "name": "Minimize",
+                                                  "role": "section",
+                                                  "states": [
+                                                    "enabled",
+                                                    "sensitive",
+                                                    "showing",
+                                                    "visible"
+                                                  ]
+                                                },
+                                                {
+                                                  "action": "click",
+                                                  "children": [
+                                                    {
+                                                      "action": "clickAncestor",
+                                                      "children": [],
+                                                      "description": "",
+                                                      "extents": [
+                                                        935,
+                                                        11,
+                                                        15,
+                                                        16
+                                                      ],
+                                                      "name": "",
+                                                      "role": "image",
+                                                      "states": [
+                                                        "enabled",
+                                                        "sensitive",
+                                                        "showing",
+                                                        "visible"
+                                                      ]
+                                                    }
+                                                  ],
+                                                  "description": "",
+                                                  "extents": [
+                                                    915,
+                                                    0,
+                                                    55,
+                                                    38
+                                                  ],
+                                                  "name": "Restore down",
+                                                  "role": "section",
+                                                  "states": [
+                                                    "enabled",
+                                                    "sensitive",
+                                                    "showing",
+                                                    "visible"
+                                                  ]
+                                                },
+                                                {
+                                                  "action": "click",
+                                                  "children": [
+                                                    {
+                                                      "action": "clickAncestor",
+                                                      "children": [],
+                                                      "description": "",
+                                                      "extents": [
+                                                        990,
+                                                        11,
+                                                        15,
+                                                        16
+                                                      ],
+                                                      "name": "",
+                                                      "role": "image",
+                                                      "states": [
+                                                        "enabled",
+                                                        "sensitive",
+                                                        "showing",
+                                                        "visible"
+                                                      ]
+                                                    }
+                                                  ],
+                                                  "description": "",
+                                                  "extents": [
+                                                    970,
+                                                    0,
+                                                    55,
+                                                    38
+                                                  ],
+                                                  "name": "Close window",
+                                                  "role": "section",
+                                                  "states": [
+                                                    "enabled",
+                                                    "sensitive",
+                                                    "showing",
+                                                    "visible"
+                                                  ]
+                                                }
+                                              ],
+                                              "description": "",
+                                              "extents": [
+                                                860,
+                                                0,
+                                                165,
+                                                38
+                                              ],
+                                              "name": "",
+                                              "role": "section",
+                                              "states": [
+                                                "enabled",
+                                                "sensitive",
+                                                "showing",
+                                                "visible"
+                                              ]
+                                            }
+                                          ],
+                                          "description": "",
+                                          "extents": [
+                                            0,
+                                            0,
+                                            1025,
+                                            38
+                                          ],
+                                          "name": "",
+                                          "role": "section",
+                                          "states": [
+                                            "enabled",
+                                            "sensitive",
+                                            "showing",
+                                            "visible"
+                                          ]
+                                        },
+                                        {
+                                          "action": "doDefault",
+                                          "children": [
+                                            {
+                                              "action": "doDefault",
+                                              "children": [],
+                                              "description": "",
+                                              "extents": [
+                                                456,
+                                                70,
+                                                113,
+                                                113
+                                              ],
+                                              "name": "",
+                                              "role": "image",
+                                              "states": [
+                                                "enabled",
+                                                "sensitive",
+                                                "showing",
+                                                "visible"
+                                              ]
+                                            }
+                                          ],
+                                          "description": "",
+                                          "extents": [
+                                            432,
+                                            70,
+                                            161,
+                                            119
+                                          ],
+                                          "name": "",
+                                          "role": "section",
+                                          "states": [
+                                            "enabled",
+                                            "sensitive",
+                                            "showing",
+                                            "visible"
+                                          ]
+                                        },
+                                        {
+                                          "action": "doDefault",
+                                          "children": [
+                                            {
+                                              "action": "doDefault",
+                                              "children": [],
+                                              "description": "",
+                                              "extents": [
+                                                432,
+                                                213,
+                                                161,
+                                                27
+                                              ],
+                                              "name": "",
+                                              "role": "image",
+                                              "states": [
+                                                "enabled",
+                                                "sensitive",
+                                                "showing",
+                                                "visible"
+                                              ]
+                                            }
+                                          ],
+                                          "description": "",
+                                          "extents": [
+                                            432,
+                                            213,
+                                            161,
+                                            33
+                                          ],
+                                          "name": "",
+                                          "role": "section",
+                                          "states": [
+                                            "enabled",
+                                            "sensitive",
+                                            "showing",
+                                            "visible"
+                                          ]
+                                        },
+                                        {
+                                          "action": "doDefault",
+                                          "children": [
+                                            {
+                                              "action": "doDefault",
+                                              "children": [],
+                                              "description": "",
+                                              "extents": [
+                                                460,
+                                                256,
+                                                105,
+                                                19
+                                              ],
+                                              "name": "Version 1.14.4",
+                                              "role": "static",
+                                              "states": [
+                                                "enabled",
+                                                "sensitive",
+                                                "showing",
+                                                "visible"
+                                              ]
+                                            }
+                                          ],
+                                          "description": "",
+                                          "extents": [
+                                            432,
+                                            255,
+                                            161,
+                                            22
+                                          ],
+                                          "name": "",
+                                          "role": "section",
+                                          "states": [
+                                            "enabled",
+                                            "sensitive",
+                                            "showing",
+                                            "visible"
+                                          ]
+                                        },
+                                        {
+                                          "action": "doDefault",
+                                          "children": [
+                                            {
+                                              "action": "doDefault",
+                                              "children": [
+                                                {
+                                                  "action": "doDefault",
+                                                  "children": [
+                                                    {
+                                                      "action": "press",
+                                                      "children": [],
+                                                      "description": "",
+                                                      "extents": [
+                                                        392,
+                                                        317,
+                                                        241,
+                                                        38
+                                                      ],
+                                                      "name": "Quick start",
+                                                      "role": "button",
+                                                      "states": [
+                                                        "enabled",
+                                                        "focusable",
+                                                        "sensitive",
+                                                        "showing",
+                                                        "visible"
+                                                      ]
+                                                    }
+                                                  ],
+                                                  "description": "",
+                                                  "extents": [
+                                                    220,
+                                                    317,
+                                                    585,
+                                                    38
+                                                  ],
+                                                  "name": "",
+                                                  "role": "section",
+                                                  "states": [
+                                                    "enabled",
+                                                    "sensitive",
+                                                    "showing",
+                                                    "visible"
+                                                  ]
+                                                },
+                                                {
+                                                  "action": "doDefault",
+                                                  "children": [
+                                                    {
+                                                      "action": "doDefault",
+                                                      "children": [
+                                                        {
+                                                          "action": "doDefault",
+                                                          "children": [],
+                                                          "description": "",
+                                                          "extents": [
+                                                            245,
+                                                            393,
+                                                            122,
+                                                            18
+                                                          ],
+                                                          "name": "Create new vault",
+                                                          "role": "static",
+                                                          "states": [
+                                                            "enabled",
+                                                            "sensitive",
+                                                            "showing",
+                                                            "visible"
+                                                          ]
+                                                        }
+                                                      ],
+                                                      "description": "",
+                                                      "extents": [
+                                                        245,
+                                                        392,
+                                                        340,
+                                                        22
+                                                      ],
+                                                      "name": "",
+                                                      "role": "section",
+                                                      "states": [
+                                                        "enabled",
+                                                        "sensitive",
+                                                        "showing",
+                                                        "visible"
+                                                      ]
+                                                    },
+                                                    {
+                                                      "action": "doDefault",
+                                                      "children": [
+                                                        {
+                                                          "action": "doDefault",
+                                                          "children": [],
+                                                          "description": "",
+                                                          "extents": [
+                                                            245,
+                                                            419,
+                                                            289,
+                                                            18
+                                                          ],
+                                                          "name": "Create a new Obsidian vault under a folder.",
+                                                          "role": "static",
+                                                          "states": [
+                                                            "enabled",
+                                                            "sensitive",
+                                                            "showing",
+                                                            "visible"
+                                                          ]
+                                                        }
+                                                      ],
+                                                      "description": "",
+                                                      "extents": [
+                                                        245,
+                                                        413,
+                                                        340,
+                                                        25
+                                                      ],
+                                                      "name": "",
+                                                      "role": "section",
+                                                      "states": [
+                                                        "enabled",
+                                                        "sensitive",
+                                                        "showing",
+                                                        "visible"
+                                                      ]
+                                                    },
+                                                    {
+                                                      "action": "press",
+                                                      "children": [],
+                                                      "description": "",
+                                                      "extents": [
+                                                        655,
+                                                        392,
+                                                        125,
+                                                        38
+                                                      ],
+                                                      "name": "Create",
+                                                      "role": "button",
+                                                      "states": [
+                                                        "enabled",
+                                                        "focusable",
+                                                        "sensitive",
+                                                        "showing",
+                                                        "visible"
+                                                      ]
+                                                    }
+                                                  ],
+                                                  "description": "",
+                                                  "extents": [
+                                                    220,
+                                                    367,
+                                                    585,
+                                                    96
+                                                  ],
+                                                  "name": "",
+                                                  "role": "section",
+                                                  "states": [
+                                                    "enabled",
+                                                    "focusable",
+                                                    "sensitive",
+                                                    "showing",
+                                                    "visible"
+                                                  ]
+                                                },
+                                                {
+                                                  "action": "doDefault",
+                                                  "children": [
+                                                    {
+                                                      "action": "doDefault",
+                                                      "children": [
+                                                        {
+                                                          "action": "doDefault",
+                                                          "children": [],
+                                                          "description": "",
+                                                          "extents": [
+                                                            245,
+                                                            488,
+                                                            146,
+                                                            19
+                                                          ],
+                                                          "name": "Open folder as vault",
+                                                          "role": "static",
+                                                          "states": [
+                                                            "enabled",
+                                                            "sensitive",
+                                                            "showing",
+                                                            "visible"
+                                                          ]
+                                                        }
+                                                      ],
+                                                      "description": "",
+                                                      "extents": [
+                                                        245,
+                                                        487,
+                                                        343,
+                                                        22
+                                                      ],
+                                                      "name": "",
+                                                      "role": "section",
+                                                      "states": [
+                                                        "enabled",
+                                                        "sensitive",
+                                                        "showing",
+                                                        "visible"
+                                                      ]
+                                                    },
+                                                    {
+                                                      "action": "doDefault",
+                                                      "children": [
+                                                        {
+                                                          "action": "doDefault",
+                                                          "children": [],
+                                                          "description": "",
+                                                          "extents": [
+                                                            245,
+                                                            514,
+                                                            295,
+                                                            18
+                                                          ],
+                                                          "name": "Choose an existing folder of Markdown files.",
+                                                          "role": "static",
+                                                          "states": [
+                                                            "enabled",
+                                                            "sensitive",
+                                                            "showing",
+                                                            "visible"
+                                                          ]
+                                                        }
+                                                      ],
+                                                      "description": "",
+                                                      "extents": [
+                                                        245,
+                                                        508,
+                                                        343,
+                                                        26
+                                                      ],
+                                                      "name": "",
+                                                      "role": "section",
+                                                      "states": [
+                                                        "enabled",
+                                                        "sensitive",
+                                                        "showing",
+                                                        "visible"
+                                                      ]
+                                                    },
+                                                    {
+                                                      "action": "press",
+                                                      "children": [],
+                                                      "description": "",
+                                                      "extents": [
+                                                        655,
+                                                        487,
+                                                        125,
+                                                        39
+                                                      ],
+                                                      "name": "Open",
+                                                      "role": "button",
+                                                      "states": [
+                                                        "enabled",
+                                                        "focusable",
+                                                        "sensitive",
+                                                        "showing",
+                                                        "visible"
+                                                      ]
+                                                    }
+                                                  ],
+                                                  "description": "",
+                                                  "extents": [
+                                                    220,
+                                                    462,
+                                                    585,
+                                                    97
+                                                  ],
+                                                  "name": "",
+                                                  "role": "section",
+                                                  "states": [
+                                                    "enabled",
+                                                    "focusable",
+                                                    "sensitive",
+                                                    "showing",
+                                                    "visible"
+                                                  ]
+                                                },
+                                                {
+                                                  "action": "doDefault",
+                                                  "children": [
+                                                    {
+                                                      "action": "doDefault",
+                                                      "children": [
+                                                        {
+                                                          "action": "doDefault",
+                                                          "children": [],
+                                                          "description": "",
+                                                          "extents": [
+                                                            245,
+                                                            584,
+                                                            225,
+                                                            19
+                                                          ],
+                                                          "name": "Open vault from Obsidian Sync",
+                                                          "role": "static",
+                                                          "states": [
+                                                            "enabled",
+                                                            "sensitive",
+                                                            "showing",
+                                                            "visible"
+                                                          ]
+                                                        }
+                                                      ],
+                                                      "description": "",
+                                                      "extents": [
+                                                        245,
+                                                        583,
+                                                        356,
+                                                        22
+                                                      ],
+                                                      "name": "",
+                                                      "role": "section",
+                                                      "states": [
+                                                        "enabled",
+                                                        "sensitive",
+                                                        "showing",
+                                                        "visible"
+                                                      ]
+                                                    },
+                                                    {
+                                                      "action": "doDefault",
+                                                      "children": [
+                                                        {
+                                                          "action": "doDefault",
+                                                          "children": [],
+                                                          "description": "",
+                                                          "extents": [
+                                                            245,
+                                                            610,
+                                                            321,
+                                                            18
+                                                          ],
+                                                          "name": "Set up a synced vault with existing remote vault.",
+                                                          "role": "static",
+                                                          "states": [
+                                                            "enabled",
+                                                            "sensitive",
+                                                            "showing",
+                                                            "visible"
+                                                          ]
+                                                        }
+                                                      ],
+                                                      "description": "",
+                                                      "extents": [
+                                                        245,
+                                                        604,
+                                                        356,
+                                                        25
+                                                      ],
+                                                      "name": "",
+                                                      "role": "section",
+                                                      "states": [
+                                                        "enabled",
+                                                        "sensitive",
+                                                        "showing",
+                                                        "visible"
+                                                      ]
+                                                    },
+                                                    {
+                                                      "action": "press",
+                                                      "children": [],
+                                                      "description": "",
+                                                      "extents": [
+                                                        655,
+                                                        583,
+                                                        125,
+                                                        38
+                                                      ],
+                                                      "name": "Sign in",
+                                                      "role": "button",
+                                                      "states": [
+                                                        "enabled",
+                                                        "focusable",
+                                                        "sensitive",
+                                                        "showing",
+                                                        "visible"
+                                                      ]
+                                                    }
+                                                  ],
+                                                  "description": "",
+                                                  "extents": [
+                                                    220,
+                                                    558,
+                                                    585,
+                                                    96
+                                                  ],
+                                                  "name": "",
+                                                  "role": "section",
+                                                  "states": [
+                                                    "enabled",
+                                                    "focusable",
+                                                    "sensitive",
+                                                    "showing",
+                                                    "visible"
+                                                  ]
+                                                },
+                                                {
+                                                  "action": "doDefault",
+                                                  "children": [
+                                                    {
+                                                      "action": "click",
+                                                      "children": [
+                                                        {
+                                                          "action": "clickAncestor",
+                                                          "children": [],
+                                                          "description": "",
+                                                          "extents": [
+                                                            245,
+                                                            682,
+                                                            20,
+                                                            21
+                                                          ],
+                                                          "name": "",
+                                                          "role": "image",
+                                                          "states": [
+                                                            "enabled",
+                                                            "sensitive",
+                                                            "showing",
+                                                            "visible"
+                                                          ]
+                                                        }
+                                                      ],
+                                                      "description": "",
+                                                      "extents": [
+                                                        245,
+                                                        682,
+                                                        20,
+                                                        27
+                                                      ],
+                                                      "name": "Get Help",
+                                                      "role": "section",
+                                                      "states": [
+                                                        "enabled",
+                                                        "sensitive",
+                                                        "showing",
+                                                        "visible"
+                                                      ]
+                                                    },
+                                                    {
+                                                      "action": "open",
+                                                      "children": [
+                                                        {
+                                                          "action": "doDefault",
+                                                          "children": [],
+                                                          "description": "",
+                                                          "extents": [
+                                                            285,
+                                                            678,
+                                                            495,
+                                                            11
+                                                          ],
+                                                          "name": "",
+                                                          "role": "menu",
+                                                          "states": [
+                                                            "enabled",
+                                                            "sensitive"
+                                                          ]
+                                                        }
+                                                      ],
+                                                      "description": "",
+                                                      "extents": [
+                                                        285,
+                                                        678,
+                                                        495,
+                                                        39
+                                                      ],
+                                                      "name": "",
+                                                      "role": "combo box",
+                                                      "states": [
+                                                        "enabled",
+                                                        "focusable",
+                                                        "sensitive",
+                                                        "showing",
+                                                        "visible"
+                                                      ]
+                                                    }
+                                                  ],
+                                                  "description": "",
+                                                  "extents": [
+                                                    220,
+                                                    653,
+                                                    585,
+                                                    89
+                                                  ],
+                                                  "name": "",
+                                                  "role": "section",
+                                                  "states": [
+                                                    "enabled",
+                                                    "focusable",
+                                                    "sensitive",
+                                                    "showing",
+                                                    "visible"
+                                                  ]
+                                                }
+                                              ],
+                                              "description": "",
+                                              "extents": [
+                                                175,
+                                                302,
+                                                675,
+                                                536
+                                              ],
+                                              "name": "",
+                                              "role": "section",
+                                              "states": [
+                                                "enabled",
+                                                "sensitive",
+                                                "showing",
+                                                "visible"
+                                              ]
+                                            }
+                                          ],
+                                          "description": "",
+                                          "extents": [
+                                            175,
+                                            302,
+                                            675,
+                                            536
+                                          ],
+                                          "name": "",
+                                          "role": "section",
+                                          "states": [
+                                            "enabled",
+                                            "sensitive",
+                                            "showing",
+                                            "visible"
+                                          ]
+                                        }
+                                      ],
+                                      "description": "",
+                                      "extents": [
+                                        0,
+                                        0,
+                                        1025,
+                                        838
+                                      ],
+                                      "name": "Obsidian",
+                                      "role": "document web",
+                                      "states": [
+                                        "enabled",
+                                        "focusable",
+                                        "focused",
+                                        "sensitive",
+                                        "showing",
+                                        "visible"
+                                      ]
+                                    }
+                                  ],
+                                  "description": "",
+                                  "extents": [
+                                    0,
+                                    0,
+                                    820,
+                                    670
+                                  ],
+                                  "name": "",
+                                  "role": "panel",
+                                  "states": [
+                                    "enabled",
+                                    "sensitive",
+                                    "showing",
+                                    "visible"
+                                  ]
+                                },
+                                {
+                                  "action": "doDefault",
+                                  "children": [],
+                                  "description": "",
+                                  "extents": [
+                                    0,
+                                    0,
+                                    820,
+                                    670
+                                  ],
+                                  "name": "",
+                                  "role": "panel",
+                                  "states": [
+                                    "enabled",
+                                    "sensitive",
+                                    "showing",
+                                    "visible"
+                                  ]
+                                }
+                              ],
+                              "description": "",
+                              "extents": [
+                                0,
+                                0,
+                                820,
+                                670
+                              ],
+                              "name": "",
+                              "role": "panel",
+                              "states": [
+                                "enabled",
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ]
+                            }
+                          ],
+                          "description": "",
+                          "extents": [
+                            0,
+                            0,
+                            820,
+                            670
+                          ],
+                          "name": "",
+                          "role": "panel",
+                          "states": [
+                            "enabled",
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ]
+                        }
+                      ],
+                      "description": "",
+                      "extents": [
+                        0,
+                        0,
+                        820,
+                        670
+                      ],
+                      "name": "",
+                      "role": "panel",
+                      "states": [
+                        "enabled",
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ]
+                    }
+                  ],
+                  "description": "",
+                  "extents": [
+                    0,
+                    0,
+                    820,
+                    670
+                  ],
+                  "name": "",
+                  "role": "panel",
+                  "states": [
+                    "enabled",
+                    "sensitive",
+                    "showing",
+                    "visible"
+                  ]
+                }
+              ],
+              "description": "",
+              "extents": [
+                0,
+                0,
+                820,
+                670
+              ],
+              "name": "",
+              "role": "panel",
+              "states": [
+                "enabled",
+                "sensitive",
+                "showing",
+                "visible"
+              ]
+            }
+          ],
+          "description": "",
+          "extents": [
+            0,
+            0,
+            820,
+            670
+          ],
+          "name": "Obsidian",
+          "role": "frame",
+          "states": [
+            "enabled",
+            "sensitive",
+            "showing",
+            "visible"
+          ]
+        }
+      ],
+      "name": "electron",
+      "pid": 457332
+    }
+  ],
+  "monitor": {
+    "height": 1080,
+    "name": "THODUTEST",
+    "scale": 1.25,
+    "width": 1920,
+    "x": 1536,
+    "y": 0
+  },
+  "window": {
+    "address": "0x563a89a50320",
+    "at": [
+      1894,
+      110
+    ],
+    "class": "md.obsidian.Obsidian",
+    "monitor": 1,
+    "pid": 457332,
+    "size": [
+      820,
+      670
+    ],
+    "title": "Obsidian",
+    "workspace": 4
+  }
+}

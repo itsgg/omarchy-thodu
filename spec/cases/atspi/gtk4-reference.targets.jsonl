@@ -1,0 +1,7 @@
+{"bounds": [1548, 452, 370, 34], "role": "button", "text": "Open"}
+{"bounds": [1548, 494, 370, 34], "role": "button", "text": "Save"}
+{"bounds": [1548, 536, 370, 34], "role": "button", "text": "Close"}
+{"bounds": [1548, 578, 370, 34], "role": "entry", "text": ""}
+{"bounds": [1548, 620, 370, 26], "role": "check", "text": "Remember"}
+{"bounds": [1548, 654, 370, 34], "role": "combo", "text": "Small"}
+{"bounds": [1548, 696, 370, 34], "role": "link", "text": "Docs"}

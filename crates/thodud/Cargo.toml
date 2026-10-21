@@ -15,4 +15,6 @@ serde_json.workspace = true
 zbus.workspace = true
 wayland-client.workspace = true
 evdev.workspace = true
+futures-lite.workspace = true
+futures-util.workspace = true
 wayland-protocols-wlr.workspace = true

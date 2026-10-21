@@ -13,7 +13,7 @@ use thodu_core::input;
 use thodu_core::labels::{self, ALPHABET};
 use thodu_core::model::{Monitor, Rect, Role, Source, Target, Window};
 use thodu_core::perf;
-use thodu_core::protocol::{Envelope, OpenEvent, Reply, Request, Timing};
+use thodu_core::protocol::{Envelope, LabeledTarget, OpenEvent, Reply, Request, Timing};
 use thodu_core::session::{Button, DOUBLE_MS, Key, Session, State};
 use thodu_core::stale::is_stale;
 use thodu_core::tree::{self, App, Snapshot};
@@ -74,10 +74,23 @@ fn target(text: &str, bounds: Rect) -> Target {
     }
 }
 
+/// The recorded reference windows of REQ-SRC-02 (change 0001).
+const REFERENCES: [&str; 5] = [
+    "gtk3-reference",
+    "gtk4-reference",
+    "qt-reference",
+    "chromium-reference",
+    "obsidian-reference",
+];
+
+/// A recorded tree's targets in reading order, as sessions and `thodu
+/// targets` see them.
 fn replayed(name: &str) -> Vec<Target> {
     let snap = snapshot(&format!("atspi/{name}.json"));
     let frame = tree::match_frame(&snap).expect("a frame for the window");
-    tree::targets(frame, &snap.window, &snap.monitor)
+    let mut targets = tree::targets(frame, &snap.window, &snap.monitor);
+    labels::reading_order(&mut targets);
+    targets
 }
 
 fn expected(name: &str) -> Vec<(Rect, Role, String)> {
@@ -105,8 +118,17 @@ fn summary(targets: &[Target]) -> Vec<(Rect, Role, String)> {
 // REQ-SESSION-01: each recorded tree yields the targets marked beside it.
 #[test]
 fn req_session_01_recorded_trees_yield_their_marked_targets() {
-    for name in ["gtk3-reference", "covered-dialog"] {
-        assert_eq!(summary(&replayed(name)), expected(name), "{name}");
+    // Which targets, not their order: both sides in reading order.
+    let ordered = |mut v: Vec<(Rect, Role, String)>| {
+        v.sort_by_key(|(r, _, _)| (r.y, r.x));
+        v
+    };
+    for name in ["covered-dialog"].iter().chain(&REFERENCES) {
+        assert_eq!(
+            ordered(summary(&replayed(name))),
+            ordered(expected(name)),
+            "{name}"
+        );
     }
 }
 
@@ -730,4 +752,76 @@ fn req_act_01_pointer_goes_back_unless_it_would_take_the_focus() {
         input::should_restore(true, None, None),
         "a grid click on the desktop"
     );
+}
+
+// REQ-SRC-02: over the recorded GTK3, GTK4, Qt, Chromium and Electron
+// reference windows, at least 90 percent of the controls a person marked
+// are found, and no target lies outside its window. The threshold is over
+// all the marked controls together: a window has about seven, so one miss
+// is fourteen points of its own share. Qt's QLabel link, which Qt reports
+// as a plain label, is the one known miss; the grid reaches it.
+#[test]
+fn req_src_02_reference_windows_yield_the_marked_controls() {
+    let (mut marked, mut found) = (0, 0);
+    let mut report = Vec::new();
+    for name in REFERENCES {
+        let snap = snapshot(&format!("atspi/{name}.json"));
+        let targets = replayed(name);
+        for t in &targets {
+            assert!(
+                snap.window.rect().contains(&t.bounds) && !t.bounds.is_empty(),
+                "{name}: {t:?} outside its window"
+            );
+        }
+        let marks = jsonl(&format!("atspi/{name}.marked.jsonl"));
+        let hit = marks
+            .iter()
+            .filter(|m| {
+                let (x, y) = (
+                    m["at"][0].as_i64().expect("x") as i32,
+                    m["at"][1].as_i64().expect("y") as i32,
+                );
+                targets.iter().any(|t| t.bounds.contains_point(x, y))
+            })
+            .count();
+        report.push(format!("{name} {hit}/{}", marks.len()));
+        marked += marks.len();
+        found += hit;
+    }
+    assert!(
+        found * 10 >= marked * 9,
+        "{found} of {marked} marked controls found: {}",
+        report.join(", ")
+    );
+    assert_eq!(
+        report.join(", "),
+        "gtk3-reference 7/7, gtk4-reference 7/7, qt-reference 6/7, chromium-reference 7/7, obsidian-reference 9/9"
+    );
+}
+
+// REQ-CLI-01: the replayed trees printed as `thodu targets --json` prints
+// them match their .targets.jsonl files.
+#[test]
+fn req_cli_01_targets_json_matches_the_recorded_targets() {
+    for name in REFERENCES {
+        let lines: Vec<Value> = replayed(name)
+            .into_iter()
+            .map(|t| serde_json::from_str(&LabeledTarget::unlabeled(t).json_line()).expect("json"))
+            .collect();
+        let printed: Vec<(Rect, Role, String)> = lines
+            .iter()
+            .map(|v| {
+                assert!(v.get("label").is_none(), "no labels in targets --json");
+                assert_eq!(v["source"], "atspi");
+                let b = &v["bounds"];
+                let at = |k: &str| b[k].as_i64().expect("bound") as i32;
+                (
+                    Rect::new(at("x"), at("y"), at("w"), at("h")),
+                    serde_json::from_value(v["role"].clone()).expect("role"),
+                    v["text"].as_str().expect("text").to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(printed, expected(name), "{name}");
+    }
 }

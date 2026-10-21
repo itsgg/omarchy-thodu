@@ -1,0 +1,234 @@
+{
+  "apps": [
+    {
+      "frames": [],
+      "name": "python3",
+      "pid": 454354
+    },
+    {
+      "frames": [
+        {
+          "children": [
+            {
+              "action": "Press",
+              "children": [],
+              "description": "",
+              "extents": [
+                11,
+                11,
+                727,
+                27
+              ],
+              "name": "Open",
+              "role": "push button",
+              "states": [
+                "enabled",
+                "focusable",
+                "sensitive",
+                "showing",
+                "visible"
+              ]
+            },
+            {
+              "action": "Press",
+              "children": [],
+              "description": "",
+              "extents": [
+                11,
+                44,
+                727,
+                27
+              ],
+              "name": "Save",
+              "role": "push button",
+              "states": [
+                "enabled",
+                "focusable",
+                "sensitive",
+                "showing",
+                "visible"
+              ]
+            },
+            {
+              "action": "Press",
+              "children": [],
+              "description": "",
+              "extents": [
+                11,
+                77,
+                727,
+                27
+              ],
+              "name": "Close",
+              "role": "push button",
+              "states": [
+                "enabled",
+                "focusable",
+                "sensitive",
+                "showing",
+                "visible"
+              ]
+            },
+            {
+              "action": "Press",
+              "children": [],
+              "description": "",
+              "extents": [
+                -1536,
+                0,
+                0,
+                0
+              ],
+              "name": "Hidden",
+              "role": "push button",
+              "states": [
+                "enabled",
+                "focusable",
+                "sensitive"
+              ]
+            },
+            {
+              "action": "Set Focus",
+              "children": [],
+              "description": "Search",
+              "extents": [
+                11,
+                110,
+                727,
+                27
+              ],
+              "name": "",
+              "role": "text",
+              "states": [
+                "editable",
+                "enabled",
+                "focusable",
+                "sensitive",
+                "showing",
+                "visible"
+              ]
+            },
+            {
+              "action": "Toggle",
+              "children": [],
+              "description": "",
+              "extents": [
+                11,
+                143,
+                99,
+                24
+              ],
+              "name": "Remember",
+              "role": "check box",
+              "states": [
+                "enabled",
+                "focusable",
+                "sensitive",
+                "showing",
+                "visible"
+              ]
+            },
+            {
+              "action": "Show Menu",
+              "children": [
+                {
+                  "action": "Set Focus",
+                  "children": [],
+                  "description": "",
+                  "extents": [
+                    -1536,
+                    0,
+                    0,
+                    0
+                  ],
+                  "name": "",
+                  "role": "list",
+                  "states": [
+                    "enabled",
+                    "focusable",
+                    "sensitive"
+                  ]
+                }
+              ],
+              "description": "",
+              "extents": [
+                11,
+                173,
+                727,
+                27
+              ],
+              "name": "Small",
+              "role": "combo box",
+              "states": [
+                "enabled",
+                "focusable",
+                "sensitive",
+                "showing",
+                "visible"
+              ]
+            },
+            {
+              "children": [],
+              "description": "",
+              "extents": [
+                11,
+                206,
+                727,
+                19
+              ],
+              "name": "Docs",
+              "role": "label",
+              "states": [
+                "enabled",
+                "sensitive",
+                "showing",
+                "visible"
+              ]
+            }
+          ],
+          "description": "",
+          "extents": [
+            0,
+            0,
+            749,
+            814
+          ],
+          "name": "Thodu Qt reference",
+          "role": "filler",
+          "states": [
+            "enabled",
+            "sensitive",
+            "showing",
+            "visible"
+          ]
+        }
+      ],
+      "name": "qt.py",
+      "pid": 454354
+    }
+  ],
+  "monitor": {
+    "height": 1080,
+    "name": "THODUTEST",
+    "scale": 1.25,
+    "width": 1920,
+    "x": 1536,
+    "y": 0
+  },
+  "window": {
+    "address": "0x563a89476b20",
+    "at": [
+      2311,
+      38
+    ],
+    "class": "thodu-reference-qt",
+    "monitor": 1,
+    "pid": 454354,
+    "size": [
+      749,
+      814
+    ],
+    "title": "Thodu Qt reference",
+    "workspace": 4
+  }
+}

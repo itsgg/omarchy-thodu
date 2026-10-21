@@ -1,0 +1,7 @@
+{"bounds": [1948, 468, 334, 34], "role": "button", "text": "Open"}
+{"bounds": [1948, 510, 334, 34], "role": "button", "text": "Save"}
+{"bounds": [1948, 551, 334, 34], "role": "button", "text": "Close"}
+{"bounds": [1948, 593, 334, 34], "role": "entry", "text": "Search"}
+{"bounds": [1952, 637, 14, 14], "role": "check", "text": "Remember"}
+{"bounds": [1948, 662, 334, 33], "role": "combo", "text": "Size"}
+{"bounds": [1948, 703, 334, 18], "role": "link", "text": "Docs"}

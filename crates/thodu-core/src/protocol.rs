@@ -59,6 +59,11 @@ pub enum Request {
         #[serde(default)]
         window: Option<String>,
     },
+    /// The window's process's whole accessibility tree, for record-tree.
+    Record {
+        #[serde(default)]
+        window: Option<String>,
+    },
     Close {
         session: String,
     },
@@ -123,6 +128,34 @@ pub struct OpenEvent {
     pub reply: Reply,
 }
 
+impl LabeledTarget {
+    /// A target with no label, as `thodu targets` reports it.
+    pub fn unlabeled(t: crate::model::Target) -> Self {
+        Self {
+            id: t.id,
+            bounds: t.bounds,
+            role: t.role,
+            text: t.text,
+            source: t.source,
+            label: String::new(),
+            placed: t.bounds,
+        }
+    }
+
+    /// The line `thodu targets --json` prints for this target (REQ-CLI-01):
+    /// the shape of SPEC section 5, without the label.
+    pub fn json_line(&self) -> String {
+        serde_json::json!({
+            "id": self.id,
+            "bounds": self.bounds,
+            "role": self.role,
+            "text": self.text,
+            "source": self.source,
+        })
+        .to_string()
+    }
+}
+
 /// The parts of a session the overlay draws.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct View {
@@ -176,6 +209,9 @@ pub struct Reply {
     pub status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub timing: Option<Timing>,
+    /// A recorded snapshot, in the shape of spec/cases/atspi/*.json.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub snapshot: Option<serde_json::Value>,
 }
 
 impl Reply {

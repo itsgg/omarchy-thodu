@@ -22,4 +22,6 @@ proptest = "1.12.0"
 zbus = { version = "5.19.0", default-features = false, features = ["blocking-api", "async-io"] }
 wayland-client = "0.31.15"
 evdev = "0.13.2"
+futures-lite = "2.6.1"
+futures-util = { version = "0.3.34", default-features = false, features = ["std", "async-await", "async-await-macro"] }
 wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }

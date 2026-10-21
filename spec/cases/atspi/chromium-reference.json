@@ -1,0 +1,1299 @@
+{
+  "apps": [
+    {
+      "frames": [
+        {
+          "action": "doDefault",
+          "children": [
+            {
+              "action": "doDefault",
+              "children": [
+                {
+                  "action": "doDefault",
+                  "children": [
+                    {
+                      "action": "click",
+                      "children": [],
+                      "description": "",
+                      "extents": [
+                        0,
+                        0,
+                        0,
+                        0
+                      ],
+                      "name": "Minimize",
+                      "role": "button",
+                      "states": [
+                        "enabled",
+                        "sensitive"
+                      ]
+                    },
+                    {
+                      "action": "click",
+                      "children": [],
+                      "description": "",
+                      "extents": [
+                        0,
+                        0,
+                        0,
+                        0
+                      ],
+                      "name": "Maximize",
+                      "role": "button",
+                      "states": [
+                        "enabled",
+                        "sensitive"
+                      ]
+                    },
+                    {
+                      "action": "click",
+                      "children": [],
+                      "description": "",
+                      "extents": [
+                        0,
+                        0,
+                        0,
+                        0
+                      ],
+                      "name": "Restore",
+                      "role": "button",
+                      "states": [
+                        "enabled",
+                        "sensitive"
+                      ]
+                    },
+                    {
+                      "action": "click",
+                      "children": [],
+                      "description": "",
+                      "extents": [
+                        0,
+                        0,
+                        0,
+                        0
+                      ],
+                      "name": "Close",
+                      "role": "button",
+                      "states": [
+                        "enabled",
+                        "sensitive"
+                      ]
+                    },
+                    {
+                      "action": "open",
+                      "children": [],
+                      "description": "",
+                      "extents": [
+                        0,
+                        0,
+                        0,
+                        0
+                      ],
+                      "name": "",
+                      "role": "button",
+                      "states": [
+                        "enabled",
+                        "sensitive"
+                      ]
+                    },
+                    {
+                      "action": "doDefault",
+                      "children": [],
+                      "description": "",
+                      "extents": [
+                        0,
+                        0,
+                        0,
+                        0
+                      ],
+                      "name": "_/home/gg/Work/GG/omarchy-thodu-next/spec/reference/page.html",
+                      "role": "static",
+                      "states": [
+                        "enabled",
+                        "sensitive"
+                      ]
+                    },
+                    {
+                      "action": "doDefault",
+                      "children": [
+                        {
+                          "action": "doDefault",
+                          "children": [],
+                          "description": "",
+                          "extents": [
+                            0,
+                            0,
+                            0,
+                            0
+                          ],
+                          "name": "",
+                          "role": "panel",
+                          "states": [
+                            "enabled",
+                            "sensitive"
+                          ]
+                        },
+                        {
+                          "action": "doDefault",
+                          "children": [
+                            {
+                              "action": "doDefault",
+                              "children": [],
+                              "description": "",
+                              "extents": [
+                                0,
+                                0,
+                                0,
+                                0
+                              ],
+                              "name": "",
+                              "role": "tool bar",
+                              "states": [
+                                "enabled",
+                                "sensitive"
+                              ]
+                            },
+                            {
+                              "action": "doDefault",
+                              "children": [],
+                              "description": "",
+                              "extents": [
+                                0,
+                                0,
+                                0,
+                                0
+                              ],
+                              "name": "",
+                              "role": "panel",
+                              "states": [
+                                "enabled",
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ]
+                            }
+                          ],
+                          "description": "",
+                          "extents": [
+                            0,
+                            0,
+                            365,
+                            0
+                          ],
+                          "name": "",
+                          "role": "panel",
+                          "states": [
+                            "enabled",
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ]
+                        },
+                        {
+                          "action": "doDefault",
+                          "children": [
+                            {
+                              "action": "doDefault",
+                              "children": [],
+                              "description": "",
+                              "extents": [
+                                0,
+                                0,
+                                365,
+                                400
+                              ],
+                              "name": "",
+                              "role": "panel",
+                              "states": [
+                                "enabled",
+                                "sensitive"
+                              ]
+                            },
+                            {
+                              "action": "doDefault",
+                              "children": [
+                                {
+                                  "action": "doDefault",
+                                  "children": [],
+                                  "description": "",
+                                  "extents": [
+                                    0,
+                                    0,
+                                    365,
+                                    400
+                                  ],
+                                  "name": "",
+                                  "role": "panel",
+                                  "states": [
+                                    "enabled",
+                                    "sensitive"
+                                  ]
+                                },
+                                {
+                                  "action": "doDefault",
+                                  "children": [],
+                                  "description": "",
+                                  "extents": [
+                                    0,
+                                    0,
+                                    365,
+                                    400
+                                  ],
+                                  "name": "",
+                                  "role": "panel",
+                                  "states": [
+                                    "enabled",
+                                    "sensitive"
+                                  ]
+                                },
+                                {
+                                  "action": "doDefault",
+                                  "children": [],
+                                  "description": "",
+                                  "extents": [
+                                    0,
+                                    0,
+                                    365,
+                                    0
+                                  ],
+                                  "name": "",
+                                  "role": "panel",
+                                  "states": [
+                                    "enabled",
+                                    "sensitive",
+                                    "showing",
+                                    "visible"
+                                  ]
+                                },
+                                {
+                                  "action": "doDefault",
+                                  "children": [
+                                    {
+                                      "action": "press",
+                                      "children": [],
+                                      "description": "",
+                                      "extents": [
+                                        20,
+                                        20,
+                                        417,
+                                        42
+                                      ],
+                                      "name": "Open",
+                                      "role": "button",
+                                      "states": [
+                                        "enabled",
+                                        "focusable",
+                                        "sensitive",
+                                        "showing",
+                                        "visible"
+                                      ]
+                                    },
+                                    {
+                                      "action": "press",
+                                      "children": [],
+                                      "description": "",
+                                      "extents": [
+                                        20,
+                                        72,
+                                        417,
+                                        42
+                                      ],
+                                      "name": "Save",
+                                      "role": "button",
+                                      "states": [
+                                        "enabled",
+                                        "focusable",
+                                        "sensitive",
+                                        "showing",
+                                        "visible"
+                                      ]
+                                    },
+                                    {
+                                      "action": "press",
+                                      "children": [],
+                                      "description": "",
+                                      "extents": [
+                                        20,
+                                        124,
+                                        417,
+                                        42
+                                      ],
+                                      "name": "Close",
+                                      "role": "button",
+                                      "states": [
+                                        "enabled",
+                                        "focusable",
+                                        "sensitive",
+                                        "showing",
+                                        "visible"
+                                      ]
+                                    },
+                                    {
+                                      "action": "activate",
+                                      "children": [],
+                                      "description": "",
+                                      "extents": [
+                                        20,
+                                        176,
+                                        417,
+                                        42
+                                      ],
+                                      "name": "Search",
+                                      "role": "entry",
+                                      "states": [
+                                        "editable",
+                                        "enabled",
+                                        "focusable",
+                                        "sensitive",
+                                        "showing",
+                                        "visible"
+                                      ]
+                                    },
+                                    {
+                                      "action": "check",
+                                      "children": [],
+                                      "description": "",
+                                      "extents": [
+                                        25,
+                                        231,
+                                        17,
+                                        17
+                                      ],
+                                      "name": "Remember",
+                                      "role": "check box",
+                                      "states": [
+                                        "enabled",
+                                        "focusable",
+                                        "sensitive",
+                                        "showing",
+                                        "visible"
+                                      ]
+                                    },
+                                    {
+                                      "action": "open",
+                                      "children": [
+                                        {
+                                          "action": "doDefault",
+                                          "children": [],
+                                          "description": "",
+                                          "extents": [
+                                            20,
+                                            263,
+                                            417,
+                                            10
+                                          ],
+                                          "name": "",
+                                          "role": "menu",
+                                          "states": [
+                                            "enabled",
+                                            "sensitive"
+                                          ]
+                                        }
+                                      ],
+                                      "description": "",
+                                      "extents": [
+                                        20,
+                                        263,
+                                        417,
+                                        41
+                                      ],
+                                      "name": "Size",
+                                      "role": "combo box",
+                                      "states": [
+                                        "enabled",
+                                        "focusable",
+                                        "sensitive",
+                                        "showing",
+                                        "visible"
+                                      ]
+                                    },
+                                    {
+                                      "action": "jump",
+                                      "children": [
+                                        {
+                                          "action": "clickAncestor",
+                                          "children": [],
+                                          "description": "",
+                                          "extents": [
+                                            20,
+                                            314,
+                                            46,
+                                            22
+                                          ],
+                                          "name": "Docs",
+                                          "role": "static",
+                                          "states": [
+                                            "enabled",
+                                            "sensitive",
+                                            "showing",
+                                            "visible"
+                                          ]
+                                        }
+                                      ],
+                                      "description": "",
+                                      "extents": [
+                                        20,
+                                        314,
+                                        417,
+                                        23
+                                      ],
+                                      "name": "Docs",
+                                      "role": "link",
+                                      "states": [
+                                        "enabled",
+                                        "focusable",
+                                        "sensitive",
+                                        "showing",
+                                        "visible"
+                                      ]
+                                    },
+                                    {
+                                      "action": "doDefault",
+                                      "children": [],
+                                      "description": "",
+                                      "extents": [
+                                        20,
+                                        347,
+                                        417,
+                                        0
+                                      ],
+                                      "name": "",
+                                      "role": "section",
+                                      "states": [
+                                        "enabled",
+                                        "sensitive",
+                                        "showing",
+                                        "visible"
+                                      ]
+                                    }
+                                  ],
+                                  "description": "",
+                                  "extents": [
+                                    0,
+                                    0,
+                                    457,
+                                    500
+                                  ],
+                                  "name": "Thodu page reference",
+                                  "role": "document web",
+                                  "states": [
+                                    "enabled",
+                                    "focusable",
+                                    "focused",
+                                    "sensitive",
+                                    "showing",
+                                    "visible"
+                                  ]
+                                },
+                                {
+                                  "action": "doDefault",
+                                  "children": [],
+                                  "description": "",
+                                  "extents": [
+                                    0,
+                                    0,
+                                    0,
+                                    0
+                                  ],
+                                  "name": "",
+                                  "role": "panel",
+                                  "states": [
+                                    "enabled",
+                                    "sensitive"
+                                  ]
+                                },
+                                {
+                                  "action": "doDefault",
+                                  "children": [],
+                                  "description": "",
+                                  "extents": [
+                                    0,
+                                    0,
+                                    0,
+                                    0
+                                  ],
+                                  "name": "",
+                                  "role": "panel",
+                                  "states": [
+                                    "enabled",
+                                    "sensitive"
+                                  ]
+                                },
+                                {
+                                  "action": "doDefault",
+                                  "children": [],
+                                  "description": "",
+                                  "extents": [
+                                    0,
+                                    0,
+                                    365,
+                                    400
+                                  ],
+                                  "name": "",
+                                  "role": "panel",
+                                  "states": [
+                                    "enabled",
+                                    "sensitive"
+                                  ]
+                                },
+                                {
+                                  "action": "doDefault",
+                                  "children": [],
+                                  "description": "",
+                                  "extents": [
+                                    0,
+                                    0,
+                                    365,
+                                    400
+                                  ],
+                                  "name": "",
+                                  "role": "panel",
+                                  "states": [
+                                    "enabled",
+                                    "sensitive"
+                                  ]
+                                },
+                                {
+                                  "action": "doDefault",
+                                  "children": [],
+                                  "description": "",
+                                  "extents": [
+                                    0,
+                                    0,
+                                    365,
+                                    400
+                                  ],
+                                  "name": "",
+                                  "role": "panel",
+                                  "states": [
+                                    "enabled",
+                                    "sensitive"
+                                  ]
+                                },
+                                {
+                                  "action": "doDefault",
+                                  "children": [],
+                                  "description": "",
+                                  "extents": [
+                                    0,
+                                    0,
+                                    365,
+                                    400
+                                  ],
+                                  "name": "",
+                                  "role": "panel",
+                                  "states": [
+                                    "enabled",
+                                    "sensitive"
+                                  ]
+                                },
+                                {
+                                  "action": "doDefault",
+                                  "children": [],
+                                  "description": "",
+                                  "extents": [
+                                    0,
+                                    0,
+                                    365,
+                                    400
+                                  ],
+                                  "name": "",
+                                  "role": "panel",
+                                  "states": [
+                                    "enabled",
+                                    "sensitive"
+                                  ]
+                                },
+                                {
+                                  "action": "doDefault",
+                                  "children": [],
+                                  "description": "",
+                                  "extents": [
+                                    181,
+                                    376,
+                                    184,
+                                    24
+                                  ],
+                                  "name": "",
+                                  "role": "panel",
+                                  "states": [
+                                    "enabled",
+                                    "sensitive"
+                                  ]
+                                },
+                                {
+                                  "action": "doDefault",
+                                  "children": [],
+                                  "description": "",
+                                  "extents": [
+                                    0,
+                                    0,
+                                    365,
+                                    400
+                                  ],
+                                  "name": "",
+                                  "role": "panel",
+                                  "states": [
+                                    "enabled",
+                                    "sensitive"
+                                  ]
+                                },
+                                {
+                                  "action": "doDefault",
+                                  "children": [],
+                                  "description": "",
+                                  "extents": [
+                                    0,
+                                    0,
+                                    365,
+                                    400
+                                  ],
+                                  "name": "",
+                                  "role": "panel",
+                                  "states": [
+                                    "enabled",
+                                    "sensitive"
+                                  ]
+                                }
+                              ],
+                              "description": "",
+                              "extents": [
+                                0,
+                                0,
+                                365,
+                                400
+                              ],
+                              "name": "",
+                              "role": "panel",
+                              "states": [
+                                "enabled",
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ]
+                            },
+                            {
+                              "action": "doDefault",
+                              "children": [],
+                              "description": "",
+                              "extents": [
+                                0,
+                                0,
+                                0,
+                                0
+                              ],
+                              "name": "",
+                              "role": "separator",
+                              "states": [
+                                "enabled",
+                                "sensitive"
+                              ]
+                            },
+                            {
+                              "action": "doDefault",
+                              "children": [],
+                              "description": "",
+                              "extents": [
+                                0,
+                                0,
+                                0,
+                                0
+                              ],
+                              "name": "",
+                              "role": "panel",
+                              "states": [
+                                "enabled",
+                                "sensitive"
+                              ]
+                            },
+                            {
+                              "action": "doDefault",
+                              "children": [],
+                              "description": "",
+                              "extents": [
+                                0,
+                                0,
+                                0,
+                                0
+                              ],
+                              "name": "",
+                              "role": "panel",
+                              "states": [
+                                "enabled",
+                                "sensitive"
+                              ]
+                            },
+                            {
+                              "action": "doDefault",
+                              "children": [],
+                              "description": "",
+                              "extents": [
+                                0,
+                                0,
+                                0,
+                                0
+                              ],
+                              "name": "",
+                              "role": "panel",
+                              "states": [
+                                "enabled",
+                                "sensitive"
+                              ]
+                            },
+                            {
+                              "action": "doDefault",
+                              "children": [],
+                              "description": "",
+                              "extents": [
+                                0,
+                                0,
+                                0,
+                                0
+                              ],
+                              "name": "",
+                              "role": "panel",
+                              "states": [
+                                "enabled",
+                                "sensitive"
+                              ]
+                            },
+                            {
+                              "action": "doDefault",
+                              "children": [],
+                              "description": "",
+                              "extents": [
+                                0,
+                                0,
+                                0,
+                                0
+                              ],
+                              "name": "",
+                              "role": "panel",
+                              "states": [
+                                "enabled",
+                                "sensitive"
+                              ]
+                            },
+                            {
+                              "action": "doDefault",
+                              "children": [],
+                              "description": "",
+                              "extents": [
+                                0,
+                                0,
+                                0,
+                                0
+                              ],
+                              "name": "",
+                              "role": "panel",
+                              "states": [
+                                "enabled",
+                                "sensitive"
+                              ]
+                            },
+                            {
+                              "action": "doDefault",
+                              "children": [],
+                              "description": "",
+                              "extents": [
+                                0,
+                                0,
+                                365,
+                                400
+                              ],
+                              "name": "",
+                              "role": "panel",
+                              "states": [
+                                "enabled",
+                                "sensitive"
+                              ]
+                            }
+                          ],
+                          "description": "",
+                          "extents": [
+                            0,
+                            0,
+                            365,
+                            400
+                          ],
+                          "name": "",
+                          "role": "panel",
+                          "states": [
+                            "enabled",
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ]
+                        },
+                        {
+                          "action": "doDefault",
+                          "children": [],
+                          "description": "",
+                          "extents": [
+                            0,
+                            0,
+                            0,
+                            0
+                          ],
+                          "name": "Infobar Container",
+                          "role": "panel",
+                          "states": [
+                            "enabled",
+                            "sensitive"
+                          ]
+                        },
+                        {
+                          "action": "doDefault",
+                          "children": [],
+                          "description": "",
+                          "extents": [
+                            0,
+                            0,
+                            0,
+                            0
+                          ],
+                          "name": "",
+                          "role": "panel",
+                          "states": [
+                            "enabled",
+                            "sensitive"
+                          ]
+                        },
+                        {
+                          "action": "doDefault",
+                          "children": [],
+                          "description": "",
+                          "extents": [
+                            0,
+                            0,
+                            0,
+                            0
+                          ],
+                          "name": "",
+                          "role": "panel",
+                          "states": [
+                            "enabled",
+                            "sensitive"
+                          ]
+                        },
+                        {
+                          "action": "doDefault",
+                          "children": [],
+                          "description": "",
+                          "extents": [
+                            0,
+                            0,
+                            0,
+                            0
+                          ],
+                          "name": "",
+                          "role": "panel",
+                          "states": [
+                            "enabled",
+                            "sensitive"
+                          ]
+                        },
+                        {
+                          "action": "doDefault",
+                          "children": [],
+                          "description": "",
+                          "extents": [
+                            0,
+                            0,
+                            0,
+                            0
+                          ],
+                          "name": "",
+                          "role": "panel",
+                          "states": [
+                            "enabled",
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ]
+                        },
+                        {
+                          "action": "doDefault",
+                          "children": [],
+                          "description": "",
+                          "extents": [
+                            0,
+                            0,
+                            365,
+                            400
+                          ],
+                          "name": "",
+                          "role": "panel",
+                          "states": [
+                            "enabled",
+                            "sensitive"
+                          ]
+                        },
+                        {
+                          "action": "doDefault",
+                          "children": [],
+                          "description": "",
+                          "extents": [
+                            0,
+                            0,
+                            0,
+                            0
+                          ],
+                          "name": "",
+                          "role": "panel",
+                          "states": [
+                            "enabled",
+                            "sensitive"
+                          ]
+                        }
+                      ],
+                      "description": "",
+                      "extents": [
+                        0,
+                        0,
+                        365,
+                        400
+                      ],
+                      "name": "",
+                      "role": "panel",
+                      "states": [
+                        "enabled",
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ]
+                    }
+                  ],
+                  "description": "",
+                  "extents": [
+                    0,
+                    0,
+                    365,
+                    400
+                  ],
+                  "name": "",
+                  "role": "panel",
+                  "states": [
+                    "enabled",
+                    "sensitive",
+                    "showing",
+                    "visible"
+                  ]
+                },
+                {
+                  "action": "doDefault",
+                  "children": [],
+                  "description": "",
+                  "extents": [
+                    0,
+                    0,
+                    365,
+                    400
+                  ],
+                  "name": "",
+                  "role": "panel",
+                  "states": [
+                    "enabled",
+                    "sensitive"
+                  ]
+                }
+              ],
+              "description": "",
+              "extents": [
+                0,
+                0,
+                365,
+                400
+              ],
+              "name": "",
+              "role": "panel",
+              "states": [
+                "enabled",
+                "sensitive",
+                "showing",
+                "visible"
+              ]
+            }
+          ],
+          "description": "",
+          "extents": [
+            0,
+            0,
+            365,
+            400
+          ],
+          "name": "Thodu page reference",
+          "role": "frame",
+          "states": [
+            "enabled",
+            "sensitive",
+            "showing",
+            "visible"
+          ]
+        },
+        {
+          "action": "doDefault",
+          "children": [
+            {
+              "action": "doDefault",
+              "children": [
+                {
+                  "action": "doDefault",
+                  "children": [
+                    {
+                      "action": "doDefault",
+                      "children": [],
+                      "description": "",
+                      "extents": [
+                        22,
+                        21,
+                        0,
+                        34
+                      ],
+                      "name": "",
+                      "role": "panel",
+                      "states": [
+                        "enabled",
+                        "sensitive"
+                      ]
+                    },
+                    {
+                      "action": "doDefault",
+                      "children": [
+                        {
+                          "action": "doDefault",
+                          "children": [],
+                          "description": "",
+                          "extents": [
+                            16,
+                            16,
+                            12,
+                            10
+                          ],
+                          "name": "",
+                          "role": "panel",
+                          "states": [
+                            "enabled",
+                            "focusable",
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ]
+                        }
+                      ],
+                      "description": "",
+                      "extents": [
+                        16,
+                        16,
+                        12,
+                        10
+                      ],
+                      "name": "",
+                      "role": "panel",
+                      "states": [
+                        "enabled",
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ]
+                    }
+                  ],
+                  "description": "",
+                  "extents": [
+                    16,
+                    16,
+                    12,
+                    10
+                  ],
+                  "name": "",
+                  "role": "panel",
+                  "states": [
+                    "enabled",
+                    "sensitive",
+                    "showing",
+                    "visible"
+                  ]
+                }
+              ],
+              "description": "",
+              "extents": [
+                0,
+                0,
+                44,
+                54
+              ],
+              "name": "",
+              "role": "panel",
+              "states": [
+                "enabled",
+                "sensitive",
+                "showing",
+                "visible"
+              ]
+            }
+          ],
+          "description": "",
+          "extents": [
+            0,
+            0,
+            44,
+            54
+          ],
+          "name": "",
+          "role": "frame",
+          "states": [
+            "enabled",
+            "sensitive",
+            "showing",
+            "visible"
+          ]
+        },
+        {
+          "action": "doDefault",
+          "children": [
+            {
+              "action": "doDefault",
+              "children": [
+                {
+                  "action": "doDefault",
+                  "children": [
+                    {
+                      "action": "doDefault",
+                      "children": [],
+                      "description": "",
+                      "extents": [
+                        22,
+                        21,
+                        0,
+                        34
+                      ],
+                      "name": "",
+                      "role": "panel",
+                      "states": [
+                        "enabled",
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ]
+                    },
+                    {
+                      "action": "doDefault",
+                      "children": [
+                        {
+                          "action": "doDefault",
+                          "children": [],
+                          "description": "",
+                          "extents": [
+                            21,
+                            60,
+                            1,
+                            0
+                          ],
+                          "name": "",
+                          "role": "panel",
+                          "states": [
+                            "enabled",
+                            "focusable",
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ]
+                        }
+                      ],
+                      "description": "",
+                      "extents": [
+                        21,
+                        60,
+                        1,
+                        0
+                      ],
+                      "name": "",
+                      "role": "panel",
+                      "states": [
+                        "enabled",
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ]
+                    }
+                  ],
+                  "description": "",
+                  "extents": [
+                    16,
+                    16,
+                    12,
+                    11
+                  ],
+                  "name": "",
+                  "role": "panel",
+                  "states": [
+                    "enabled",
+                    "sensitive",
+                    "showing",
+                    "visible"
+                  ]
+                }
+              ],
+              "description": "",
+              "extents": [
+                0,
+                0,
+                44,
+                55
+              ],
+              "name": "",
+              "role": "panel",
+              "states": [
+                "enabled",
+                "sensitive",
+                "showing",
+                "visible"
+              ]
+            }
+          ],
+          "description": "",
+          "extents": [
+            0,
+            0,
+            44,
+            55
+          ],
+          "name": "",
+          "role": "frame",
+          "states": [
+            "enabled",
+            "sensitive",
+            "showing",
+            "visible"
+          ]
+        }
+      ],
+      "name": "Chromium",
+      "pid": 457330
+    }
+  ],
+  "monitor": {
+    "height": 1080,
+    "name": "THODUTEST",
+    "scale": 1.25,
+    "width": 1920,
+    "x": 1536,
+    "y": 0
+  },
+  "window": {
+    "address": "0x563a8956e7e0",
+    "at": [
+      1932,
+      452
+    ],
+    "class": "chrome-__home_gg_Work_GG_omarchy-thodu-next_spec_reference_page.html-Default",
+    "monitor": 1,
+    "pid": 457330,
+    "size": [
+      365,
+      400
+    ],
+    "title": "Thodu page reference",
+    "workspace": 4
+  }
+}

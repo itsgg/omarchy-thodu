@@ -1,0 +1,9 @@
+{"bounds": [2582, 110, 44, 30], "role": "button", "text": "Minimize"}
+{"bounds": [2626, 110, 44, 30], "role": "button", "text": "Restore down"}
+{"bounds": [2670, 110, 44, 30], "role": "button", "text": "Close window"}
+{"bounds": [2208, 364, 193, 30], "role": "button", "text": "Quick start"}
+{"bounds": [2418, 424, 100, 30], "role": "button", "text": "Create"}
+{"bounds": [2418, 500, 100, 31], "role": "button", "text": "Open"}
+{"bounds": [2418, 576, 100, 30], "role": "button", "text": "Sign in"}
+{"bounds": [2122, 652, 396, 31], "role": "combo", "text": ""}
+{"bounds": [2090, 656, 16, 22], "role": "button", "text": "Get Help"}

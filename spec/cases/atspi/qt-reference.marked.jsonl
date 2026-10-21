@@ -1,0 +1,7 @@
+{"text": "Open", "at": [2685, 62]}
+{"text": "Save", "at": [2685, 95]}
+{"text": "Close", "at": [2685, 128]}
+{"text": "Search", "at": [2685, 161]}
+{"text": "Remember", "at": [2371, 193]}
+{"text": "Small", "at": [2685, 224]}
+{"text": "Docs", "at": [2330, 253], "note": "a QLabel link; Qt exposes it as a plain label"}

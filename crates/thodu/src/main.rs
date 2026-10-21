@@ -7,6 +7,7 @@
 //!   thodu key SESSION KEY [--shift] [--ctrl]  send a key, for live checks
 //!   thodu close SESSION
 //!   thodu bench [--sessions N] [--window ADDRESS]   time to labels drawn
+//!   thodu record-tree --out FILE [--window ADDRESS]  record the tree
 //!
 //! ADDRESS is a Hyprland window address, or class:NAME for the first window
 //! of that class.
@@ -228,8 +229,7 @@ fn run(args: &[String]) -> Result<(), String> {
             let targets = reply.targets.unwrap_or_default();
             for t in &targets {
                 if flag(args, "--json") {
-                    let line = json!({"id": t.id, "bounds": t.bounds, "role": t.role, "text": t.text, "source": t.source});
-                    println!("{line}");
+                    println!("{}", t.json_line());
                 } else {
                     println!(
                         "{:>5} {:>5} {:>5}x{:<4} {:?} {}",
@@ -251,6 +251,15 @@ fn run(args: &[String]) -> Result<(), String> {
             println!("{}", serde_json::to_string(&reply.view).unwrap_or_default());
         }
         Some("bench") => bench(args)?,
+        Some("record-tree") => {
+            let out = value(args, "--out").ok_or_else(String::new)?;
+            let reply =
+                ask(json!({"v": VERSION, "op": "record", "window": value(args, "--window")}))?;
+            let snapshot = reply.snapshot.ok_or("thodud sent no snapshot")?;
+            let text = serde_json::to_string_pretty(&snapshot).map_err(|e| e.to_string())?;
+            std::fs::write(&out, text + "\n").map_err(|e| format!("{out}: {e}"))?;
+            println!("{out}: {}", reply.status.unwrap_or_default());
+        }
         Some("close") => {
             let session = args.get(1).ok_or("usage: thodu close SESSION")?;
             ask(json!({"v": VERSION, "op": "close", "session": session}))?;
@@ -265,7 +274,7 @@ fn main() -> ExitCode {
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) if e.is_empty() => {
-            eprintln!("usage: thodu hints|grid|targets|key|close|bench ...");
+            eprintln!("usage: thodu hints|grid|targets|key|close|bench|record-tree ...");
             ExitCode::from(2)
         }
         Err(e) => {

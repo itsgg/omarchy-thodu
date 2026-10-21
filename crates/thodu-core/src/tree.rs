@@ -21,6 +21,11 @@ pub struct Node {
     /// x, y, width, height relative to the window, when the element has them.
     #[serde(default)]
     pub extents: Option<[i32; 4]>,
+    /// The name of the element's first action, when it has one. Chromium
+    /// calls it "click" for an element the page listens for clicks on,
+    /// whatever its role, and "doDefault" for one it does not.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub action: String,
     #[serde(default)]
     pub children: Vec<Node>,
 }
@@ -86,12 +91,16 @@ pub fn role_of(name: &str) -> Option<Role> {
     let role = match name {
         "button" | "push button" | "push button menu" => Role::Button,
         "toggle button" => Role::Toggle,
-        "check box" | "radio button" | "switch" => Role::Check,
+        // GTK4 names its roles as ARIA does: checkbox, radio, text box.
+        "check box" | "checkbox" | "radio button" | "radio" | "switch" => Role::Check,
         "link" => Role::Link,
-        "entry" | "text" | "password text" | "editbar" | "search box" => Role::Entry,
-        "menu item" | "check menu item" | "radio menu item" | "menu" => Role::MenuItem,
-        "page tab" => Role::Tab,
-        "list item" | "tree item" | "table cell" | "table row" => Role::ListItem,
+        "entry" | "text" | "text box" | "password text" | "editbar" | "search box" => Role::Entry,
+        "menu item" | "check menu item" | "radio menu item" | "menu" | "menu item checkbox"
+        | "menu item radio" => Role::MenuItem,
+        "page tab" | "tab" => Role::Tab,
+        "list item" | "tree item" | "table cell" | "table row" | "option" | "grid cell" => {
+            Role::ListItem
+        }
         "combo box" => Role::Combo,
         "slider" | "spin button" => Role::Slider,
         _ => return None,
@@ -124,7 +133,14 @@ struct Found {
 /// REQ-SRC-04: the clickable elements under `frame`, in logical coordinates.
 /// Elements that are not SHOWING and VISIBLE, and everything under them, are
 /// dropped, as are elements outside the window, with no area, or covered by a
-/// later layer (a menu, popup or dialog) of the same window.
+/// later layer (a menu, popup or dialog) of the same window. An element with
+/// exactly the bounds of an earlier one, as GTK4's combo box and the button
+/// inside it have, is the same control and is dropped too.
+///
+/// REQ-SRC-02: extents are relative to the window. GTK3, GTK4 and Qt give
+/// them in logical units; Chromium and Electron give the window's own in
+/// logical units and their web document's in physical pixels, so a document
+/// the monitor's scale times its parent's size is read in physical pixels.
 pub fn targets(frame: &Node, window: &Window, monitor: &Monitor) -> Vec<Target> {
     let area = match window.rect().intersect(&monitor.logical()) {
         Some(area) => area,
@@ -133,13 +149,27 @@ pub fn targets(frame: &Node, window: &Window, monitor: &Monitor) -> Vec<Target> 
     let mut found = Vec::new();
     let mut layers = Vec::new();
     let mut order = 0;
-    walk(frame, window, area, &mut found, &mut layers, &mut order);
+    let mut at = Walk {
+        window,
+        scale: monitor.scale,
+        area,
+        found: &mut found,
+        layers: &mut layers,
+        order: &mut order,
+    };
+    walk(frame, &mut at, 1.0, None);
+    let mut seen: Vec<Rect> = Vec::new();
     found
         .into_iter()
         .filter(|f| {
             !layers.iter().any(|(layer, at): &(Rect, usize)| {
                 *at > f.order && layer.contains(&f.target.bounds)
             })
+        })
+        .filter(|f| {
+            let new = !seen.contains(&f.target.bounds);
+            seen.push(f.target.bounds);
+            new
         })
         .enumerate()
         .map(|(i, mut f)| {
@@ -149,34 +179,57 @@ pub fn targets(frame: &Node, window: &Window, monitor: &Monitor) -> Vec<Target> 
         .collect()
 }
 
-fn walk(
-    node: &Node,
-    window: &Window,
+struct Walk<'a> {
+    window: &'a Window,
+    scale: f64,
     area: Rect,
-    found: &mut Vec<Found>,
-    layers: &mut Vec<(Rect, usize)>,
-    order: &mut usize,
-) {
+    found: &'a mut Vec<Found>,
+    layers: &'a mut Vec<(Rect, usize)>,
+    order: &'a mut usize,
+}
+
+/// Whether `extents` are `scale` times `parent`'s size, within two pixels.
+fn scaled(extents: [i32; 4], parent: [i32; 4], scale: f64) -> bool {
+    let near = |v: i32, p: i32| (f64::from(v) - f64::from(p) * scale).abs() <= 2.0;
+    scale > 1.01 && near(extents[2], parent[2]) && near(extents[3], parent[3])
+}
+
+fn walk(node: &Node, at: &mut Walk<'_>, div: f64, parent: Option<[i32; 4]>) {
     if !node.shown() || node.has("defunct") {
         return;
     }
-    *order += 1;
+    *at.order += 1;
+    let div = match (node.extents, parent) {
+        (Some(e), Some(p)) if div == 1.0 && is_document(&node.role) && scaled(e, p, at.scale) => {
+            at.scale
+        }
+        _ => div,
+    };
+    let logical = |v: i32| (f64::from(v) / div).round() as i32;
     let bounds = node
         .extents
-        .map(|[x, y, w, h]| Rect::new(window.at.0 + x, window.at.1 + y, w, h))
-        .and_then(|r| r.intersect(&area));
+        .map(|[x, y, w, h]| {
+            Rect::new(
+                at.window.at.0 + logical(x),
+                at.window.at.1 + logical(y),
+                logical(w),
+                logical(h),
+            )
+        })
+        .and_then(|r| r.intersect(&at.area));
     if let Some(bounds) = bounds {
-        if is_layer(&node.role) && *order > 1 {
-            layers.push((bounds, *order));
+        if is_layer(&node.role) && *at.order > 1 {
+            at.layers.push((bounds, *at.order));
         }
-        if let Some(role) = role_of(&node.role) {
+        let role = role_of(&node.role).or_else(|| (node.action == "click").then_some(Role::Button));
+        if let Some(role) = role {
             let text = [node.name.trim(), node.description.trim()]
                 .iter()
                 .filter(|s| !s.is_empty())
                 .copied()
                 .collect::<Vec<_>>()
                 .join(" ");
-            found.push(Found {
+            at.found.push(Found {
                 target: Target {
                     id: String::new(),
                     bounds,
@@ -184,13 +237,19 @@ fn walk(
                     text,
                     source: Source::Atspi,
                     actions: actions_for(role).to_vec(),
-                    window: window.address.clone(),
+                    window: at.window.address.clone(),
                 },
-                order: *order,
+                order: *at.order,
             });
         }
     }
+    let parent = node.extents.or(parent);
     for child in &node.children {
-        walk(child, window, area, found, layers, order);
+        walk(child, at, div, parent);
     }
+}
+
+/// A web document, whose extents Chromium gives in physical pixels.
+fn is_document(role: &str) -> bool {
+    matches!(role, "document web" | "document frame")
 }

@@ -8,8 +8,9 @@ mod keyboard;
 mod listeners;
 mod overlay;
 mod pointer;
+mod sources;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -28,10 +29,11 @@ use thodu_core::protocol::{
 };
 use thodu_core::session::{Act, Key, Session, State};
 use thodu_core::stale::is_stale;
-use thodu_core::tree;
 
-/// How long the accessibility walk may take (REQ-SRC-05, provisional).
-const ATSPI_BUDGET: Duration = Duration::from_millis(400);
+/// How long the accessibility source may take (REQ-SRC-05, provisional).
+const ATSPI_BUDGET: Duration = Duration::from_millis(80);
+/// How long record-tree may walk.
+const RECORD_BUDGET: Duration = Duration::from_secs(5);
 /// How long an action waits for the overlay to say it is gone.
 const HIDE_WAIT: Duration = Duration::from_millis(400);
 /// The longest a session waits after a click for a second Return before
@@ -69,7 +71,8 @@ struct Daemon {
     /// changes, or it ends.
     changed: Condvar,
     next: AtomicU64,
-    bus: Mutex<Option<atspi::Bus>>,
+    atspi: Arc<sources::Atspi>,
+    sources: Vec<Arc<dyn sources::Source>>,
     /// The overlay listening for sessions (SPEC section 7, `listen`).
     listeners: Mutex<listeners::Listeners<UnixStream>>,
     /// The uinput keyboard for Control-clicks, made on first use.
@@ -127,36 +130,30 @@ impl Daemon {
         })
     }
 
-    /// Targets of `window` from its accessibility tree, and a status line.
+    /// Targets of `window` from every source within its budget
+    /// (REQ-SRC-05), and a status line.
     fn collect(&self, window: &Window, monitor: &Monitor) -> Res<(Vec<Target>, String)> {
-        let started = Instant::now();
-        let mut bus = self.bus.lock().map_err(|_| internal("bus lock"))?;
+        let got = sources::collect(&self.sources, window, monitor);
+        Ok((got.targets, got.status.join("; ")))
+    }
+
+    /// Every frame of a window's process, for record-tree.
+    fn record(&self, window: Option<String>) -> Res<Reply> {
+        let window = self.window(window.as_deref())?;
+        let monitor = hypr::monitor_of(&window).map_err(internal)?;
+        let mut bus = self.atspi.bus.lock().map_err(|_| internal("bus lock"))?;
         if bus.is_none() {
             *bus = Some(atspi::Bus::connect().map_err(|e| fail(ErrorKind::NoTree, e))?);
         }
         let reader = bus.as_ref().ok_or_else(|| internal("no bus"))?;
-        let (snapshot, truncated) = reader.snapshot(window, monitor, ATSPI_BUDGET);
-        let took = started.elapsed().as_millis();
-        if snapshot.apps.is_empty() {
-            let status = format!(
-                "{} (pid {}) is not on the accessibility bus",
-                window.class, window.pid
-            );
-            return Ok((Vec::new(), status));
-        }
-        let targets = match tree::match_frame(&snapshot) {
-            Some(frame) => tree::targets(frame, window, monitor),
-            None => Vec::new(),
-        };
-        let cut = if truncated {
-            ", cut short at the budget"
-        } else {
-            ""
-        };
-        Ok((
-            targets.clone(),
-            format!("{} targets from atspi in {took} ms{cut}", targets.len()),
-        ))
+        let mut walk = atspi::Walk::new(RECORD_BUDGET);
+        let snapshot = atspi::record(reader, &window, &monitor, &mut walk);
+        let cut = if walk.truncated { ", cut short" } else { "" };
+        Ok(Reply {
+            status: Some(format!("{} application(s){cut}", snapshot.apps.len())),
+            snapshot: Some(serde_json::to_value(&snapshot).map_err(|e| internal(e.to_string()))?),
+            ..Reply::ok()
+        })
     }
 
     fn start(&self, window: Option<String>, mode: &str, overlay: bool, test: bool) -> Res<Reply> {
@@ -568,15 +565,7 @@ impl Daemon {
         let labeled = session
             .targets
             .drain(..)
-            .map(|t| LabeledTarget {
-                id: t.id,
-                bounds: t.bounds,
-                role: t.role,
-                text: t.text,
-                source: t.source,
-                label: String::new(),
-                placed: t.bounds,
-            })
+            .map(LabeledTarget::unlabeled)
             .collect();
         Ok(Reply {
             targets: Some(labeled),
@@ -619,6 +608,7 @@ impl Daemon {
             // serve() registers the connection once the reply is written.
             Request::Listen => Ok(Reply::ok()),
             Request::Targets { window } => self.targets(window),
+            Request::Record { window } => self.record(window),
             Request::Close { session } => {
                 self.finish(&session);
                 Ok(Reply::ok())
@@ -715,12 +705,18 @@ fn main() {
         eprintln!("ERROR cannot restrict {}: {e}", socket.display());
         std::process::exit(1);
     }
+    let atspi = Arc::new(sources::Atspi {
+        bus: Mutex::new(None),
+        woken: Mutex::new(HashSet::new()),
+        budget: ATSPI_BUDGET,
+    });
     let daemon = Arc::new(Daemon {
         socket,
         sessions: Mutex::new(HashMap::new()),
         changed: Condvar::new(),
         next: AtomicU64::new(1),
-        bus: Mutex::new(None),
+        atspi: Arc::clone(&atspi),
+        sources: vec![atspi],
         listeners: Mutex::new(listeners::Listeners::new()),
         keyboard: Mutex::new(None),
     });

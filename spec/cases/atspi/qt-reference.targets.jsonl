@@ -1,0 +1,6 @@
+{"bounds": [2322, 49, 727, 27], "role": "button", "text": "Open"}
+{"bounds": [2322, 82, 727, 27], "role": "button", "text": "Save"}
+{"bounds": [2322, 115, 727, 27], "role": "button", "text": "Close"}
+{"bounds": [2322, 148, 727, 27], "role": "entry", "text": "Search"}
+{"bounds": [2322, 181, 99, 24], "role": "check", "text": "Remember"}
+{"bounds": [2322, 211, 727, 27], "role": "combo", "text": "Small"}
