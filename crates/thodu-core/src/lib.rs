@@ -2,6 +2,7 @@
 //! and coordinates, the accessibility tree to targets, labels, search, the
 //! session's keys and the stale check. `thodud` supplies the world.
 
+pub mod config;
 pub mod labels;
 pub mod model;
 pub mod perf;

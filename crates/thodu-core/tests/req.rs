@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use proptest::prelude::*;
 use serde_json::Value;
+use thodu_core::config::{self, Config};
 use thodu_core::labels::{self, ALPHABET};
 use thodu_core::model::{Monitor, Rect, Role, Source, Target, Window};
 use thodu_core::perf;
@@ -492,5 +493,76 @@ fn open_event_round_trips() {
         Request::Drawn {
             session: "s1".into()
         }
+    );
+}
+
+// REQ-SEARCH-02: with labels_only, letters type labels and / starts a
+// search; without it, the default stays search-first. A key "?label:N"
+// types the whole label of target N, without Shift.
+#[test]
+fn req_search_02_labels_only_cases() {
+    for case in jsonl("search/labels-only.jsonl") {
+        let name = case["case"].as_str().expect("case");
+        let texts: Vec<String> = serde_json::from_value(case["texts"].clone()).expect("texts");
+        let targets: Vec<Target> = texts
+            .iter()
+            .enumerate()
+            .map(|(i, t)| target(t, Rect::new(0, i as i32 * 40, 100, 30)))
+            .collect();
+        let n = targets.len();
+        let mut s = Session::new(targets, case["labels_only"].as_bool().expect("labels_only"));
+        for key in case["keys"].as_array().expect("keys") {
+            let key = key.as_str().expect("key");
+            if let Some(i) = key.strip_prefix("?label:") {
+                let label = s.labels[i.parse::<usize>().expect("index")].clone();
+                for c in label.chars() {
+                    s.key(Key::Char { c, shift: false });
+                }
+                continue;
+            }
+            let key = match key {
+                "BackSpace" => Key::Backspace,
+                k => {
+                    let c = k.chars().next().expect("a key");
+                    Key::Char {
+                        c,
+                        shift: c.is_uppercase(),
+                    }
+                }
+            };
+            s.key(key);
+        }
+        let kept: Vec<usize> = if case["kept"] == "all" {
+            (0..n).collect()
+        } else {
+            serde_json::from_value(case["kept"].clone()).expect("kept")
+        };
+        assert_eq!(s.visible(), kept, "{name}");
+        assert_eq!(
+            s.focused,
+            case["focused"].as_u64().map(|f| f as usize),
+            "{name}"
+        );
+        assert_eq!(s.search, case["search"].as_str().expect("search"), "{name}");
+    }
+}
+
+// REQ-SEARCH-02: the setting comes from config.toml, off unless set, and a
+// typo is an error instead of a silent default.
+#[test]
+fn req_search_02_setting() {
+    assert_eq!(config::parse(""), Ok(Config::default()));
+    assert!(
+        !Config::default().labels_only,
+        "search-first is the default"
+    );
+    assert_eq!(
+        config::parse("labels_only = true\n"),
+        Ok(Config { labels_only: true })
+    );
+    assert!(config::parse("label_only = true").is_err(), "unknown key");
+    assert!(
+        config::parse("labels_only = \"yes\"").is_err(),
+        "wrong type"
     );
 }

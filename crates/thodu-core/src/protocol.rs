@@ -130,6 +130,9 @@ pub struct View {
     pub visible: Vec<String>,
     pub focused: Option<String>,
     pub search: String,
+    /// With labels_only, whether / started a search (REQ-SEARCH-02).
+    #[serde(default)]
+    pub searching: bool,
     pub label_prefix: String,
 }
 

@@ -17,6 +17,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use thodu_core::config::{self, Config};
 use thodu_core::labels;
 use thodu_core::model::{Monitor, Target, Window};
 use thodu_core::protocol::{
@@ -55,6 +56,27 @@ struct Daemon {
     bus: Mutex<Option<atspi::Bus>>,
     /// Overlays listening for sessions (SPEC section 7, `listen`).
     listeners: Mutex<Vec<UnixStream>>,
+}
+
+/// The settings, read at each session so an edit takes effect at once; a
+/// file that does not parse gives the defaults and says why.
+fn settings() -> (Config, Option<String>) {
+    let dir = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")));
+    let Some(path) = dir.map(|d| d.join("thodu").join("config.toml")) else {
+        return (Config::default(), None);
+    };
+    match std::fs::read_to_string(&path) {
+        Ok(text) => match config::parse(&text) {
+            Ok(c) => (c, None),
+            Err(e) => (
+                Config::default(),
+                Some(format!("{}: {e}; using the defaults", path.display())),
+            ),
+        },
+        Err(_) => (Config::default(), None),
+    }
 }
 
 fn now_us() -> u64 {
@@ -125,7 +147,12 @@ impl Daemon {
         let began = Instant::now();
         let (targets, status) = self.collect(&window, &monitor)?;
         let collect_ms = began.elapsed().as_millis() as u64;
-        let session = Session::new(targets, false);
+        let (settings, problem) = settings();
+        let status = match problem {
+            Some(p) => format!("{status}; {p}"),
+            None => status,
+        };
+        let session = Session::new(targets, settings.labels_only);
         let area = monitor.logical();
         let labeled = session
             .targets
@@ -226,6 +253,7 @@ impl Daemon {
             visible: s.visible().into_iter().map(id).collect(),
             focused: s.focused.map(id),
             search: s.search.clone(),
+            searching: s.searching,
             label_prefix: s.label_prefix.clone(),
         }
     }

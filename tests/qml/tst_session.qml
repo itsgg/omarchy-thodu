@@ -138,7 +138,10 @@ Item {
             keyClick(Qt.Key_Backspace);
             keyClick(Qt.Key_Return, Qt.ControlModifier);
             const keys = top.keysSent().map(k => k.key + (k.shift ? "+shift" : "") + (k.ctrl ? "+ctrl" : ""));
+            keyClick(Qt.Key_Slash);
+            compare(keys.concat(["/"]).length, top.keysSent().length);
             compare(keys, ["s+shift", "l", "Tab", "Backtab+shift", "BackSpace", "Return+ctrl"]);
+            compare(top.keysSent()[6].key, "/", "REQ-SEARCH-02: slash starts a search in labels-only mode");
             verify(top.keysSent().every(k => k.session === "s1"));
         }
 

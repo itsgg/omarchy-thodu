@@ -1,8 +1,10 @@
-//! A session's keys and what they do (REQ-SEARCH-01, REQ-ACT-01).
+//! A session's keys and what they do (REQ-SEARCH-01, REQ-SEARCH-02,
+//! REQ-ACT-01).
 //!
 //! Letters search the targets' text; Shift and letters type a label; Tab
 //! moves the focus; Return acts on the focused target; Escape ends the
-//! session. The session decides; `thodud` carries the action out.
+//! session. With labels_only, letters type labels and / starts a search.
+//! The session decides; `thodud` carries the action out.
 
 use serde::{Deserialize, Serialize};
 
@@ -57,6 +59,8 @@ pub struct Session {
     pub focused: Option<usize>,
     pub state: State,
     pub labels_only: bool,
+    /// With labels_only, whether / started a search.
+    pub searching: bool,
     pub act: Option<Act>,
 }
 
@@ -80,6 +84,7 @@ impl Session {
             focused: None,
             state: State::Showing,
             labels_only,
+            searching: false,
             act: None,
         }
     }
@@ -135,15 +140,22 @@ impl Session {
         if self.state != State::Showing {
             return None;
         }
+        let labels_first = self.labels_only && !self.searching;
         match key {
-            Key::Char { c, shift } if shift || self.labels_only => self.type_label(c),
+            Key::Char {
+                c: '/',
+                shift: false,
+            } if labels_first => self.searching = true,
+            Key::Char { c, shift } if shift || labels_first => self.type_label(c),
             Key::Char { c, .. } => {
                 self.search.push(c);
                 self.refocus();
             }
             Key::Backspace => {
                 if self.label_prefix.pop().is_none() {
-                    self.search.pop();
+                    if self.search.pop().is_none() {
+                        self.searching = false;
+                    }
                     self.refocus();
                 }
             }

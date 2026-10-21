@@ -17,6 +17,7 @@ all = { level = "deny", priority = -1 }
 thodu-core = { path = "crates/thodu-core" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+toml = { version = "1.1.8", default-features = false, features = ["parse", "serde", "std"] }
 proptest = "1.12.0"
 zbus = { version = "5.19.0", default-features = false, features = ["blocking-api", "async-io"] }
 wayland-client = "0.31.15"

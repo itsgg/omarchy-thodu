@@ -22,6 +22,8 @@ FocusScope {
     property var kept: ({})
     property string focusedId: ""
     property string search: ""
+    // With labels_only, / started a search (REQ-SEARCH-02).
+    property bool searching: false
     property string labelPrefix: ""
     property string status: ""
     property bool active: false
@@ -56,6 +58,7 @@ FocusScope {
         view.kept = {};
         view.focusedId = "";
         view.search = "";
+        view.searching = false;
         view.labelPrefix = "";
         view.status = "";
         view.active = true;
@@ -105,6 +108,7 @@ FocusScope {
         view.kept = kept;
         view.focusedId = shown.focused || "";
         view.search = shown.search || "";
+        view.searching = shown.searching === true;
         view.labelPrefix = shown.label_prefix || "";
         if (shown.state === "acting")
             view.end("acting", true);
@@ -129,6 +133,8 @@ FocusScope {
             name = "BackSpace";
         else if (key === Qt.Key_Space)
             name = "space";
+        else if (key === Qt.Key_Slash)
+            name = "/";
         else if (key >= Qt.Key_A && key <= Qt.Key_Z)
             name = String.fromCharCode(key).toLowerCase();
         else
@@ -236,7 +242,7 @@ FocusScope {
         Text {
             id: statusText
             anchors.centerIn: parent
-            text: view.search ? "/" + view.search : view.status
+            text: view.search || view.searching ? "/" + view.search : view.status
             color: view.foreground
             font.family: view.fontFamily
             font.pixelSize: 13
