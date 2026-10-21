@@ -134,6 +134,14 @@ pub struct View {
     #[serde(default)]
     pub searching: bool,
     pub label_prefix: String,
+    /// Bumped when the targets change, as the grid's do; the overlay then
+    /// fetches them.
+    #[serde(default)]
+    pub generation: u32,
+    /// Acting, with the overlay keeping the keyboard for a second Return
+    /// (REQ-ACT-02).
+    #[serde(default)]
+    pub linger: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

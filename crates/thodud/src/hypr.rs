@@ -124,6 +124,23 @@ pub fn monitors() -> Result<Vec<MonitorEntry>, String> {
         .collect())
 }
 
+/// The monitor Hyprland has focused.
+pub fn focused_monitor() -> Result<Monitor, String> {
+    let list = json("monitors")?;
+    let focused = list
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|m| m.get("focused").and_then(Value::as_bool) == Some(true))
+        .and_then(|m| m.get("id").and_then(Value::as_i64))
+        .ok_or("no monitor is focused")?;
+    monitors()?
+        .into_iter()
+        .find(|m| m.id == focused)
+        .map(|m| m.monitor)
+        .ok_or_else(|| format!("no monitor {focused}"))
+}
+
 pub fn monitor_of(window: &Window) -> Result<Monitor, String> {
     monitors()?
         .into_iter()
@@ -142,4 +159,48 @@ pub fn cursor() -> Result<(i32, i32), String> {
     let v = json("cursorpos")?;
     let get = |k: &str| v.get(k).and_then(Value::as_f64).unwrap_or_default().round() as i32;
     Ok((get("x"), get("y")))
+}
+
+/// Whether moving the pointer moves the keyboard focus
+/// (`input:follow_mouse` above 0).
+pub fn follows_mouse() -> bool {
+    json("getoption input:follow_mouse")
+        .ok()
+        .and_then(|v| v.get("int").and_then(Value::as_i64))
+        .is_none_or(|n| n != 0)
+}
+
+/// The address of the window under a logical point on a shown workspace:
+/// the most recently focused of those holding it, so a floating window
+/// over a tiled one wins.
+pub fn window_at(x: i32, y: i32) -> Option<String> {
+    let shown: Vec<i64> = json("monitors")
+        .ok()?
+        .as_array()?
+        .iter()
+        .flat_map(|m| {
+            ["activeWorkspace", "specialWorkspace"]
+                .into_iter()
+                .filter_map(|k| m.get(k)?.get("id")?.as_i64())
+        })
+        .filter(|id| *id != 0)
+        .collect();
+    let clients = json("clients").ok()?;
+    clients
+        .as_array()?
+        .iter()
+        .filter(|c| c.get("mapped").and_then(Value::as_bool) != Some(false))
+        .filter(|c| c.get("hidden").and_then(Value::as_bool) != Some(true))
+        .filter_map(|c| {
+            let w = window_from(c)?;
+            let pinned = c.get("pinned").and_then(Value::as_bool) == Some(true);
+            let history = c
+                .get("focusHistoryID")
+                .and_then(Value::as_i64)
+                .unwrap_or(i64::MAX);
+            ((pinned || shown.contains(&w.workspace)) && w.rect().contains_point(x, y))
+                .then_some((history, w.address))
+        })
+        .min()
+        .map(|(_, address)| address)
 }

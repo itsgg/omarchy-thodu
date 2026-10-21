@@ -27,6 +27,13 @@ FocusScope {
     property string labelPrefix: ""
     property string status: ""
     property bool active: false
+    // The targets' version: the grid replaces them as cells are chosen.
+    property int generation: 0
+    property bool fetching: false
+    // After a click, the keyboard is kept this long for a second Return,
+    // with nothing drawn and the pointer passing through (REQ-ACT-02).
+    property bool lingering: false
+    property int lingerMs: 300
 
     // A brief session request this often tells a live thodud from a dead
     // one, and shows changes made by keys sent over the IPC in test mode.
@@ -46,6 +53,9 @@ FocusScope {
     // Why the session ended, and whether thodud now acts: the overlay must
     // then hide and say so with a hidden request.
     signal finished(string why, bool acting)
+    // thodud clicks while the view keeps the keyboard: the overlay must let
+    // the pointer through and say it is out of the way.
+    signal lingered
 
     // Start drawing session `id`; `reply` is its full session reply when
     // thodud pushed it, else the view asks for it.
@@ -61,6 +71,9 @@ FocusScope {
         view.searching = false;
         view.labelPrefix = "";
         view.status = "";
+        view.generation = 0;
+        view.fetching = false;
+        view.lingering = false;
         view.active = true;
         view.focus = true;
         silence.restart();
@@ -75,7 +88,9 @@ FocusScope {
             return;
         view.active = false;
         view.focus = false;
+        view.lingering = false;
         silence.stop();
+        linger.stop();
         view.finished(why, acting);
     }
 
@@ -89,13 +104,20 @@ FocusScope {
             view.end(reply.message || "thodud refused the session", false);
             return;
         }
-        if (reply.targets && !view.loaded) {
+        const shownGeneration = reply.view ? (reply.view.generation || 0) : view.generation;
+        if (reply.targets && (!view.loaded || shownGeneration !== view.generation)) {
             view.targets = reply.targets;
+            view.generation = shownGeneration;
+            view.fetching = false;
             if (reply.monitor) {
                 view.area = reply.monitor.area;
                 view.monitorName = reply.monitor.name;
             }
             view.loaded = true;
+        } else if (view.loaded && shownGeneration !== view.generation && !view.fetching) {
+            // Keys sent over the IPC changed the targets; fetch them.
+            view.fetching = true;
+            view.send({ op: "session", session: view.session });
         }
         if (reply.status)
             view.status = reply.status;
@@ -110,10 +132,17 @@ FocusScope {
         view.search = shown.search || "";
         view.searching = shown.searching === true;
         view.labelPrefix = shown.label_prefix || "";
-        if (shown.state === "acting")
+        if (shown.state === "acting" && shown.linger) {
+            if (!view.lingering) {
+                view.lingering = true;
+                linger.restart();
+                view.lingered();
+            }
+        } else if (shown.state === "acting") {
             view.end("acting", true);
-        else if (shown.state === "closed")
+        } else if (shown.state === "closed") {
             view.end("closed", false);
+        }
     }
 
     // A key as SPEC section 7 names it, or null for keys a session ignores.
@@ -142,6 +171,20 @@ FocusScope {
         return { op: "key", session: view.session, key: name, shift: shift, ctrl: ctrl };
     }
 
+    // The smallest rectangle holding every rectangle in `rects`.
+    function bounding(rects) {
+        if (rects.length === 0)
+            return { x: 0, y: 0, w: 0, h: 0 };
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        for (const r of rects) {
+            x0 = Math.min(x0, r.x);
+            y0 = Math.min(y0, r.y);
+            x1 = Math.max(x1, r.x + r.w);
+            y1 = Math.max(y1, r.y + r.h);
+        }
+        return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+    }
+
     function labelText(label) {
         const typed = view.labelPrefix.length;
         const head = label.slice(0, typed).toUpperCase();
@@ -163,6 +206,10 @@ FocusScope {
         // answers, so no key after Escape reaches the overlay.
         if (request.key === "Escape")
             view.end("escape", false);
+        // After a click only a plain Return means anything: a double click.
+        // Any other key ends the session at once, and is not seen again.
+        else if (view.lingering && (request.key !== "Return" || request.shift || request.ctrl))
+            view.end("a key in the wait after a click", false);
     }
 
     Timer {
@@ -171,6 +218,12 @@ FocusScope {
         repeat: true
         running: view.active
         onTriggered: view.send({ op: "session", session: view.session, brief: true })
+    }
+
+    Timer {
+        id: linger
+        interval: view.lingerMs
+        onTriggered: view.end("no second Return", false)
     }
 
     Timer {
@@ -184,7 +237,7 @@ FocusScope {
     Rectangle {
         id: focusRing
         readonly property var target: view.targets.find(t => t.id === view.focusedId) || null
-        visible: view.loaded && target !== null
+        visible: view.loaded && target !== null && !view.lingering
         x: target ? target.bounds.x - view.area.x - 2 : 0
         y: target ? target.bounds.y - view.area.y - 2 : 0
         width: target ? target.bounds.w + 4 : 0
@@ -193,6 +246,84 @@ FocusScope {
         radius: 4
         border.width: 2
         border.color: view.selectedText
+    }
+
+    // The grid's cells (REQ-GRID-01). Below the monitor's level they are
+    // too small for their labels, so the area is outlined and its cells are
+    // drawn again, magnified, in a panel beside it.
+    readonly property var gridCells: view.loaded && !view.lingering ? view.targets.filter(t => t.source === "grid") : []
+    readonly property var gridArea: view.bounding(view.gridCells.map(t => t.bounds))
+    readonly property bool zoomed: view.gridCells.length > 0 && view.gridArea.w * view.gridArea.h < view.area.w * view.area.h
+
+    Repeater {
+        model: view.zoomed ? [] : view.gridCells
+
+        delegate: Rectangle {
+            required property var modelData
+            x: modelData.bounds.x - view.area.x
+            y: modelData.bounds.y - view.area.y
+            width: modelData.bounds.w
+            height: modelData.bounds.h
+            color: "transparent"
+            border.width: 1
+            border.color: Qt.rgba(view.border.r, view.border.g, view.border.b, 0.35)
+            visible: view.kept[modelData.id] === true
+        }
+    }
+
+    Rectangle {
+        id: zoomArea
+        visible: view.zoomed
+        x: view.gridArea.x - view.area.x - 2
+        y: view.gridArea.y - view.area.y - 2
+        width: view.gridArea.w + 4
+        height: view.gridArea.h + 4
+        color: "transparent"
+        border.width: 2
+        border.color: view.selectedText
+    }
+
+    Rectangle {
+        id: zoom
+        objectName: "zoom"
+        readonly property real factor: view.zoomed ? Math.min(420 / view.gridArea.w, 300 / view.gridArea.h) : 1
+        readonly property real below: view.gridArea.y - view.area.y + view.gridArea.h + 16
+        visible: view.zoomed
+        width: view.gridArea.w * factor
+        height: view.gridArea.h * factor
+        x: Math.max(8, Math.min(view.gridArea.x - view.area.x + view.gridArea.w / 2 - width / 2, view.area.w - width - 8))
+        y: below + height + 8 <= view.area.h ? below : Math.max(8, view.gridArea.y - view.area.y - height - 16)
+        color: view.background
+        border.width: 1
+        border.color: view.selectedText
+
+        Repeater {
+            model: view.zoomed ? view.gridCells : []
+
+            delegate: Rectangle {
+                id: zoomCell
+                required property var modelData
+                objectName: "zoom-" + modelData.label
+                x: (modelData.bounds.x - view.gridArea.x) * zoom.factor
+                y: (modelData.bounds.y - view.gridArea.y) * zoom.factor
+                width: modelData.bounds.w * zoom.factor
+                height: modelData.bounds.h * zoom.factor
+                color: view.focusedId === modelData.id ? view.selectedBackground : "transparent"
+                border.width: 1
+                border.color: Qt.rgba(view.border.r, view.border.g, view.border.b, 0.35)
+                visible: view.kept[modelData.id] === true
+
+                Text {
+                    anchors.centerIn: parent
+                    text: view.labelText(zoomCell.modelData.label)
+                    textFormat: Text.StyledText
+                    color: view.foreground
+                    font.family: view.fontFamily
+                    font.pixelSize: 14
+                    font.bold: true
+                }
+            }
+        }
     }
 
     Repeater {
@@ -204,7 +335,7 @@ FocusScope {
             required property var modelData
             readonly property bool focusedOne: view.focusedId === modelData.id
             objectName: "label-" + modelData.label
-            visible: view.kept[modelData.id] === true
+            visible: view.kept[modelData.id] === true && !view.lingering && !(view.zoomed && modelData.source === "grid")
             x: modelData.placed.x - view.area.x
             y: modelData.placed.y - view.area.y
             width: modelData.placed.w
@@ -228,7 +359,7 @@ FocusScope {
 
     Rectangle {
         id: statusLine
-        visible: view.loaded && statusText.text.length > 0
+        visible: view.loaded && statusText.text.length > 0 && !view.lingering
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: parent.bottom
         anchors.bottomMargin: 24

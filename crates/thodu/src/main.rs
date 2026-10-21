@@ -2,6 +2,7 @@
 //! agents read targets with it (SPEC section 4, item 3).
 //!
 //!   thodu hints [--window ADDRESS] [--test] [--no-overlay]   start a session
+//!   thodu grid [--window ADDRESS] [--test] [--no-overlay]    start on the grid
 //!   thodu targets [--json] [--window ADDRESS] the targets, without labels
 //!   thodu key SESSION KEY [--shift] [--ctrl]  send a key, for live checks
 //!   thodu close SESSION
@@ -211,9 +212,9 @@ fn value(args: &[String], name: &str) -> Option<String> {
 
 fn run(args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str) {
-        Some("hints") => {
+        Some(mode @ ("hints" | "grid")) => {
             let reply = ask(
-                json!({"v": VERSION, "op": "start", "mode": "hints", "window": value(args, "--window"), "test": flag(args, "--test"), "overlay": !flag(args, "--no-overlay")}),
+                json!({"v": VERSION, "op": "start", "mode": mode, "window": value(args, "--window"), "test": flag(args, "--test"), "overlay": !flag(args, "--no-overlay")}),
             )?;
             println!(
                 "{} {}",
@@ -264,7 +265,7 @@ fn main() -> ExitCode {
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) if e.is_empty() => {
-            eprintln!("usage: thodu hints|targets|key|close|bench ...");
+            eprintln!("usage: thodu hints|grid|targets|key|close|bench ...");
             ExitCode::from(2)
         }
         Err(e) => {

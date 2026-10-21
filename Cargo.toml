@@ -21,4 +21,5 @@ toml = { version = "1.1.8", default-features = false, features = ["parse", "serd
 proptest = "1.12.0"
 zbus = { version = "5.19.0", default-features = false, features = ["blocking-api", "async-io"] }
 wayland-client = "0.31.15"
+evdev = "0.13.2"
 wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }

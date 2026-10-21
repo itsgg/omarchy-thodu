@@ -8,11 +8,13 @@ use std::path::PathBuf;
 use proptest::prelude::*;
 use serde_json::Value;
 use thodu_core::config::{self, Config};
+use thodu_core::grid;
+use thodu_core::input;
 use thodu_core::labels::{self, ALPHABET};
 use thodu_core::model::{Monitor, Rect, Role, Source, Target, Window};
 use thodu_core::perf;
 use thodu_core::protocol::{Envelope, OpenEvent, Reply, Request, Timing};
-use thodu_core::session::{Button, Key, Session, State};
+use thodu_core::session::{Button, DOUBLE_MS, Key, Session, State};
 use thodu_core::stale::is_stale;
 use thodu_core::tree::{self, App, Snapshot};
 
@@ -306,13 +308,17 @@ fn req_act_01_return_clicks_the_center() {
     );
     assert_eq!(s.state, State::Acting);
     assert_eq!(
-        s.key(Key::Return {
-            shift: false,
-            ctrl: false
-        }),
+        s.key_at(
+            Key::Return {
+                shift: false,
+                ctrl: false
+            },
+            DOUBLE_MS + 1
+        ),
         None,
-        "a session acts once"
+        "a session acts once, unless a second Return comes in time (REQ-ACT-02)"
     );
+    assert_eq!(s.state, State::Closed);
     let physical = monitor().to_physical(act.point.0, act.point.1);
     assert_eq!(physical, (175, 269), "at scale 1.25");
 }
@@ -564,5 +570,166 @@ fn req_search_02_setting() {
     assert!(
         config::parse("labels_only = \"yes\"").is_err(),
         "wrong type"
+    );
+}
+
+fn role_named(name: &str) -> Role {
+    serde_json::from_value(Value::String(name.into())).expect("a role")
+}
+
+fn key_named(name: &str) -> Key {
+    match name {
+        "Return" => Key::Return {
+            shift: false,
+            ctrl: false,
+        },
+        "Shift-Return" => Key::Return {
+            shift: true,
+            ctrl: false,
+        },
+        "Control-Return" => Key::Return {
+            shift: false,
+            ctrl: true,
+        },
+        other => Key::Char {
+            c: other.chars().next().expect("a letter"),
+            shift: false,
+        },
+    }
+}
+
+// REQ-ACT-02: Shift-Return right-clicks, a second Return within 300 ms
+// double-clicks, Control-Return clicks with Control held; the inputs each
+// key sequence makes, in order.
+#[test]
+fn req_act_02_key_cases() {
+    for case in jsonl("act/keys.jsonl") {
+        let name = case["case"].as_str().expect("case");
+        let b: Vec<i32> = serde_json::from_value(case["bounds"].clone()).expect("bounds");
+        let mut t = target("Target", Rect::new(b[0], b[1], b[2], b[3]));
+        t.role = role_named(case["role"].as_str().expect("role"));
+        let mut s = Session::new(vec![t], false);
+        s.key(Key::Tab { shift: false });
+        let mut inputs = Vec::new();
+        let mut first = None;
+        for pair in case["keys"].as_array().expect("keys") {
+            let key = key_named(pair[0].as_str().expect("key"));
+            let at = pair[1].as_u64().expect("ms");
+            if let Some(act) = s.key_at(key, at) {
+                first.get_or_insert(act.linger);
+                inputs.extend(input::plan(&act).iter().map(ToString::to_string));
+            }
+        }
+        let expected: Vec<String> = serde_json::from_value(case["inputs"].clone()).expect("inputs");
+        assert_eq!(inputs, expected, "{name}");
+        let state = serde_json::to_value(s.state).expect("state");
+        assert_eq!(state, case["state"], "{name}");
+        if s.state == State::Acting {
+            assert_eq!(
+                first,
+                case["linger"].as_bool(),
+                "{name}: whether the overlay keeps the keyboard"
+            );
+        }
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 256, rng_seed: proptest::test_runner::RngSeed::Fixed(1), ..ProptestConfig::default() })]
+
+    // REQ-GRID-01: for any monitor and any point on it, at most four
+    // choices end on a cell of at most 10 units that holds the point.
+    #[test]
+    fn req_grid_01_every_point_is_reachable(
+        w in 1i32..8000,
+        h in 1i32..8000,
+        ox in -4000i32..4000,
+        oy in -2000i32..2000,
+        fx in 0.0f64..1.0,
+        fy in 0.0f64..1.0,
+    ) {
+        let area = Rect::new(ox, oy, w, h);
+        let px = ox + ((f64::from(w) * fx) as i32).min(w - 1);
+        let py = oy + ((f64::from(h) * fy) as i32).min(h - 1);
+        let mut s = Session::new(Vec::new(), false).with_area(area);
+        s.key(Key::Space);
+        let mut choices = 0;
+        while s.focused.is_none() {
+            prop_assert!(choices < 4, "more than four choices for ({px}, {py}) on {w}x{h}");
+            let cells = grid::cells(s.grid.last().expect("a grid"));
+            prop_assert!(cells.len() <= 26 * 26);
+            let i = s.targets.iter().position(|t| t.bounds.contains_point(px, py));
+            prop_assert!(i.is_some(), "the cells cover ({px}, {py})");
+            let label = s.labels[i.expect("a cell")].clone();
+            for c in label.chars() {
+                s.key(Key::Char { c, shift: false });
+            }
+            choices += 1;
+        }
+        let cell = s.targets[s.focused.expect("a cell")].bounds;
+        prop_assert!(cell.contains_point(px, py));
+        prop_assert!(cell.w <= grid::FINE && cell.h <= grid::FINE);
+        let act = s.key(Key::Return { shift: false, ctrl: false }).expect("Return clicks the cell");
+        prop_assert_eq!(act.point, cell.center());
+    }
+}
+
+// REQ-GRID-01: the cells tile the area exactly, and Backspace goes back a
+// level.
+#[test]
+fn req_grid_01_cells_tile_and_backspace_goes_back() {
+    let area = Rect::new(1536, 0, 1536, 864);
+    let cells = grid::cells(&area);
+    assert_eq!(cells.len(), 26 * 26);
+    let covered: i64 = cells.iter().map(|c| i64::from(c.w) * i64::from(c.h)).sum();
+    assert_eq!(covered, 1536 * 864);
+    assert!(cells.iter().all(|c| area.contains(c) && !c.is_empty()));
+    let mut s =
+        Session::new(vec![target("Save", Rect::new(1600, 40, 80, 30))], false).with_area(area);
+    s.key(Key::Char {
+        c: 's',
+        shift: false,
+    });
+    s.key(Key::Space);
+    assert!(
+        s.grid.is_empty(),
+        "Space with a focused target does not open the grid"
+    );
+    s.key(Key::Backspace);
+    s.key(Key::Space);
+    assert_eq!(s.grid.len(), 1);
+    let first = s.generation;
+    let label = s.labels[0].clone();
+    for c in label.chars() {
+        s.key(Key::Char { c, shift: true });
+    }
+    assert_eq!(s.grid.len(), 2, "a chosen cell is refined");
+    assert!(s.generation > first, "new targets for the overlay");
+    s.key(Key::Backspace);
+    assert_eq!(s.grid.len(), 1);
+    assert_eq!(s.targets.len(), 26 * 26);
+}
+
+// REQ-ACT-01 (change 0004): the pointer goes back unless focus follows the
+// mouse and going back would leave the clicked window.
+#[test]
+fn req_act_01_pointer_goes_back_unless_it_would_take_the_focus() {
+    let w = Some("0x1");
+    assert!(
+        input::should_restore(false, Some("0x2"), w),
+        "focus on click"
+    );
+    assert!(
+        input::should_restore(true, w, w),
+        "back over the same window"
+    );
+    assert!(
+        !input::should_restore(true, Some("0x2"), w),
+        "over another window"
+    );
+    assert!(!input::should_restore(true, None, w), "off every window");
+    assert!(
+        input::should_restore(true, None, None),
+        "a grid click on the desktop"
     );
 }

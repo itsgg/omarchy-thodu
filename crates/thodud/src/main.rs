@@ -4,6 +4,7 @@
 
 mod atspi;
 mod hypr;
+mod keyboard;
 mod listeners;
 mod overlay;
 mod pointer;
@@ -19,8 +20,9 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use thodu_core::config::{self, Config};
+use thodu_core::input;
 use thodu_core::labels;
-use thodu_core::model::{Monitor, Target, Window};
+use thodu_core::model::{Monitor, Source, Target, Window};
 use thodu_core::protocol::{
     self, Envelope, ErrorKind, LabeledTarget, MonitorInfo, OpenEvent, Reply, Request, Timing, View,
 };
@@ -32,6 +34,9 @@ use thodu_core::tree;
 const ATSPI_BUDGET: Duration = Duration::from_millis(400);
 /// How long an action waits for the overlay to say it is gone.
 const HIDE_WAIT: Duration = Duration::from_millis(400);
+/// The longest a session waits after a click for a second Return before
+/// it puts the pointer back without the overlay saying so.
+const LINGER_MAX: Duration = Duration::from_millis(1000);
 /// How long a push to a listening overlay may block.
 const LISTENER_WRITE: Duration = Duration::from_millis(100);
 /// Sessions nobody finished are dropped after this.
@@ -39,24 +44,36 @@ const SESSION_LIFE: Duration = Duration::from_secs(120);
 
 struct Entry {
     session: Session,
-    window: Window,
+    /// None for a grid started with no window focused.
+    window: Option<Window>,
     monitor: Monitor,
-    labeled: Vec<LabeledTarget>,
     status: String,
     test: bool,
     hidden: bool,
     created: Instant,
     timing: Timing,
+    /// Clicks decided and not yet done; their threads end the session.
+    pending: u8,
+    /// The first click is done.
+    clicked: bool,
+    /// The session was closed while a click was pending.
+    closing: bool,
+    /// Where the pointer goes back to when the session ends.
+    restore: Option<(Monitor, (i32, i32))>,
 }
 
 struct Daemon {
     socket: PathBuf,
     sessions: Mutex<HashMap<String, Entry>>,
-    hidden: Condvar,
+    /// Signalled whenever a session's hidden, clicked, pending or closing
+    /// changes, or it ends.
+    changed: Condvar,
     next: AtomicU64,
     bus: Mutex<Option<atspi::Bus>>,
     /// The overlay listening for sessions (SPEC section 7, `listen`).
     listeners: Mutex<listeners::Listeners<UnixStream>>,
+    /// The uinput keyboard for Control-clicks, made on first use.
+    keyboard: Mutex<Option<keyboard::Keyboard>>,
 }
 
 /// The settings, read at each session so an edit takes effect at once; a
@@ -142,33 +159,35 @@ impl Daemon {
         ))
     }
 
-    fn start(&self, window: Option<String>, overlay: bool, test: bool) -> Res<Reply> {
-        let window = self.window(window.as_deref())?;
-        let monitor = hypr::monitor_of(&window).map_err(internal)?;
+    fn start(&self, window: Option<String>, mode: &str, overlay: bool, test: bool) -> Res<Reply> {
+        let grid = mode == "grid";
+        // The grid needs no window: on an empty workspace it covers the
+        // focused monitor.
+        let window = match self.window(window.as_deref()) {
+            Ok(w) => Some(w),
+            Err(_) if grid => None,
+            Err(e) => return Err(e),
+        };
+        let monitor = match &window {
+            Some(w) => hypr::monitor_of(w),
+            None => hypr::focused_monitor(),
+        }
+        .map_err(internal)?;
         let began = Instant::now();
-        let (targets, status) = self.collect(&window, &monitor)?;
+        let (targets, status) = match &window {
+            Some(w) if !grid => self.collect(w, &monitor)?,
+            _ => (Vec::new(), "the grid".to_string()),
+        };
         let collect_ms = began.elapsed().as_millis() as u64;
         let (settings, problem) = settings();
         let status = match problem {
             Some(p) => format!("{status}; {p}"),
             None => status,
         };
-        let session = Session::new(targets, settings.labels_only);
-        let area = monitor.logical();
-        let labeled = session
-            .targets
-            .iter()
-            .zip(&session.labels)
-            .map(|(t, label)| LabeledTarget {
-                id: t.id.clone(),
-                bounds: t.bounds,
-                role: t.role,
-                text: t.text.clone(),
-                source: t.source,
-                label: label.clone(),
-                placed: labels::place(&t.bounds, protocol::label_size(label.len()), &area),
-            })
-            .collect();
+        let mut session = Session::new(targets, settings.labels_only).with_area(monitor.logical());
+        if grid {
+            session.open_grid();
+        }
         let id = format!("s{}", self.next.fetch_add(1, Ordering::Relaxed));
         {
             let mut sessions = self.sessions.lock().map_err(|_| internal("session lock"))?;
@@ -179,7 +198,6 @@ impl Daemon {
                     session,
                     window,
                     monitor,
-                    labeled,
                     status: status.clone(),
                     test,
                     hidden: false,
@@ -188,6 +206,10 @@ impl Daemon {
                         collect_ms,
                         drawn_at_us: None,
                     },
+                    pending: 0,
+                    clicked: false,
+                    closing: false,
+                    restore: None,
                 },
             );
         }
@@ -248,7 +270,28 @@ impl Daemon {
             search: s.search.clone(),
             searching: s.searching,
             label_prefix: s.label_prefix.clone(),
+            generation: s.generation,
+            linger: s.state == State::Acting && s.act.as_ref().is_some_and(|a| a.linger),
         }
+    }
+
+    /// The session's targets with their labels and where the labels sit.
+    fn labeled(entry: &Entry) -> Vec<LabeledTarget> {
+        let s = &entry.session;
+        let area = entry.monitor.logical();
+        s.targets
+            .iter()
+            .zip(&s.labels)
+            .map(|(t, label)| LabeledTarget {
+                id: t.id.clone(),
+                bounds: t.bounds,
+                role: t.role,
+                text: t.text.clone(),
+                source: t.source,
+                label: label.clone(),
+                placed: labels::place(&t.bounds, protocol::label_size(label.len()), &area),
+            })
+            .collect()
     }
 
     fn session(&self, id: &str, brief: bool) -> Res<Reply> {
@@ -264,15 +307,14 @@ impl Daemon {
                 ..Reply::ok()
             });
         }
-        let area = entry.monitor.logical();
         Ok(Reply {
             session: Some(id.to_string()),
             monitor: Some(MonitorInfo {
                 name: entry.monitor.name.clone(),
-                area,
+                area: entry.monitor.logical(),
                 scale: entry.monitor.scale,
             }),
-            targets: Some(entry.labeled.clone()),
+            targets: Some(Self::labeled(entry)),
             view: Some(Self::view(entry)),
             status: Some(entry.status.clone()),
             timing: Some(entry.timing.clone()),
@@ -287,46 +329,92 @@ impl Daemon {
         let entry = sessions
             .get_mut(id)
             .ok_or_else(|| fail(ErrorKind::BadRequest, format!("no session {id}")))?;
-        let act = entry.session.key(key);
+        let generation = entry.session.generation;
+        let at = entry.created.elapsed().as_millis() as u64;
+        let act = entry.session.key_at(key, at);
         let view = Self::view(entry);
-        if entry.session.state == State::Closed {
-            sessions.remove(id);
+        // New targets, from the grid, go with the reply.
+        let targets = (entry.session.generation != generation).then(|| Self::labeled(entry));
+        let closed = entry.session.state == State::Closed;
+        if act.is_some() {
+            entry.pending += 1;
         }
         drop(sessions);
-        if let Some(act) = act {
-            let daemon = Arc::clone(self);
-            let id = id.to_string();
-            thread::spawn(move || daemon.act(&id, &act));
+        match act {
+            Some(act) => {
+                let daemon = Arc::clone(self);
+                let id = id.to_string();
+                thread::spawn(move || {
+                    if act.again {
+                        daemon.act_again(&id, &act);
+                    } else {
+                        daemon.act(&id, &act);
+                    }
+                });
+            }
+            None if closed => self.finish(id),
+            None => {}
         }
         Ok(Reply {
             session: Some(id.to_string()),
             view: Some(view),
+            targets,
             ..Reply::ok()
         })
     }
 
-    /// Wait for the overlay to go, check the window has not moved, and click
-    /// (REQ-ACT-01, REQ-ACT-03). A moved window gets a fresh session instead.
+    /// Carry out `act`'s inputs on `monitor`, Control through the uinput
+    /// keyboard, which is made the first time a Control-click needs it.
+    fn perform(
+        &self,
+        monitor: &Monitor,
+        act: &Act,
+        restore: Option<(&Monitor, (i32, i32))>,
+    ) -> Result<(), String> {
+        let mut ctrl = |down: bool| -> Result<(), String> {
+            let mut keyboard = self
+                .keyboard
+                .lock()
+                .map_err(|_| "keyboard lock".to_string())?;
+            if keyboard.is_none() {
+                *keyboard = Some(keyboard::Keyboard::open()?);
+            }
+            keyboard.as_mut().ok_or("no keyboard")?.ctrl(down)
+        };
+        pointer::perform(monitor, &input::plan(act), restore, &mut ctrl)
+    }
+
+    /// The first click of a session (REQ-ACT-01, REQ-ACT-02, REQ-ACT-03):
+    /// wait for the overlay to be out of the way, check the window has not
+    /// moved, and click. A moved window gets a fresh session instead. A
+    /// lingering click leaves the pointer where it is until a second Return
+    /// or the end of the wait; any other goes back at once.
     fn act(&self, id: &str, act: &Act) {
         let Ok(sessions) = self.sessions.lock() else {
             return;
         };
-        let Ok((mut sessions, _)) = self.hidden.wait_timeout_while(sessions, HIDE_WAIT, |s| {
+        let Ok((sessions, _)) = self.changed.wait_timeout_while(sessions, HIDE_WAIT, |s| {
             s.get(id).is_some_and(|e| !e.hidden)
         }) else {
             return;
         };
-        let Some(entry) = sessions.remove(id) else {
+        let Some((window, monitor, test, grid)) = sessions.get(id).map(|e| {
+            let grid = e.session.targets[act.target].source == Source::Grid;
+            (e.window.clone(), e.monitor.clone(), e.test, grid)
+        }) else {
             return;
         };
         drop(sessions);
-        let now = hypr::window(&entry.window.address).ok().flatten();
-        if is_stale(&entry.window, now.as_ref()) {
-            eprintln!("thodud: {id}: the window moved since collection; collecting again");
-            if let Err(e) = self.start(Some(entry.window.address.clone()), true, entry.test) {
-                eprintln!("thodud: {id}: {}", e.message.unwrap_or_default());
+        if let Some(window) = window.filter(|_| !grid) {
+            let now = hypr::window(&window.address).ok().flatten();
+            if is_stale(&window, now.as_ref()) {
+                eprintln!("thodud: {id}: the window moved since collection; collecting again");
+                self.remove(id);
+                if let Err(e) = self.start(Some(window.address.clone()), "hints", true, test) {
+                    eprintln!("thodud: {id}: {}", e.message.unwrap_or_default());
+                }
+                return;
             }
-            return;
         }
         let restore = hypr::cursor().ok().and_then(|p| {
             hypr::monitors()
@@ -336,21 +424,132 @@ impl Daemon {
                 .find(|m| m.logical().contains_point(p.0, p.1))
                 .map(|m| (m, p))
         });
-        let restore = restore.as_ref().map(|(m, p)| (m, *p));
-        if let Err(e) = pointer::click(&entry.monitor, act.point, act.button, act.count, restore) {
+        // A test session never takes GG's focus, so it always puts the
+        // pointer back.
+        let restore = restore.filter(|(_, p)| {
+            test || input::should_restore(
+                hypr::follows_mouse(),
+                hypr::window_at(p.0, p.1).as_deref(),
+                hypr::window_at(act.point.0, act.point.1).as_deref(),
+            )
+        });
+        let now = if act.linger {
+            None
+        } else {
+            restore.as_ref().map(|(m, p)| (m, *p))
+        };
+        if let Err(e) = self.perform(&monitor, act, now) {
             eprintln!("thodud: {id}: the click failed: {e}");
+        }
+        let Ok(mut sessions) = self.sessions.lock() else {
+            return;
+        };
+        let Some(entry) = sessions.get_mut(id) else {
+            return;
+        };
+        entry.clicked = true;
+        entry.pending = entry.pending.saturating_sub(1);
+        if act.linger {
+            entry.restore = restore;
+        }
+        let wait = act.linger && entry.pending == 0 && !entry.closing;
+        self.changed.notify_all();
+        if wait {
+            // The overlay closes after its wait and says so; this is the
+            // backstop if it never does.
+            let Ok((sessions, _)) = self.changed.wait_timeout_while(sessions, LINGER_MAX, |s| {
+                s.get(id).is_some_and(|e| e.pending == 0 && !e.closing)
+            }) else {
+                return;
+            };
+            if sessions.get(id).is_some_and(|e| e.pending > 0) {
+                return;
+            }
+            drop(sessions);
+        } else if entry.pending > 0 {
+            // A second click is waiting for this one; it finishes.
+            return;
+        } else {
+            drop(sessions);
+        }
+        self.finish(id);
+    }
+
+    /// The second click of a double click: where the first one was, once it
+    /// has happened; then the pointer goes back.
+    fn act_again(&self, id: &str, act: &Act) {
+        let Ok(sessions) = self.sessions.lock() else {
+            return;
+        };
+        let Ok((sessions, _)) = self.changed.wait_timeout_while(sessions, LINGER_MAX, |s| {
+            s.get(id).is_some_and(|e| !e.clicked)
+        }) else {
+            return;
+        };
+        let Some(monitor) = sessions.get(id).map(|e| e.monitor.clone()) else {
+            return;
+        };
+        drop(sessions);
+        if let Err(e) = self.perform(&monitor, act, None) {
+            eprintln!("thodud: {id}: the second click failed: {e}");
+        }
+        if let Ok(mut sessions) = self.sessions.lock()
+            && let Some(entry) = sessions.get_mut(id)
+        {
+            entry.pending = entry.pending.saturating_sub(1);
+        }
+        self.finish(id);
+    }
+
+    fn remove(&self, id: &str) {
+        if let Ok(mut sessions) = self.sessions.lock() {
+            sessions.remove(id);
+        }
+        self.changed.notify_all();
+    }
+
+    /// End a session: at once, putting the pointer back if a click moved
+    /// it, or, while a click is still to come, once that click is done.
+    fn finish(&self, id: &str) {
+        let restore = {
+            let Ok(mut sessions) = self.sessions.lock() else {
+                return;
+            };
+            let Some(entry) = sessions.get_mut(id) else {
+                return;
+            };
+            if entry.pending > 0 {
+                entry.closing = true;
+                self.changed.notify_all();
+                return;
+            }
+            sessions.remove(id).and_then(|e| e.restore)
+        };
+        self.changed.notify_all();
+        if let Some((monitor, point)) = restore
+            && let Err(e) = pointer::move_to(&monitor, point)
+        {
+            eprintln!("thodud: {id}: the pointer did not go back: {e}");
         }
     }
 
+    /// The overlay is out of the way: a pending click may run. A session
+    /// that is not acting has nothing to wait for and ends.
     fn hidden(&self, id: &str) -> Res<Reply> {
-        let mut sessions = self.sessions.lock().map_err(|_| internal("session lock"))?;
-        if let Some(entry) = sessions.get_mut(id) {
-            entry.hidden = true;
-            if entry.session.state != State::Acting {
-                sessions.remove(id);
+        let acting = {
+            let mut sessions = self.sessions.lock().map_err(|_| internal("session lock"))?;
+            match sessions.get_mut(id) {
+                Some(entry) => {
+                    entry.hidden = true;
+                    entry.session.state == State::Acting || entry.pending > 0
+                }
+                None => true,
             }
+        };
+        self.changed.notify_all();
+        if !acting {
+            self.finish(id);
         }
-        self.hidden.notify_all();
         Ok(Reply::ok())
     }
 
@@ -396,11 +595,11 @@ impl Daemon {
         }
         let result = match envelope.request {
             Request::Start {
+                mode,
                 window,
                 overlay,
                 test,
-                ..
-            } => self.start(window, overlay, test),
+            } => self.start(window, &mode, overlay, test),
             Request::Session { session, brief } => self.session(&session, brief),
             Request::Key {
                 session,
@@ -414,10 +613,7 @@ impl Daemon {
             Request::Listen => Ok(Reply::ok()),
             Request::Targets { window } => self.targets(window),
             Request::Close { session } => {
-                if let Ok(mut s) = self.sessions.lock() {
-                    s.remove(&session);
-                }
-                self.hidden.notify_all();
+                self.finish(&session);
                 Ok(Reply::ok())
             }
         };
@@ -509,10 +705,11 @@ fn main() {
     let daemon = Arc::new(Daemon {
         socket,
         sessions: Mutex::new(HashMap::new()),
-        hidden: Condvar::new(),
+        changed: Condvar::new(),
         next: AtomicU64::new(1),
         bus: Mutex::new(None),
         listeners: Mutex::new(listeners::Listeners::new()),
+        keyboard: Mutex::new(None),
     });
     for stream in listener.incoming().flatten() {
         let daemon = Arc::clone(&daemon);

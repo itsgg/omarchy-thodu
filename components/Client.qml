@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import Quickshell.Io
 
@@ -66,7 +68,7 @@ Item {
             onConnectionStateChanged: {
                 if (transport !== client.wire)
                     return;
-                if (!connected) {
+                if (!transport.connected) {
                     client.waiting = [];
                     client.lost();
                     return;

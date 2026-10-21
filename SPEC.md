@@ -140,14 +140,15 @@ Acceptance:
 ### Actions
 
 ### REQ-ACT-01: Return clicks
-When Return is pressed with a focused target, the system shall move the pointer to the target's center, click the left button there through the virtual pointer, end the session and return the pointer to where it was.
+When Return is pressed with a focused target, the system shall move the pointer to the target's center, click the left button there through the virtual pointer, end the session and return the pointer to where it was, unless Hyprland's focus follows the mouse and that point is not over the clicked window, where returning it would take the keyboard from that window; then the pointer stays on the target. A session started with `test` always returns it.
 Acceptance:
 - scenario: WHEN a session on a recorded tree focuses a button at bounds (100, 200, 80, 30) on a monitor at scale 1.25 THEN the fake pointer receives a move to (140, 215) logical and one left click.
+- scenario: WHEN focus follows the mouse and the pointer was over another window, or over none, THEN it is not returned; over the same window, or with focus on click, it is.
 
 ### REQ-ACT-02: The other clicks
-When Shift-Return is pressed the system shall right-click, when Return is pressed twice within 300 ms it shall double-click, and when Control-Return is pressed it shall click with Control held.
+When Shift-Return is pressed the system shall right-click, when Return is pressed twice within 300 ms it shall double-click, and when Control-Return is pressed it shall click with Control held. After a plain Return on a target that is not an entry, the overlay keeps the keyboard for 300 ms, drawing nothing and letting the pointer through, so a second Return can come; any other key ends the session. After an entry, a right click or a Control click it gives the keyboard back at once.
 Acceptance:
-- cases: `spec/cases/act/keys.jsonl`, key sequences with the expected pointer and keyboard events.
+- cases: `spec/cases/act/keys.jsonl`, key sequences with the expected pointer and keyboard events and whether the overlay keeps the keyboard.
 
 ### REQ-ACT-03: Never act on a stale target
 If the target's window has moved, resized, closed or left the active workspace since collection, then the system shall not act; it shall collect again and redraw the labels.
@@ -196,6 +197,8 @@ The IPC is JSON lines over the Unix socket `$XDG_RUNTIME_DIR/thodu.sock`, one re
 - `{"v":1,"op":"drawn","session":ID}`: the overlay drew the session's labels for the first time. `session` replies carry `timing`: `collect_ms`, and `drawn_at_us` once drawn, in microseconds since the Unix epoch.
 
 A `window` is a Hyprland address, or `class:NAME` for the first window of that class. `thodu bench [--sessions N] [--window W]` times N sessions from `thodu hints` starting to `drawn`, with the overlay summoned without the keyboard, prints the median and the 95th percentile, keeps the samples under `~/.local/share/thodu/bench/`, and exits 1 above REQ-PERF-01's thresholds.
+
+`start` with mode grid needs no focused window and covers the focused monitor; `thodu grid [--window W] [--test] [--no-overlay]` starts one. The view carries `generation`, bumped when the targets change, and `linger`, true while the overlay keeps the keyboard after a click (REQ-ACT-02); a `key` reply carries the new targets when the key changed them. Below the monitor's level the overlay draws the grid's cells again, magnified, beside the outlined area.
 
 Errors are `{"v":1,"ok":false,"error":KIND,"message":TEXT}` with KIND one of no-window, no-tree, busy, stale, internal, bad-request. The command line prints an ERROR line with the message and exits 1 on any error, 2 on bad arguments.
 
@@ -250,6 +253,7 @@ Unit tests and properties cover labels, search, the grid, coordinates and the st
 - 2026-10-21: change 0001, reference windows replace the widget-factory demos in the toolkit and latency requirements.
 - 2026-10-21: change 0002, the requests the overlay and live checks need, in section 7.
 - 2026-10-21: change 0003, sessions pushed to a listening overlay, the bench, and O1's first measurement.
+- 2026-10-21: change 0004, where the pointer goes back to, the wait for a second Return, and the grid's interface.
 
 ### Retired
 

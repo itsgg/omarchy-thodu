@@ -3,6 +3,8 @@
 //! session's keys and the stale check. `thodud` supplies the world.
 
 pub mod config;
+pub mod grid;
+pub mod input;
 pub mod labels;
 pub mod model;
 pub mod perf;

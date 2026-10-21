@@ -1,8 +1,11 @@
 //! Clicks through the Wayland virtual-pointer protocol, which Hyprland
-//! offers to clients and which needs no device permission (REQ-ACT-01).
+//! offers to clients and which needs no device permission (REQ-ACT-01,
+//! REQ-ACT-02).
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use thodu_core::input::Input;
 use thodu_core::model::Monitor;
 use thodu_core::session::Button;
 use wayland_client::protocol::{wl_output, wl_pointer, wl_registry, wl_seat};
@@ -90,14 +93,18 @@ pub const fn button_code(button: Button) -> u32 {
     }
 }
 
-/// Move to the logical point on `monitor`, press and release `button`
-/// `count` times, then move back to `restore` on `restore_monitor`.
-pub fn click(
+/// How long a Control press through uinput takes to reach the compositor,
+/// which reads it on another path than the virtual pointer.
+const CTRL_SETTLE: Duration = Duration::from_millis(30);
+
+/// Carry out `inputs` on `monitor` in order (REQ-ACT-01, REQ-ACT-02), with
+/// `ctrl` holding or releasing Control, then move the pointer back to
+/// `restore`, whatever happened.
+pub fn perform(
     monitor: &Monitor,
-    point: (i32, i32),
-    button: Button,
-    count: u8,
+    inputs: &[Input],
     restore: Option<(&Monitor, (i32, i32))>,
+    ctrl: &mut dyn FnMut(bool) -> Result<(), String>,
 ) -> Result<(), String> {
     let conn = Connection::connect_to_env().map_err(|e| format!("no Wayland display: {e}"))?;
     let mut queue = conn.new_event_queue();
@@ -131,13 +138,32 @@ pub fn click(
             p.frame();
         };
     let pointer = pointer_on(monitor)?;
-    move_to(&pointer, monitor, point);
-    let code = button_code(button);
-    for _ in 0..count.max(1) {
-        pointer.button(now_ms(), code, wl_pointer::ButtonState::Pressed);
-        pointer.frame();
-        pointer.button(now_ms(), code, wl_pointer::ButtonState::Released);
-        pointer.frame();
+    let mut result = Ok(());
+    for input in inputs {
+        match *input {
+            Input::Move(x, y) => move_to(&pointer, monitor, (x, y)),
+            Input::Press(b) | Input::Release(b) => {
+                let state = if matches!(input, Input::Press(_)) {
+                    wl_pointer::ButtonState::Pressed
+                } else {
+                    wl_pointer::ButtonState::Released
+                };
+                pointer.button(now_ms(), button_code(b), state);
+                pointer.frame();
+            }
+            Input::Ctrl(down) => {
+                // What the pointer did so far reaches the compositor first.
+                if let Err(e) = queue.roundtrip(&mut globals) {
+                    result = Err(e.to_string());
+                    break;
+                }
+                if let Err(e) = ctrl(down) {
+                    result = Err(e);
+                    break;
+                }
+                thread::sleep(CTRL_SETTLE);
+            }
+        }
     }
     queue.roundtrip(&mut globals).map_err(|e| e.to_string())?;
     if let Some((m, p)) = restore {
@@ -153,5 +179,12 @@ pub fn click(
     }
     pointer.destroy();
     queue.roundtrip(&mut globals).map_err(|e| e.to_string())?;
-    Ok(())
+    result
+}
+
+/// Move the pointer to a logical point on `monitor`.
+pub fn move_to(monitor: &Monitor, point: (i32, i32)) -> Result<(), String> {
+    perform(monitor, &[Input::Move(point.0, point.1)], None, &mut |_| {
+        Ok(())
+    })
 }

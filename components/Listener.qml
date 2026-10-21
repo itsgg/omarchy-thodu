@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import Quickshell.Io
 
@@ -71,7 +73,7 @@ Item {
             onConnectionStateChanged: {
                 if (transport !== listener.wire)
                     return;
-                if (connected) {
+                if (transport.connected) {
                     retry.stop();
                     transport.write(JSON.stringify({ v: 1, op: "listen" }) + "\n");
                     transport.flush();

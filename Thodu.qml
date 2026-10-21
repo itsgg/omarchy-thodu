@@ -115,10 +115,17 @@ Item {
             right: true
         }
         color: "transparent"
+        // While it waits for a second Return after a click, the pointer
+        // passes through to the window beneath (REQ-ACT-02).
+        mask: view.lingering ? passThrough : null
         exclusionMode: ExclusionMode.Ignore
         WlrLayershell.namespace: "thodu"
         WlrLayershell.layer: WlrLayer.Overlay
         WlrLayershell.keyboardFocus: view.active && !root.test ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
+
+        Region {
+            id: passThrough
+        }
 
         // A click anywhere ends the session without acting.
         MouseArea {
@@ -137,6 +144,10 @@ Item {
             fontFamily: Style.font.family
 
             onSend: request => client.send(request)
+            onLingered: {
+                hidden.session = view.session;
+                hidden.restart();
+            }
             onFinished: (why, acting) => {
                 const id = view.session;
                 root.opened = false;
