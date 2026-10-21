@@ -6,6 +6,7 @@
   "author": "Ganesh Gunasegaran <me@itsgg.com>",
   "description": "Keyboard hints for everything on an Omarchy screen: Homerow for Omarchy",
   "kinds": ["overlay"],
+  "keepLoaded": true,
   "entryPoints": {
     "overlay": "Thodu.qml"
   }

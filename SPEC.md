@@ -186,13 +186,14 @@ Acceptance:
 
 The IPC is JSON lines over the Unix socket `$XDG_RUNTIME_DIR/thodu.sock`, one request and one reply per line, each with a `v` field equal to 1.
 
-- `{"v":1,"op":"start","mode":"hints"|"grid","scope":"focused"}` returns `{"v":1,"ok":true,"session":ID}` and summons the overlay with the session.
-- `{"v":1,"op":"session","session":ID}` returns the session's monitor, targets and labels for the overlay.
-- `{"v":1,"op":"key","session":ID,"key":NAME,"shift":B,"ctrl":B}` returns the session's new state: showing, acting or closed.
-- `{"v":1,"op":"targets"}` returns the focused window's targets without a session.
+- `{"v":1,"op":"start","mode":"hints"|"grid","scope":"focused"}` returns `{"v":1,"ok":true,"session":ID,"status":TEXT}` and summons the overlay with the session. An optional `window` (a Hyprland address) replaces the focused window, `overlay` false runs the session over the IPC alone, and `test` true summons the overlay without the keyboard, for live checks.
+- `{"v":1,"op":"session","session":ID}` returns the session's monitor, targets and labels and its view for the overlay; with `"brief":true`, the view alone, for the overlay's heartbeat (REQ-SESSION-03).
+- `{"v":1,"op":"key","session":ID,"key":NAME,"shift":B,"ctrl":B}` returns the session's new view: its state (showing, acting or closed), the targets still kept, the focused target, the search and the typed label.
+- `{"v":1,"op":"hidden","session":ID}`: the overlay's surface is gone, so a pending action may run (REQ-ACT-01); `thodud` acts anyway 400 ms after the action if none comes.
+- `{"v":1,"op":"targets"}` returns the focused window's targets without a session, or those of an optional `window`.
 - `{"v":1,"op":"close","session":ID}`.
 
-Errors are `{"v":1,"ok":false,"error":KIND,"message":TEXT}` with KIND one of no-window, no-tree, busy, stale, internal. The command line prints an ERROR line with the message and exits 1 on any error, 2 on bad arguments.
+Errors are `{"v":1,"ok":false,"error":KIND,"message":TEXT}` with KIND one of no-window, no-tree, busy, stale, internal, bad-request. The command line prints an ERROR line with the message and exits 1 on any error, 2 on bad arguments.
 
 Keys inside a session: letters search (REQ-SEARCH-01), Shift with letters types a label, Tab and Shift-Tab move the focus, Return, Shift-Return, Control-Return and a double Return act (REQ-ACT-01, REQ-ACT-02), Space opens the grid, Backspace deletes the last letter, Escape ends the session.
 
@@ -243,6 +244,7 @@ Unit tests and properties cover labels, search, the grid, coordinates and the st
 
 - 2026-10-21: created.
 - 2026-10-21: change 0001, reference windows replace the widget-factory demos in REQ-SRC-02 and REQ-PERF-01.
+- 2026-10-21: change 0002, the requests the overlay and live checks need, in section 7.
 
 ### Retired
 

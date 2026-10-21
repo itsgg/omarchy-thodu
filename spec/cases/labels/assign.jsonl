@@ -1,0 +1,9 @@
+{"n": 0, "first": [], "last": [], "longest": 0}
+{"n": 1, "first": ["a"], "last": ["a"], "longest": 1}
+{"n": 5, "first": ["a", "s", "d"], "last": ["d", "f", "g"], "longest": 1}
+{"n": 26, "first": ["a", "s", "d"], "last": ["b", "n", "m"], "longest": 1}
+{"n": 27, "first": ["s", "d", "f"], "last": ["m", "aa", "as"], "longest": 2}
+{"n": 51, "first": ["s", "d", "f"], "last": ["ab", "an", "am"], "longest": 2}
+{"n": 52, "first": ["d", "f", "g"], "last": ["am", "sa", "ss"], "longest": 2}
+{"n": 676, "first": ["aa", "as", "ad"], "last": ["mb", "mn", "mm"], "longest": 2}
+{"n": 677, "first": ["as", "ad", "af"], "last": ["mm", "aaa", "aas"], "longest": 3}

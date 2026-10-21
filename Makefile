@@ -3,13 +3,15 @@
 
 PLUGIN_ID := io.github.itsgg.thodu
 DEST := $(HOME)/.config/omarchy/plugins/$(PLUGIN_ID)
+# The plugin alone: the Rust workspace, its build and the tests stay here.
+PLUGIN_FILES := manifest.json Thodu.qml components
 
 check:
 	@tools/gate
 
 install:
 	@mkdir -p "$(DEST)"
-	@rsync -a --checksum --delete --exclude '.git' --exclude '.gate' --exclude '.github' --exclude 'tests' --exclude 'tools' --exclude 'tasks' --exclude 'changes' --exclude '*.md' --filter 'H .claude' ./ "$(DEST)/"
+	@rsync -a --checksum --delete $(PLUGIN_FILES) "$(DEST)/"
 	@echo "installed; enable with: omarchy plugin enable $(PLUGIN_ID)"
 
 reload:

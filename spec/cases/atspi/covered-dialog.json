@@ -1,0 +1,108 @@
+{
+ "window": {
+  "address": "0x2",
+  "class": "covered",
+  "title": "t",
+  "pid": 600,
+  "at": [
+   100,
+   100
+  ],
+  "size": [
+   400,
+   300
+  ],
+  "workspace": 1,
+  "monitor": 0
+ },
+ "monitor": {
+  "name": "eDP-1",
+  "x": 0,
+  "y": 0,
+  "width": 1920,
+  "height": 1200,
+  "scale": 1.25
+ },
+ "apps": [
+  {
+   "name": "covered",
+   "pid": 600,
+   "frames": [
+    {
+     "role": "frame",
+     "name": "Main",
+     "states": [
+      "showing",
+      "visible"
+     ],
+     "extents": [
+      0,
+      0,
+      400,
+      300
+     ],
+     "children": [
+      {
+       "role": "button",
+       "name": "Behind",
+       "states": [
+        "showing",
+        "visible"
+       ],
+       "extents": [
+        20,
+        20,
+        100,
+        30
+       ]
+      },
+      {
+       "role": "button",
+       "name": "Outside",
+       "states": [
+        "showing",
+        "visible"
+       ],
+       "extents": [
+        350,
+        280,
+        100,
+        40
+       ]
+      },
+      {
+       "role": "dialog",
+       "name": "Confirm",
+       "states": [
+        "showing",
+        "visible"
+       ],
+       "extents": [
+        0,
+        0,
+        300,
+        200
+       ],
+       "children": [
+        {
+         "role": "button",
+         "name": "OK",
+         "states": [
+          "showing",
+          "visible"
+         ],
+         "extents": [
+          20,
+          150,
+          80,
+          30
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

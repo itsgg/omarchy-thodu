@@ -1,0 +1,291 @@
+{
+ "window": {
+  "address": "0x563a89659b50",
+  "class": "thodu-reference-gtk3",
+  "title": "Thodu GTK3 reference",
+  "pid": 144625,
+  "at": [
+   1548,
+   38
+  ],
+  "size": [
+   1512,
+   814
+  ],
+  "workspace": 4,
+  "monitor": 1
+ },
+ "monitor": {
+  "name": "THODUTEST",
+  "x": 1536,
+  "y": 0,
+  "width": 1920,
+  "height": 1080,
+  "scale": 1.25
+ },
+ "apps": [
+  {
+   "name": "thodu-reference-gtk3",
+   "pid": 144625,
+   "frames": [
+    {
+     "role": "frame",
+     "states": [
+      "enabled",
+      "sensitive",
+      "showing",
+      "visible"
+     ],
+     "name": "Thodu GTK3 reference",
+     "description": "",
+     "extents": [
+      0,
+      0,
+      1512,
+      814
+     ],
+     "children": [
+      {
+       "role": "filler",
+       "states": [
+        "enabled",
+        "sensitive",
+        "showing",
+        "visible"
+       ],
+       "name": "",
+       "description": "",
+       "extents": [
+        0,
+        0,
+        1512,
+        814
+       ],
+       "children": [
+        {
+         "role": "button",
+         "states": [
+          "enabled",
+          "focusable",
+          "sensitive",
+          "showing",
+          "visible"
+         ],
+         "name": "Open",
+         "description": "",
+         "extents": [
+          0,
+          0,
+          1512,
+          34
+         ],
+         "children": []
+        },
+        {
+         "role": "button",
+         "states": [
+          "enabled",
+          "focusable",
+          "sensitive",
+          "showing",
+          "visible"
+         ],
+         "name": "Save",
+         "description": "",
+         "extents": [
+          0,
+          42,
+          1512,
+          34
+         ],
+         "children": []
+        },
+        {
+         "role": "button",
+         "states": [
+          "enabled",
+          "focusable",
+          "sensitive",
+          "showing",
+          "visible"
+         ],
+         "name": "Close",
+         "description": "",
+         "extents": [
+          0,
+          84,
+          1512,
+          34
+         ],
+         "children": []
+        },
+        {
+         "role": "button",
+         "states": [
+          "enabled",
+          "focusable",
+          "sensitive"
+         ],
+         "name": "Hidden",
+         "description": "",
+         "extents": [
+          -2147483648,
+          -2147483648,
+          1,
+          1
+         ],
+         "children": []
+        },
+        {
+         "role": "text",
+         "states": [
+          "editable",
+          "enabled",
+          "focusable",
+          "sensitive",
+          "showing",
+          "visible"
+         ],
+         "name": "",
+         "description": "",
+         "extents": [
+          0,
+          126,
+          1512,
+          34
+         ],
+         "children": []
+        },
+        {
+         "role": "check box",
+         "states": [
+          "enabled",
+          "focusable",
+          "sensitive",
+          "showing",
+          "visible"
+         ],
+         "name": "Remember",
+         "description": "",
+         "extents": [
+          0,
+          168,
+          1512,
+          23
+         ],
+         "children": []
+        },
+        {
+         "role": "combo box",
+         "states": [
+          "enabled",
+          "sensitive",
+          "showing",
+          "visible"
+         ],
+         "name": "Small",
+         "description": "",
+         "extents": [
+          0,
+          199,
+          1512,
+          34
+         ],
+         "children": [
+          {
+           "role": "menu",
+           "states": [
+            "enabled",
+            "sensitive"
+           ],
+           "name": "",
+           "description": "",
+           "extents": [
+            -2147483648,
+            -2147483648,
+            1,
+            1
+           ],
+           "children": [
+            {
+             "role": "menu item",
+             "states": [
+              "enabled",
+              "sensitive",
+              "visible"
+             ],
+             "name": "Small",
+             "description": "",
+             "extents": [
+              -2147483648,
+              -2147483648,
+              1,
+              1
+             ],
+             "children": []
+            },
+            {
+             "role": "menu item",
+             "states": [
+              "enabled",
+              "sensitive",
+              "visible"
+             ],
+             "name": "Medium",
+             "description": "",
+             "extents": [
+              -2147483648,
+              -2147483648,
+              1,
+              1
+             ],
+             "children": []
+            },
+            {
+             "role": "menu item",
+             "states": [
+              "enabled",
+              "sensitive",
+              "visible"
+             ],
+             "name": "Large",
+             "description": "",
+             "extents": [
+              -2147483648,
+              -2147483648,
+              1,
+              1
+             ],
+             "children": []
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "role": "button",
+         "states": [
+          "enabled",
+          "focusable",
+          "sensitive",
+          "showing",
+          "visible"
+         ],
+         "name": "Docs",
+         "description": "",
+         "extents": [
+          0,
+          241,
+          1512,
+          34
+         ],
+         "children": []
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

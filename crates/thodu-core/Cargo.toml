@@ -1,0 +1,16 @@
+[package]
+name = "thodu-core"
+description = "Thodu's logic with no input or output: targets, labels, search, sessions"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

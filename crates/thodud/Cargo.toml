@@ -1,0 +1,17 @@
+[package]
+name = "thodud"
+description = "Thodu's service: sources, actions and the IPC of SPEC section 7"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+thodu-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+zbus.workspace = true
+wayland-client.workspace = true
+wayland-protocols-wlr.workspace = true

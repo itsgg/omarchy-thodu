@@ -1,0 +1,5 @@
+{"case": "search finds text inside a word", "texts": ["Open", "Save", "Close", "Search", "Remember"], "typed": "se", "kept": [2, 3], "focused": 2}
+{"case": "spaces and case are ignored", "texts": ["Open File", "Save As", "Close"], "typed": "OpenF", "kept": [0], "focused": 0}
+{"case": "typed spaces are ignored", "texts": ["Save As", "Close"], "typed": "e a", "kept": [0], "focused": 0}
+{"case": "nothing typed keeps every target", "texts": ["Open", "Save"], "typed": "", "kept": [0, 1], "focused": null}
+{"case": "no match keeps nothing", "texts": ["Open", "Save"], "typed": "zz", "kept": [], "focused": null}
