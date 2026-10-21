@@ -1,10 +1,10 @@
 # Thodu: Product Founding Brief
 
-Created 2026-10-21. Owner: GG. Status: current founding brief. Only the founder intent in section 1 is established; everything else is a product proposal, hypothesis or open decision.
+Created 2026-10-21. Updated 2026-10-21 with the founder decision that Thodu reads web pages itself. Owner: GG. Status: current founding brief. Only the founder intent in section 1 is established; everything else is a product proposal, hypothesis or open decision.
 
 This document defines Thodu's purpose, intended behavior and decision boundaries. Specifications, architecture, tests and implementation plans derive from it. Thodu, Tamil for "touch", is the working name. Nothing in it has been built or measured, apart from the observations of the founder's machine in R8.
 
-Founder intent means a direction GG stated on 2026-10-21. Product proposal means a recommended way to fulfil that intent, open to revision. Evidence means a dated finding, cited as R1 to R9 in section 12 with its limits. Hypothesis means a belief that needs testing. Open decision means an unresolved choice, listed with its next action in section 12. A label at the start of a section or paragraph covers what follows it.
+Founder intent means a direction GG stated on 2026-10-21. Product proposal means a recommended way to fulfil that intent, open to revision. Evidence means a dated finding, cited as R1 to R10 in section 12 with its limits. Hypothesis means a belief that needs testing. Open decision means an unresolved choice, listed with its next action in section 12. A label at the start of a section or paragraph covers what follows it.
 
 ## 1. Purpose and ambition
 
@@ -15,6 +15,7 @@ Founder intent (2026-10-21):
 - Replicate Homerow on Omarchy.
 - Build a complete one, optimized for Omarchy, supporting everything.
 - Make it a personal project.
+- Cover web pages itself, with no dependence on Vimium: Thodu everywhere.
 
 GG has also stated that Arivu, his personal agent, should augment everything he does that is digital (2026-09-30). A map of every target on screen is what an agent needs to act in any app, so Thodu's targets and actions are offered to Arivu as well as to GG (product proposal).
 
@@ -26,7 +27,7 @@ Label: the short letter sequence drawn over a target. Typing it selects the targ
 
 Source: where Thodu learns about targets. There are five: the app's accessibility tree, the page inside a browser, the Omarchy shell, the screen image and a grid.
 
-Supporting everything (product proposal for the working definition): every capability Homerow offers [R1], on every surface visible on an Omarchy desktop. Where a surface exposes no targets, Thodu still reaches every point of it. Coverage on such surfaces is limited by what can be recognised, and Thodu says so instead of hiding it.
+Supporting everything (product proposal for the working definition): every capability Homerow offers [R1], on every surface visible on an Omarchy desktop, web pages included, from one key and one set of labels, without another tool alongside. Where a surface exposes no targets, Thodu still reaches every point of it. Coverage on such surfaces is limited by what can be recognised, and Thodu says so instead of hiding it.
 
 Omarchy: the Arch Linux setup that runs the Hyprland compositor and omarchy-shell, a long-lived quickshell process that draws the bar, menus and overlays [R7].
 
@@ -85,7 +86,7 @@ A session starts from a Hyprland keybinding. Thodu reads the focused window and 
 Sources, from most to least trusted:
 
 1. Accessibility tree. The focused window is matched to its tree by process id and the active frame, since matching by name fails on Hyprland [R3]. Positions are converted from window or screen coordinates at the monitor's scale. Hidden, off-screen, covered and leftover elements are dropped, such as the items of a closed combo box [R4].
-2. Browser page. A companion Chromium extension reports the page's clickable elements and their positions, and the browser's own controls come from the accessibility tree. Omarchy's web apps are Chromium app windows [R8], so the same extension covers them. That extensions run in app windows is a hypothesis to check first.
+2. Browser page. Thodu reads web pages itself, by two routes. Its own Chromium extension, added by Thodu's installer, finds the clickable elements in every page and frame and reports their text and positions to the service. Extensions run in Chromium's app windows, as Vimium does in Slack's [R10], so the extension covers Omarchy's web apps, which are such windows [R8]. Electron apps cannot take extensions, and their whole interface is a web page, so their targets come from the woken accessibility tree [R4]; the same route serves a Chromium window where the extension is missing. Which route Chromium uses by default is settled by measuring both on large pages such as Slack's. The browser's own controls, such as tabs and the address bar, come from the accessibility tree either way.
 3. Omarchy shell. The overlay is an omarchy-shell plugin and reads the bar, menu and panel items it shares a process with [R7].
 4. Screen image. Words found by OCR and shapes found by detection in a capture of the window, for surfaces with none of the above, such as foot, Zed, Flutter apps and canvases [R4, R8].
 5. Grid. Always available, and reaches any point on any monitor.
@@ -118,7 +119,7 @@ Session counts show use. Whether Thodu saves him time would need a comparison ov
 
 ## 7. Strategy and differentiation
 
-The alternatives are the touchpad, Vimium for web pages, neru [R2], woints [R4], hints [R5] and the pointer grids [R6]. Homerow itself runs only on macOS [R1].
+The alternatives are the touchpad, Vimium for web pages, neru [R2], woints [R4], hints [R5] and the pointer grids [R6]. Homerow itself runs only on macOS [R1]. Vimium covers only the page, with its own keys; Thodu replaces it with the same key and labels it uses everywhere else (founder intent).
 
 Strategic hypothesis: a tool built only for Omarchy can do what the cross-platform tools cannot. It can live inside omarchy-shell, start warm, wear the theme and label the bar and menus. It can speak Hyprland's socket and its Lua dispatch. It can make Omarchy's own apps and web apps work without setup, and it can give its targets to Arivu. For this to matter, Thodu must beat the best alternative on coverage and speed, measured on GG's machine with the same reference set.
 
@@ -138,7 +139,7 @@ The costs are coding agents' time on GG's subscriptions and his own time trying 
 
 Product proposal. The first coherent experience is click mode with search and the grid, in the focused window, on GG's laptop. Targets come from the accessibility tree for GTK3, GTK4, Qt Widgets, Electron apps and Chromium's own controls, and from the Omarchy bar. Every click action and Escape work. It is complete when coverage, placement, wrong actions and speed have been measured on the reference set and his daily apps, against thresholds fixed before that first measurement.
 
-Then, in order of what they unlock: scroll mode; web page targets through the extension; the screen image for foot and Zed; drag and hover; the Arivu interface; more monitors; and publishing, if GG chooses it. The order follows measured gaps, not dates.
+Then, in order of what they unlock: scroll mode; web page targets; the screen image for foot and Zed; drag and hover; the Arivu interface; more monitors; and publishing, if GG chooses it. The order follows measured gaps, not dates.
 
 Permanent boundary, from founder intent: Thodu is built for Omarchy, which means Hyprland and omarchy-shell. Other desktops are out of scope. The first experience does not narrow the product; supporting everything remains the goal. No staffing, budget or time constraint has been stated.
 
@@ -165,7 +166,8 @@ Outcomes to measure are coverage, placement, wrong actions, speed and use, as de
 | omarchy-shell's plugin interface changes with an Omarchy update | The overlay fails after an update | Run the harness after every update; keep the overlay able to run as its own layer surface |
 | Hyprland's Lua dispatch changes | Dispatch errors in the harness | Detect the syntax at start, as woints does [R4] |
 | Waking Chromium's tree costs too much | Browser memory or CPU rises in daily use | Wake each app once, on its first session; measure; allow exclusions |
-| Extensions do not run in Chromium app windows | No page labels in Slack | Read the page from Chromium's accessibility tree, slower but available |
+| Reading a large page misses the time budget | Slow labels on Slack or long documents | Label only what is in view; use whichever route measures faster for that app |
+| An Electron app's tree is thin or slow | Low coverage or slow labels in that app | Fall back to the screen image for it; measure per app |
 | A stale position causes a wrong click | Any wrong action | Stop feature work until it is fixed and covered by a test |
 | neru or woints overtakes Thodu | Better measured coverage or speed on his machine | Adopt or contribute, and keep only what is Omarchy-specific |
 
@@ -182,7 +184,7 @@ Working choices made when the project was created on 2026-10-21, open to GG's ch
 | Open choice | Next action | Interim direction |
 |---|---|---|
 | Implementation language | A spike building the accessibility collector and overlay path, measured for speed on his machine | Proposal: a Rust service, as woints uses for its speed figures [R4], with the overlay in QML inside omarchy-shell |
-| Web page targets | Check Vimium in the Slack app window, then prototype the extension against a test page | A Chromium extension |
+| Default route for Chromium pages | Measure the extension and the accessibility tree on Slack and a large test page, for speed and coverage | The extension for Chromium; the accessibility tree for Electron |
 | Detector for the screen image | Measure OCR and shapes against a trained model on captures of foot and Zed | OCR and shapes |
 | Reuse of neru and woints | Decide per component when building it | Read both; reuse MIT code with attribution where it saves work |
 | Thresholds | Fix before the first measurement | None |
@@ -200,6 +202,7 @@ Record material changes with their date, reason and effect on downstream work. K
 ### Changes
 
 - 2026-10-21: created.
+- 2026-10-21: founder decision that Thodu reads web pages itself, with no dependence on Vimium; Vimium's labels in the Slack app window showed that extensions run there (R10). Sections 1, 5, 7, 9, 11 and 12 updated.
 
 ### Evidence register
 
@@ -214,3 +217,4 @@ All sources accessed 2026-10-21. None of them tested Thodu.
 - R7. Omarchy 4.0.6, shell plugin README at `/usr/share/omarchy/shell/plugins/README.md`. First-party plugins run inside the long-lived omarchy-shell process; user plugins live under `~/.config/omarchy/plugins/<plugin-id>/` with the same manifest contract; overlays load on demand; the menu's path from keybinding through IPC to visible costs about 30 ms cold. Limits: Omarchy's own description of an interface that changes between releases.
 - R8. Observations of GG's machine on 2026-10-21, read-only. Hyprland 0.56.2 with the Lua parser, where `hyprctl keyword` is rejected; one display, eDP-1, 1920x1200 at scale 1.25. On the accessibility bus only Evince exposed a window tree; Chromium and its Slack app window were not registered, with no accessibility variable set in the session; Zed and foot were not registered; quickshell was registered with no children. `/dev/uinput` was readable only by root and the user was not in the `input` group. Vimium was installed in Chromium. tesseract 5.5.3 and OpenCV 5.0.0 were installed. Limits: one session's snapshot.
 - R9. Fedora Workstation issue 473 and Arch Linux bug FS#75143, on the Steam udev rules. Steam's packaging grants the logged-in user `/dev/uinput` with `TAG+="uaccess"` and `OPTIONS+="static_node=uinput"`; Fedora's maintainers kept the rule after a security discussion. Limits: packaging discussions, not documentation of the mechanism. https://pagure.io/fedora-workstation/issue/473 and https://bugs.archlinux.org/task/75143
+- R10. GG's check on 2026-10-21: Vimium's labels work in the Slack app window, a Chromium app window, so extension content scripts run in Omarchy's web apps. Limits: one app, checked by hand.
