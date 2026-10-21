@@ -1,0 +1,10 @@
+#!/bin/sh
+# The message rules and the declarations a protected change or a removed test needs.
+# tools/checks.py hooks asks whether git runs this hook with a one-time token;
+# a token that does not match the one it wrote is ignored.
+if [ -n "${GATE_HOOK_PROBE:-}" ] && [ "$GATE_HOOK_PROBE" = "$(cat "$(git rev-parse --show-toplevel)/.gate/hook-probe-token" 2>/dev/null)" ]; then
+    echo "vithai-hook-probe-ok $GATE_HOOK_PROBE"
+    exit 0
+fi
+cd "$(git rev-parse --show-toplevel)" || exit 1
+exec python3 -I tools/checks.py commit-msg "$1"

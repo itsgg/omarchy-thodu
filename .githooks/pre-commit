@@ -1,0 +1,11 @@
+#!/bin/sh
+# The turn gate before every commit. Protected paths and removed tests in the
+# staged change are checked by commit-msg, which can see the declarations.
+# tools/checks.py hooks asks whether git runs this hook with a one-time token;
+# a token that does not match the one it wrote is ignored.
+if [ -n "${GATE_HOOK_PROBE:-}" ] && [ "$GATE_HOOK_PROBE" = "$(cat "$(git rev-parse --show-toplevel)/.gate/hook-probe-token" 2>/dev/null)" ]; then
+    echo "vithai-hook-probe-ok $GATE_HOOK_PROBE"
+    exit 0
+fi
+cd "$(git rev-parse --show-toplevel)" || exit 1
+GATE_IN_PRE_COMMIT=1 exec tools/gate --turn

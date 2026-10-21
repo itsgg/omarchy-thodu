@@ -1,0 +1,215 @@
+#!/usr/bin/env bash
+# Run one build agent for some sessions, one task per session (AGENTS.md).
+#
+#   tools/agent-loop NAME HARNESS [SESSIONS]
+#   tools/agent-loop NAME HARNESS login
+#
+# HARNESS is claude, codex or agy; the model is whatever that harness defaults
+# to unless AGENT_MODEL is set. The test harness `shell` runs AGENT_SHELL_CMD
+# in the sandbox instead (vithai's tests and tools/land use it). Each agent
+# works in its own worktree at ../<repository>-worktrees/NAME on the branch
+# agent/NAME, and its session logs go to $AGENT_STATE/agents/NAME/logs.
+#
+# The agent runs with its harness's permission prompts off, inside bubblewrap,
+# in a new PID and IPC namespace, with network access. Its home is private and
+# empty apart from read-only toolchains and its own caches, so it cannot read
+# the host's credentials or home files, and cannot change anything the host
+# later runs (caches, toolchains, harness settings). /usr and /etc are bound
+# read-only for the system's programs, certificates and name resolution. Of the
+# repository's .git it can write only its own worktree's metadata and the
+# agent/* branches, and new objects go to its own object store with the
+# shared one read-only behind it: never main, hooks, config or existing
+# objects. It has no credentials to push with. Before each session its harness
+# goes to $AGENT_STATE/agents/NAME/sessions.log, outside the sandbox, and
+# tools/land counts every harness there as an author of the branch.
+#
+# The host never runs git inside an agent's worktree: the agent controls the
+# worktree's .git file and metadata, so it could point git at a config with a
+# command in it (core.fsmonitor, say). The rebase before each session runs in
+# the sandbox. For the same reason, anything that builds or tests an agent's
+# branch runs in the sandbox too, landing included:
+#     AGENT_SHELL_CMD="tools/gate" tools/agent-loop NAME shell
+#
+# Agents run on GG's subscriptions. `login` runs the harness's own sign-in once,
+# interactively, inside the agent's sandbox (claude auth login --claudeai,
+# codex login --device-auth, or agy's first-run sign-in), so the login lives
+# only in the agent's private home: a session of its own, which a token refresh
+# inside the sandbox cannot use to sign the host out. The host's login files
+# are never copied in. Optionally, $AGENT_STATE/agent-auth.env (KEY=VALUE
+# lines, mode 600) adds environment variables, for example a subscription
+# token from `claude setup-token` as CLAUDE_CODE_OAUTH_TOKEN.
+set -euo pipefail
+
+usage="usage: tools/agent-loop NAME HARNESS [SESSIONS]"
+name=${1:?$usage}
+harness=${2:?$usage}
+sessions=${3:-1}
+case $name in *[!a-z0-9-]*|'') echo "ERROR agent name must be lower-case letters, digits and dashes" >&2; exit 2 ;; esac
+login=0
+if [ "$sessions" = login ]; then login=1; sessions=1; fi
+case $sessions in *[!0-9]*|'') echo "ERROR SESSIONS must be a number or login" >&2; exit 2 ;; esac
+
+repo=$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)
+common=$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir)
+project=$(sed -n 's/^PROJECT=//p' "$repo/tools/gate.conf")
+stacks=$(sed -n 's/^STACKS="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$repo/tools/gate.conf")
+state=${AGENT_STATE:-$HOME/.local/share/$project}
+data="$state/data"
+worktree=$(realpath -m "$repo/../$(basename "$repo")-worktrees/$name")
+private="$state/agents/$name"
+logs="$private/logs"
+objects="$private/objects"
+
+prompt=$(sed "s/{{AGENT}}/$name/g" "$repo/tools/agent-prompt.md")
+model=()
+[ -n "${AGENT_MODEL:-}" ] && model=(--model "$AGENT_MODEL")
+case $harness:$login in
+    claude:0) cmd=(claude -p "$prompt" --dangerously-skip-permissions --output-format stream-json --verbose "${model[@]}") ;;
+    codex:0)  cmd=(codex exec --dangerously-bypass-approvals-and-sandbox --json -C "$worktree" "${model[@]/--model/-m}" "$prompt") ;;
+    agy:0)    cmd=(agy -p "$prompt" --dangerously-skip-permissions --output-format stream-json "${model[@]}") ;;
+    shell:0)  cmd=(bash -c "${AGENT_SHELL_CMD:?AGENT_SHELL_CMD is required for the shell harness}") ;;
+    claude:1) cmd=(claude auth login --claudeai) ;;
+    codex:1)  cmd=(codex login --device-auth) ;;
+    agy:1)    cmd=(agy) ;;
+    shell:1)  cmd=(bash -c "${AGENT_SHELL_CMD:?AGENT_SHELL_CMD is required for the shell harness}") ;;
+    *) echo "ERROR harness must be claude, codex, agy or shell" >&2; exit 2 ;;
+esac
+
+# Tools resolve to their real install directories, which are bound read-only.
+tools=("${cmd[0]}" git python3)
+for stack in $stacks; do
+    case $stack in
+        python) tools+=(uv) ;;
+        rust) tools+=(cargo) ;;
+        go) tools+=(go) ;;
+        typescript) tools+=(node npm) ;;
+    esac
+done
+path=""
+tool_dirs=()
+command -v bwrap >/dev/null || { echo "ERROR bwrap (bubblewrap) not found on PATH" >&2; exit 2; }
+for tool in "${tools[@]}"; do
+    found=$(command -v "$tool") || { echo "ERROR $tool not found on PATH" >&2; exit 2; }
+    # A mise shim needs mise and its shims directory, which the sandbox lacks.
+    case $found in */mise/shims/*) found=$(mise which "$tool") || { echo "ERROR mise has no version of $tool set" >&2; exit 2; } ;; esac
+    path="$path$(dirname "$found"):"
+    # A tool under the home directory is hidden by the private home unless its
+    # directory, and the directory its link resolves to, are bound back read-only.
+    for dir in "$(dirname "$found")" "$(dirname "$(readlink -f "$found")")"; do
+        case $dir in "$HOME"/*) tool_dirs+=("$dir") ;; esac
+    done
+done
+path="$path/usr/local/bin:/usr/bin"
+
+env=(--clearenv --setenv HOME "$HOME" --setenv USER "$USER" --setenv PATH "$path"
+     --setenv LANG "${LANG:-C.UTF-8}" --setenv TERM "$([ "$login" = 1 ] && echo "${TERM:-xterm}" || echo dumb)" --setenv TMPDIR /tmp
+     --setenv RUSTUP_HOME "$HOME/.rustup" --setenv GOPATH "$HOME/go" --setenv GOFLAGS -modcacherw
+     --setenv npm_config_cache "$HOME/.npm"
+     --setenv GIT_AUTHOR_NAME "$(git -C "$repo" config user.name)"
+     --setenv GIT_AUTHOR_EMAIL "$(git -C "$repo" config user.email)"
+     --setenv GIT_COMMITTER_NAME "$(git -C "$repo" config user.name)"
+     --setenv GIT_COMMITTER_EMAIL "$(git -C "$repo" config user.email)"
+     --setenv GIT_OBJECT_DIRECTORY "$objects" --setenv GIT_ALTERNATE_OBJECT_DIRECTORIES "$common/objects"
+     --setenv GIT_CONFIG_COUNT 2
+     --setenv GIT_CONFIG_KEY_0 gc.auto --setenv GIT_CONFIG_VALUE_0 0
+     --setenv GIT_CONFIG_KEY_1 maintenance.auto --setenv GIT_CONFIG_VALUE_1 false)
+[ -n "${AGENT_MODEL:-}" ] && env+=(--setenv AGENT_MODEL "$AGENT_MODEL")
+auth="$state/agent-auth.env"
+if [ "$login" = 0 ] && [ "$harness" != shell ]; then
+    # A session needs a login made with `login`, or a token in the env file.
+    case $harness in
+        claude) signed_in=("$private/home/.claude/.credentials.json") ;;
+        codex)  signed_in=("$private/home/.codex/auth.json") ;;
+        agy)    signed_in=("$private/home/.gemini"/*) ;;
+    esac
+    if [ ! -e "${signed_in[0]}" ] && ! { [ -f "$auth" ] && grep -q '^[A-Z_]*TOKEN=\|^[A-Z_]*KEY=' "$auth"; }; then
+        echo "ERROR $name is not signed in to $harness; run: tools/agent-loop $name $harness login" >&2
+        exit 2
+    fi
+fi
+if [ "$harness" != shell ] && [ -f "$auth" ]; then
+    [ "$(stat -c %a "$auth")" = 600 ] || { echo "ERROR $auth must be mode 600" >&2; exit 2; }
+    while IFS= read -r line || [ -n "$line" ]; do
+        case $line in ''|'#'*) continue ;; esac
+        key=${line%%=*}
+        case $key in *[!A-Za-z0-9_]*|'') echo "ERROR bad line in $auth" >&2; exit 2 ;; esac
+        env+=(--setenv "$key" "${line#*=}")
+    done <"$auth"
+fi
+
+ro_if() { [ -e "$1" ] && sandbox+=(--ro-bind "$1" "$1"); return 0; }
+# A login needs the terminal, so only it keeps the controlling terminal.
+session_flag=(--new-session)
+[ "$login" = 1 ] && session_flag=()
+sandbox=(bwrap --unshare-pid --unshare-ipc "${session_flag[@]}" --die-with-parent
+         --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/bin /sbin
+         --symlink usr/lib /lib --symlink usr/lib /lib64
+         --ro-bind /etc /etc --dev /dev --proc /proc --tmpfs /tmp --tmpfs /run)
+ro_if /opt
+ro_if /run/systemd/resolve
+sandbox+=(--bind "$private/home" "$HOME")
+ro_if "$HOME/.rustup"
+ro_if "$HOME/.cargo/bin"
+ro_if "$HOME/.local/share/mise/installs"
+ro_if "$HOME/.local/share/uv/python"
+ro_if "$data"
+sandbox+=(--bind "$private/cargo-registry" "$HOME/.cargo/registry"
+          --bind "$private/cargo-git" "$HOME/.cargo/git"
+          --bind "$private/uv-cache" "$HOME/.cache/uv"
+          --bind "$private/go" "$HOME/go"
+          --bind "$private/go-build" "$HOME/.cache/go-build"
+          --bind "$private/npm" "$HOME/.npm")
+# Tool directories go on top of the caches, so a tool under ~/go/bin, say,
+# stays the host's read-only copy.
+for dir in "${tool_dirs[@]}"; do ro_if "$dir"; done
+sandbox+=(--ro-bind "$common" "$common"
+          --bind "$objects" "$objects"
+          --bind "$common/worktrees/$name" "$common/worktrees/$name"
+          --bind "$common/refs/heads/agent" "$common/refs/heads/agent"
+          --bind "$common/logs/refs/heads/agent" "$common/logs/refs/heads/agent"
+          --bind "$worktree" "$worktree"
+          --chdir "$worktree")
+sandbox+=("${env[@]}" --)
+if [ -n "${AGENT_PRINT_SANDBOX:-}" ]; then
+    printf '%s\n' "${sandbox[@]}"
+    exit 0
+fi
+
+# Nothing is created until every argument and file above has been checked.
+mkdir -p "$objects/pack" "$objects/info"
+if [ ! -d "$worktree" ]; then
+    mkdir -p "$(dirname "$worktree")"
+    if git -C "$repo" rev-parse -q --verify "refs/heads/agent/$name" >/dev/null; then
+        # The checkout would run hooks from the agent's tree, so none run.
+        GIT_ALTERNATE_OBJECT_DIRECTORIES="$objects" git -C "$repo" -c core.hooksPath=/dev/null worktree add -q "$worktree" "agent/$name"
+    else
+        git -C "$repo" -c core.hooksPath=/dev/null worktree add -q -b "agent/$name" "$worktree" main
+    fi
+fi
+mkdir -p "$logs" "$private/home" "$private/cargo-registry" "$private/cargo-git" "$private/uv-cache" \
+         "$private/go" "$private/go-build" "$private/npm"
+mkdir -p "$common/refs/heads/agent" "$common/logs/refs/heads/agent"
+branch_tip() { git -C "$repo" rev-parse -q --verify "refs/heads/agent/$name" 2>/dev/null || echo none; }
+
+if [ "$login" = 1 ]; then
+    echo "signing $name in to $harness inside its sandbox; open any URL it prints in your browser"
+    exec "${sandbox[@]}" "${cmd[@]}"
+fi
+
+failures=0
+for i in $(seq 1 "$sessions"); do
+    if ! "${sandbox[@]}" git rebase -q main >"$logs/rebase.log" 2>&1 </dev/null; then
+        echo "ERROR rebase of agent/$name onto main failed in the sandbox; see $logs/rebase.log" >&2
+        exit 1
+    fi
+    log="$logs/$(date +%Y%m%d-%H%M%S).jsonl"
+    echo "session $i of $sessions: $log"
+    # Written before the session starts, so a session that is killed still
+    # counts as an author of the branch.
+    [ "$harness" = shell ] || echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $harness $(branch_tip)" >>"$private/sessions.log"
+    if ! "${sandbox[@]}" "${cmd[@]}" >"$log" 2>&1 </dev/null; then
+        echo "ERROR session $i failed; see $log" >&2
+        failures=$((failures + 1))
+    fi
+done
+[ "$failures" -eq 0 ] || { echo "ERROR $failures of $sessions sessions failed" >&2; exit 1; }

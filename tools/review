@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# One read-only review of a change by a model family other than any of its
+# authors' (rules.md, Git). Prints the review and saves it outside the
+# repository, in $AGENT_STATE/reviews; nothing about the review goes into a commit.
+#
+#   tools/review --author-family F[,F...] --head REF [--base REF] [--workdir DIR] [--gate-summary FILE]
+#
+# Families are openai, google and anthropic. Reviewers and models are
+# configured in tools/review.conf. The reviewer reads an exact export of the
+# head with no git repository (tools/checks.py export), unless WORKDIR says otherwise. A reply that exits
+# non-zero or has no text is a failed attempt; three failed attempts move on
+# to the next family. REVIEW_COMMAND, when set, replaces the reviewer (vithai's
+# tests use it): it gets the prompt file as its argument and prints stream-json.
+set -euo pipefail
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$root"
+# shellcheck source=tools/review.conf
+. tools/review.conf
+
+authors=${REVIEW_AUTHOR_FAMILY:-}
+base=main
+head=""
+workdir=""
+summary=""
+while [ $# -gt 0 ]; do
+    case $1 in
+        --author-family) authors=${2:?}; shift 2 ;;
+        --base) base=${2:?}; shift 2 ;;
+        --head) head=${2:?}; shift 2 ;;
+        --workdir) workdir=${2:?}; shift 2 ;;
+        --gate-summary) summary=${2:?}; shift 2 ;;
+        *) echo "ERROR unknown argument $1" >&2; exit 2 ;;
+    esac
+done
+[ -n "$head" ] || { echo "ERROR say which change to review: --head REF" >&2; exit 2; }
+authors=$(printf '%s' "$authors" | tr -d '[:space:]')
+[ -n "$authors" ] || { echo "ERROR say who wrote the change: --author-family openai|google|anthropic[,...]" >&2; exit 2; }
+for family in ${authors//,/ }; do
+    case $family in openai|google|anthropic) ;; *) echo "ERROR unknown family $family" >&2; exit 2 ;; esac
+done
+
+project=$(sed -n 's/^PROJECT=//p' tools/gate.conf)
+state=${AGENT_STATE:-$HOME/.local/share/$project}
+mkdir -p "$state/reviews"
+b=$(git rev-parse "$base^{commit}")
+h=$(git rev-parse "$head^{commit}")
+[ -n "$(git diff --stat "$b" "$h")" ] || { echo "ERROR nothing to review between $base and $head" >&2; exit 2; }
+prompt=$(mktemp -p "$state/reviews" .prompt.XXXXXX)
+stream=$(mktemp -p "$state/reviews" .stream.XXXXXX)
+made_workdir=""
+cleanup() { rm -f -- "$prompt" "$stream"; [ -z "$made_workdir" ] || rm -rf -- "$workdir"; }
+trap cleanup EXIT
+if [ -z "$workdir" ]; then
+    workdir=$(mktemp -d -p "$state/reviews" .tree.XXXXXX)
+    made_workdir=1
+    python3 -I tools/checks.py export "$h" "$workdir" >/dev/null
+fi
+python3 -I tools/checks.py review-prompt "$b" "$h" ${summary:+"$summary"} >"$prompt"
+
+run_reviewer() {
+    local who=$1 text
+    text=$(cat "$prompt")
+    if [ -n "${REVIEW_COMMAND:-}" ]; then
+        "$REVIEW_COMMAND" "$prompt"
+        return
+    fi
+    case $who in
+        cursor) (cd "$workdir" && timeout "$REVIEW_TIMEOUT" agent -p --mode plan --trust --model "$CURSOR_MODEL" --output-format stream-json "$text" </dev/null) ;;
+        agy) (cd "$workdir" && timeout "$REVIEW_TIMEOUT" agy -p "$text" --mode plan --output-format stream-json </dev/null) ;;
+        claude) (cd "$workdir" && timeout "$REVIEW_TIMEOUT" claude -p "$text" --permission-mode plan --output-format stream-json --verbose </dev/null) ;;
+        *) echo "ERROR unknown reviewer $who in tools/review.conf" >&2; return 2 ;;
+    esac
+}
+
+for entry in $REVIEWERS; do
+    family=${entry%%:*}
+    who=${entry#*:}
+    case ",$authors," in *",$family,"*) continue ;; esac
+    for attempt in 1 2 3; do
+        status=0
+        run_reviewer "$who" >"$stream" 2>&1 || status=$?
+        review=$(python3 -I tools/checks.py stream-text <"$stream")
+        if [ "$status" -eq 0 ] && [ -n "${review//[[:space:]]/}" ]; then
+            out="$state/reviews/$(git rev-parse --short=12 "$h")-$who.md"
+            {
+                printf 'Review of %s..%s by %s (%s), attempt %s, %s\n\n' "$(git rev-parse --short=12 "$b")" \
+                    "$(git rev-parse --short=12 "$h")" "$who" "$family" "$attempt" "$(date -u +%Y-%m-%dT%H:%MZ)"
+                printf '%s\n' "$review"
+            } >"$out"
+            printf 'review saved to %s\n\n%s\n' "$out" "$review"
+            exit 0
+        fi
+        echo "review attempt $attempt by $who failed (exit $status, $(printf '%s' "$review" | wc -c) bytes of text)" >&2
+    done
+done
+echo "ERROR no reviewer outside the $authors families gave a review; see tools/review.conf" >&2
+exit 1

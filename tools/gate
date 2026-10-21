@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# The one gate. The pre-commit hook and the end of every Claude Code turn run
+# `--turn`; landing and CI run the default `--full`; the nightly run adds the
+# slow steps with `--nightly`. One line per step with its seconds; the detail
+# goes to .gate/<step>.log, and an ERROR line says what failed and where to
+# look. Step budgets and the stacks are in tools/gate.conf.
+set -euo pipefail
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$root"
+
+tier=full
+case ${1:-} in
+    --turn) tier=turn ;;
+    --full|'') tier=full ;;
+    --nightly) tier=nightly ;;
+    *) echo "ERROR usage: tools/gate [--turn|--full|--nightly]"; exit 2 ;;
+esac
+
+if grep -qE '^(<{7}|>{7})( |$)' tools/gate.conf tools/gate.local.conf 2>/dev/null; then
+    echo "ERROR tools/gate.conf or tools/gate.local.conf has merge conflict markers; resolve them first"
+    exit 1
+fi
+# shellcheck source=tools/gate.conf
+. tools/gate.conf
+# shellcheck disable=SC1091
+[ ! -f tools/gate.local.conf ] || . tools/gate.local.conf
+logs=${GATE_LOGS:-$root/.gate}
+mkdir -p "$logs"
+: >"$logs/summary"
+py=$(command -v python3)
+checks() { "$py" -I "$root/tools/checks.py" "$@"; }
+
+ms() { echo $(( $(date +%s%N) / 1000000 )); }
+secs() { printf '%d.%d' $(( $1 / 1000 )) $(( $1 % 1000 / 100 )); }
+
+step() {
+    local name=$1 t0 took log
+    shift
+    log="$logs/${name//[\/:]/-}.log"
+    t0=$(ms)
+    if "$@" >"$log" 2>&1; then
+        took=$(( $(ms) - t0 ))
+        say "$(printf 'ok    %-24s %6ss' "$name" "$(secs "$took")")"
+    else
+        took=$(( $(ms) - t0 ))
+        say "$(printf 'ERROR %s failed after %ss; last lines of %s:' "$name" "$(secs "$took")" "${log#"$root"/}")"
+        tail -n 25 "$log" | sed 's/^/      /' | tee -a "$logs/summary"
+        exit 1
+    fi
+}
+
+# Every line the gate prints also goes to .gate/summary, which tools/review reads.
+say() { echo "$1" | tee -a "$logs/summary"; }
+skip() { say "$(printf 'skip  %-24s %s' "$1" "$2")"; }
+
+in_dir() { local dir=$1; shift; (cd "$dir" && "$@"); }
+
+# each_root MANIFEST STEP CMD...: run STEP in every directory holding MANIFEST
+# (outside dependency and build trees). A Cargo workspace runs once, at its
+# root; Go modules and Python projects each run on their own.
+each_root() {
+    local manifest=$1 name=$2 dir label dirs any=0 flag=()
+    shift 2
+    [ "$manifest" = Cargo.toml ] && flag=(--outermost)
+    if ! dirs=$(checks roots "$manifest" "${flag[@]}"); then
+        say "ERROR $name could not list the directories holding $manifest"
+        exit 1
+    fi
+    while IFS= read -r dir; do
+        [ -n "$dir" ] || continue
+        any=1
+        label=$name
+        [ "$dir" = . ] || label="$name:$dir"
+        step "$label" in_dir "$dir" "$@"
+    done <<<"$dirs"
+    [ "$any" = 1 ] || skip "$name" "no $manifest yet"
+}
+
+start=$(ms)
+# shellcheck source=tools/gate.d/core.sh
+. tools/gate.d/core.sh
+for stack in $STACKS; do
+    # shellcheck disable=SC1090
+    . "tools/gate.d/$stack.sh"
+done
+
+core_turn
+for stack in $STACKS; do "${stack}_turn"; done
+if [ "$tier" != turn ]; then
+    core_full
+    for stack in $STACKS; do "${stack}_full"; done
+fi
+if [ "$tier" = nightly ]; then
+    for stack in $STACKS; do "${stack}_nightly"; done
+fi
+
+took=$(( $(ms) - start ))
+case $tier in
+    turn) budget=$TURN_BUDGET ;;
+    full) budget=$FULL_BUDGET ;;
+    nightly) budget=$NIGHTLY_BUDGET ;;
+esac
+if [ $(( took / 1000 )) -gt "$budget" ]; then
+    say "WARN  gate --$tier took $(secs "$took")s, over its ${budget}s budget in tools/gate.conf; make the slow step faster or move it to a later tier"
+else
+    say "ok    gate --$tier $(secs "$took")s of its ${budget}s budget"
+fi

@@ -1,0 +1,15 @@
+# Paths no build agent changes without saying so. A commit touching one needs a
+# "Protected: <path>: <why>" line in its body (the commit-msg hook and the
+# gate's protected step hold this), and landing it needs the coordinator's
+# --accept-protected; a change that loosens or removes a check waits for GG.
+# A task file's Acceptance section is protected the same way, as
+# tasks/NNNN-name.md#acceptance. Globs: * matches anything, dir/** a subtree.
+SEED.md
+SPEC.md
+tools/**
+.githooks/**
+.claude/settings.json
+.github/workflows/**
+.copier-answers.yml
+tests/acceptance/**
+spec/cases/**

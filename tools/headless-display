@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Run a command on a private headless Wayland display, away from GG's session:
+#
+#   tools/headless-display COMMAND [ARGS...]
+#
+# Starts sway with the headless backend and software rendering in its own
+# runtime directory, runs COMMAND with WAYLAND_DISPLAY pointing at it, then
+# stops sway. Nothing appears on GG's outputs or workspaces. Screenshots come
+# from `grim` inside COMMAND. A QML window came up in about 1.2 seconds this
+# way on 2026-10-21.
+set -euo pipefail
+[ $# -gt 0 ] || { echo "ERROR usage: tools/headless-display COMMAND [ARGS...]" >&2; exit 2; }
+command -v sway >/dev/null || { echo "ERROR sway is not installed" >&2; exit 2; }
+runtime=$(mktemp -d -p "${XDG_RUNTIME_DIR:-/tmp}" headless.XXXXXX)
+chmod 700 "$runtime"
+sway_pid=""
+cleanup() {
+    [ -z "$sway_pid" ] || kill "$sway_pid" 2>/dev/null || true
+    rm -rf -- "$runtime"
+}
+trap cleanup EXIT
+env -u WAYLAND_DISPLAY -u DISPLAY -u SWAYSOCK XDG_RUNTIME_DIR="$runtime" \
+    WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman \
+    sway -c /dev/null >"$runtime/sway.log" 2>&1 &
+sway_pid=$!
+for _ in $(seq 1 100); do
+    socket=$(find "$runtime" -maxdepth 1 -name 'wayland-*' ! -name '*.lock' -print -quit)
+    [ -n "$socket" ] && break
+    kill -0 "$sway_pid" 2>/dev/null || { cat "$runtime/sway.log" >&2; echo "ERROR sway exited" >&2; exit 1; }
+    sleep 0.05
+done
+[ -n "${socket:-}" ] || { echo "ERROR no Wayland socket after 5 seconds" >&2; exit 1; }
+XDG_RUNTIME_DIR="$runtime" WAYLAND_DISPLAY=$(basename "$socket") QT_QPA_PLATFORM=wayland "$@"

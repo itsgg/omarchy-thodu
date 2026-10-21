@@ -1,6 +1,7 @@
-/target/
-node_modules/
+.gate/
 __pycache__/
-.venv/
+*.py[cod]
+target/
+mutants.out*/
 .env
 *.log
