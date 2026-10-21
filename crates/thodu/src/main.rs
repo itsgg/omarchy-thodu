@@ -15,7 +15,7 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -102,6 +102,14 @@ fn bench_dir() -> PathBuf {
     base.join("thodu").join("bench")
 }
 
+/// Keep a run's samples under `dir`: the file, or why it was not written.
+fn keep_samples(dir: &Path, log: &str) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let file = dir.join(format!("{}.jsonl", now_us() / 1_000_000));
+    std::fs::write(&file, log).map_err(|e| format!("{}: {e}", file.display()))?;
+    Ok(file)
+}
+
 /// One session timed from `thodu hints` starting to the overlay saying it
 /// drew the labels (REQ-PERF-01); the overlay is summoned without the
 /// keyboard. Returns the time and the collection's share, in ms.
@@ -167,22 +175,21 @@ fn bench(args: &[String]) -> Result<(), String> {
         // The overlay hides between sessions, so each one maps afresh.
         std::thread::sleep(Duration::from_millis(300));
     }
-    let dir = bench_dir();
-    let file = dir.join(format!("{}.jsonl", now_us() / 1_000_000));
-    if std::fs::create_dir_all(&dir).is_ok() {
-        let _ = std::fs::write(&file, log);
-    }
+    let kept = match keep_samples(&bench_dir(), &log) {
+        Ok(file) => format!("samples in {}", file.display()),
+        Err(e) => format!("samples not kept: {e}"),
+    };
     let summary = perf::summarize(&samples).ok_or("no samples")?;
     let collect = perf::percentile(&collects, 50.0).unwrap_or_default();
     println!(
-        "{} sessions: median {:.1} ms, p95 {:.1} ms (REQ-PERF-01: {}, {}); collection median {:.0} ms; samples in {}",
+        "{} sessions: median {:.1} ms, p95 {:.1} ms (REQ-PERF-01: {}, {}); collection median {:.0} ms; {}",
         summary.sessions,
         summary.median_ms,
         summary.p95_ms,
         perf::MEDIAN_MS,
         perf::P95_MS,
         collect,
-        file.display()
+        kept
     );
     if summary.within() {
         Ok(())
@@ -264,5 +271,25 @@ fn main() -> ExitCode {
             eprintln!("ERROR {e}");
             ExitCode::from(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::keep_samples;
+
+    // bench says where its samples are only when it wrote them.
+    #[test]
+    fn samples_are_kept_or_the_failure_is_said() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-bench");
+        let file = keep_samples(&dir, "{\"ms\":1}\n").expect("written");
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("read back"),
+            "{\"ms\":1}\n"
+        );
+        let err = keep_samples(&PathBuf::from("/proc/thodu-bench"), "x").expect_err("not writable");
+        assert!(err.starts_with("/proc/thodu-bench"), "{err}");
     }
 }

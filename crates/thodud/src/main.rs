@@ -4,6 +4,7 @@
 
 mod atspi;
 mod hypr;
+mod listeners;
 mod overlay;
 mod pointer;
 
@@ -54,8 +55,8 @@ struct Daemon {
     hidden: Condvar,
     next: AtomicU64,
     bus: Mutex<Option<atspi::Bus>>,
-    /// Overlays listening for sessions (SPEC section 7, `listen`).
-    listeners: Mutex<Vec<UnixStream>>,
+    /// The overlay listening for sessions (SPEC section 7, `listen`).
+    listeners: Mutex<listeners::Listeners<UnixStream>>,
 }
 
 /// The settings, read at each session so an edit takes effect at once; a
@@ -224,17 +225,9 @@ impl Daemon {
             return false;
         };
         line.push('\n');
-        let Ok(mut listeners) = self.listeners.lock() else {
-            return false;
-        };
-        // A listener that cannot take the line is gone; the next one may.
-        while let Some(mut stream) = listeners.pop() {
-            if stream.write_all(line.as_bytes()).is_ok() {
-                listeners.push(stream);
-                return true;
-            }
-        }
-        false
+        self.listeners
+            .lock()
+            .is_ok_and(|mut l| l.push(line.as_bytes()))
     }
 
     fn drawn(&self, id: &str) -> Res<Reply> {
@@ -485,7 +478,7 @@ fn serve(daemon: &Arc<Daemon>, stream: UnixStream) {
                 && stream.set_write_timeout(Some(LISTENER_WRITE)).is_ok()
                 && let Ok(mut listeners) = daemon.listeners.lock()
             {
-                listeners.push(stream);
+                listeners.add(stream);
             }
         }
     }
@@ -519,7 +512,7 @@ fn main() {
         hidden: Condvar::new(),
         next: AtomicU64::new(1),
         bus: Mutex::new(None),
-        listeners: Mutex::new(Vec::new()),
+        listeners: Mutex::new(listeners::Listeners::new()),
     });
     for stream in listener.incoming().flatten() {
         let daemon = Arc::clone(&daemon);
