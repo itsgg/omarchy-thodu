@@ -9,8 +9,9 @@
 # configured in tools/review.conf. The reviewer reads an exact export of the
 # head with no git repository (tools/checks.py export), unless WORKDIR says otherwise. A reply that exits
 # non-zero or has no text is a failed attempt; three failed attempts move on
-# to the next family. REVIEW_COMMAND, when set, replaces the reviewer (vithai's
-# tests use it): it gets the prompt file as its argument and prints stream-json.
+# to the next family, and so does one reply saying the reviewer is out of usage.
+# REVIEW_COMMAND, when set, replaces the reviewer (vithai's tests use it): it
+# gets the prompt file and the reviewer's name, and prints stream-json.
 set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$root"
@@ -61,7 +62,7 @@ run_reviewer() {
     local who=$1 text
     text=$(cat "$prompt")
     if [ -n "${REVIEW_COMMAND:-}" ]; then
-        "$REVIEW_COMMAND" "$prompt"
+        "$REVIEW_COMMAND" "$prompt" "$who"
         return
     fi
     case $who in
@@ -91,6 +92,10 @@ for entry in $REVIEWERS; do
             exit 0
         fi
         echo "review attempt $attempt by $who failed (exit $status, $(printf '%s' "$review" | wc -c) bytes of text)" >&2
+        if grep -qiE "out of usage|usage limit|quota exceeded|rate limit|ActionRequiredError" "$stream"; then
+            echo "$who is out of usage; trying the next family" >&2
+            break
+        fi
     done
 done
 echo "ERROR no reviewer outside the $authors families gave a review; see tools/review.conf" >&2
