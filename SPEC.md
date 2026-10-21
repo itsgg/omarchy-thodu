@@ -95,7 +95,7 @@ Acceptance:
 ### REQ-SRC-02: The toolkits of this milestone
 The system shall produce targets from GTK3, GTK4, Qt Widgets and Electron windows and from Chromium's own controls, converting window-relative extents (GTK4) and screen extents alike to logical coordinates.
 Acceptance:
-- replay: recorded trees of gtk3-widget-factory, gtk4-widget-factory, a Qt Widgets demo, an Electron app and Chromium, each with the targets a person marked, at least 90 percent found (provisional) and none outside its window.
+- replay: recorded trees of the reference windows in spec/reference/ (gtk3.py, gtk4.py, qt.py), an Electron app (Obsidian) and Chromium, each with the targets a person marked, at least 90 percent found (provisional) and none outside its window.
 
 ### REQ-SRC-03: Waking Chromium and Electron
 When a Chromium or Electron window's tree is dormant, the system shall wake it with one `GetAttributes` call on the frame, at most once per process, and collect after it.
@@ -216,7 +216,7 @@ Acceptance:
 ## 9. Quality attributes
 
 ### REQ-PERF-01: Labels fast enough to use
-The time from `thodu hints` starting to the overlay drawing labels shall be at most 100 ms at the median and 250 ms at the 95th percentile over 50 sessions on gtk3-widget-factory and on Slack's app window, on GG's laptop (provisional; SEED P4).
+The time from `thodu hints` starting to the overlay drawing labels shall be at most 100 ms at the median and 250 ms at the 95th percentile over 50 sessions on the GTK3 reference window (spec/reference/gtk3.py) and on Slack's app window, on GG's laptop (provisional; SEED P4).
 Acceptance:
 - measured: `thodu bench --sessions 50` prints both percentiles and exits 1 above the thresholds.
 
@@ -242,6 +242,7 @@ Unit tests and properties cover labels, search, the grid, coordinates and the st
 ## 13. Changes and retired requirements
 
 - 2026-10-21: created.
+- 2026-10-21: change 0001, reference windows replace the widget-factory demos in REQ-SRC-02 and REQ-PERF-01.
 
 ### Retired
 

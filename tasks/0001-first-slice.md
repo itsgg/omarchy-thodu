@@ -7,7 +7,7 @@ Goal: the first slice GG can use. `thodu hints`, bound to a key, shows labels on
 
 Acceptance:
 - run: `tests/acceptance/reqs.sh REQ-SESSION-01 REQ-SESSION-02 REQ-SESSION-03 REQ-SRC-01 REQ-SRC-04 REQ-LABEL-01 REQ-LABEL-02 REQ-SEARCH-01 REQ-ACT-01 REQ-ACT-03`
-- On GG's session: over gtk3-widget-factory, labels appear on its buttons and Return clicks the chosen one, seen on his screen before the task is done.
+- On GG's session: over the GTK3 reference window (spec/reference/gtk3.py), labels appear on its buttons and Return clicks the chosen one, seen on his screen before the task is done.
 
 ## Log
 
