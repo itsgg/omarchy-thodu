@@ -113,6 +113,17 @@ impl Session {
         }
     }
 
+    /// REQ-SESSION-04: a session on `targets` over the monitor's `area`,
+    /// on the grid when asked for or when no source found anything.
+    pub fn begin(targets: Vec<Target>, area: Rect, labels_only: bool, grid: bool) -> Self {
+        let empty = targets.is_empty();
+        let mut session = Self::new(targets, labels_only).with_area(area);
+        if grid || empty {
+            session.open_grid();
+        }
+        session
+    }
+
     /// A session over the monitor's `area`, for the grid.
     pub fn with_area(mut self, area: Rect) -> Self {
         self.area = Some(area);

@@ -191,10 +191,8 @@ impl Daemon {
             Some(p) => format!("{status}; {p}"),
             None => status,
         };
-        let mut session = Session::new(targets, settings.labels_only).with_area(monitor.logical());
-        if grid {
-            session.open_grid();
-        }
+        let session = Session::begin(targets, monitor.logical(), settings.labels_only, grid);
+        let status = with_grid_note(status, &session, grid);
         let id = format!("s{}", self.next.fetch_add(1, Ordering::Relaxed));
         {
             let mut sessions = self.sessions.lock().map_err(|_| internal("session lock"))?;
@@ -629,6 +627,16 @@ impl Daemon {
     }
 }
 
+/// REQ-SESSION-04: the status line says when the grid opened because no
+/// source found anything.
+fn with_grid_note(status: String, session: &Session, asked: bool) -> String {
+    if asked || session.grid.is_empty() {
+        status
+    } else {
+        format!("{status}; no targets found, so the grid is open")
+    }
+}
+
 /// The window a grid with no window named belongs to: the active window
 /// when it is on the focused monitor the grid covers, else none.
 fn grid_window(active: Option<Window>, focused_monitor: i64) -> Option<Window> {
@@ -746,7 +754,56 @@ fn main() {
 mod tests {
     use thodu_core::model::Window;
 
-    use super::grid_window;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use thodu_core::model::{Monitor, Target};
+    use thodu_core::session::Session;
+
+    use super::{grid_window, with_grid_note};
+    use crate::sources::{self, Found, Source};
+
+    struct Empty(&'static str);
+
+    impl Source for Empty {
+        fn name(&self) -> &'static str {
+            self.0
+        }
+
+        fn budget(&self) -> Duration {
+            Duration::from_millis(100)
+        }
+
+        fn collect(&self, _: &Window, _: &Monitor) -> Found {
+            Ok((Vec::<Target>::new(), format!("0 targets from {}", self.0)))
+        }
+    }
+
+    // REQ-SESSION-04: when every source returns nothing, the grid opens
+    // and the status line says no targets were found.
+    #[test]
+    fn req_session_04_every_source_empty_opens_the_grid() {
+        let sources: Vec<Arc<dyn Source>> =
+            vec![Arc::new(Empty("atspi")), Arc::new(Empty("shell"))];
+        let monitor = Monitor {
+            name: "M".into(),
+            x: 0,
+            y: 0,
+            width: 1536,
+            height: 864,
+            scale: 1.0,
+        };
+        let got = sources::collect(&sources, &on(0), &monitor);
+        let session = Session::begin(got.targets, monitor.logical(), false, false);
+        assert!(!session.grid.is_empty(), "the grid is open");
+        let status = with_grid_note(got.status.join("; "), &session, false);
+        assert_eq!(
+            status,
+            "0 targets from atspi; 0 targets from shell; no targets found, so the grid is open"
+        );
+        let asked = Session::begin(Vec::new(), monitor.logical(), false, true);
+        assert_eq!(with_grid_note("the grid".into(), &asked, true), "the grid");
+    }
 
     fn on(monitor: i64) -> Window {
         Window {

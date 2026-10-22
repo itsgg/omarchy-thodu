@@ -8,6 +8,8 @@
 //!   thodu close SESSION
 //!   thodu bench [--sessions N] [--window ADDRESS]   time to labels drawn
 //!   thodu record-tree --out FILE [--window ADDRESS]  record the tree
+//!   thodu install                             install plugin, service and bindings
+//!   thodu doctor                              check environment, rule and service
 //!
 //! ADDRESS is a Hyprland window address, or class:NAME for the first window
 //! of that class.
@@ -29,6 +31,42 @@ fn socket() -> Result<PathBuf, String> {
     std::env::var("XDG_RUNTIME_DIR")
         .map(|d| PathBuf::from(d).join(SOCKET_NAME))
         .map_err(|_| "XDG_RUNTIME_DIR is not set".to_string())
+}
+
+fn home_dir() -> Result<PathBuf, String> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| "HOME is not set".to_string())
+}
+
+/// REQ-CLI-02: verify that Hyprland's request socket can be reached.
+fn check_hyprland_socket(
+    runtime: Option<&str>,
+    signature: Option<&str>,
+) -> Result<PathBuf, String> {
+    let runtime = runtime.ok_or_else(|| "XDG_RUNTIME_DIR is not set".to_string())?;
+    let signature = signature.ok_or_else(|| {
+        "HYPRLAND_INSTANCE_SIGNATURE is not set; is Hyprland running?".to_string()
+    })?;
+    let path = PathBuf::from(runtime)
+        .join("hypr")
+        .join(signature)
+        .join(".socket.sock");
+    if !path.exists() {
+        return Err(format!(
+            "cannot connect to Hyprland on {}: No such file or directory",
+            path.display()
+        ));
+    }
+    Ok(path)
+}
+
+fn check_hyprland() -> Result<(), String> {
+    check_hyprland_socket(
+        std::env::var("XDG_RUNTIME_DIR").ok().as_deref(),
+        std::env::var("HYPRLAND_INSTANCE_SIGNATURE").ok().as_deref(),
+    )
+    .map(|_| ())
 }
 
 fn daemon_binary() -> PathBuf {
@@ -211,9 +249,261 @@ fn value(args: &[String], name: &str) -> Option<String> {
         .cloned()
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct DoctorItem {
+    name: &'static str,
+    present: bool,
+}
+
+fn check_doctor(home: &Path) -> (Vec<DoctorItem>, bool) {
+    let mut items = Vec::new();
+    let env_file = home.join(".config/environment.d/90-thodu.conf");
+    let env_content = std::fs::read_to_string(&env_file).unwrap_or_default();
+
+    let a11y = std::env::var("ACCESSIBILITY_ENABLED").as_deref() == Ok("1")
+        || env_content
+            .lines()
+            .any(|l| l.trim() == "ACCESSIBILITY_ENABLED=1");
+    items.push(DoctorItem {
+        name: "ACCESSIBILITY_ENABLED=1",
+        present: a11y,
+    });
+
+    let qt_a11y = std::env::var("QT_LINUX_ACCESSIBILITY_ALWAYS_ON").as_deref() == Ok("1")
+        || env_content
+            .lines()
+            .any(|l| l.trim() == "QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1");
+    items.push(DoctorItem {
+        name: "QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1",
+        present: qt_a11y,
+    });
+
+    let udev_rule_content = |path: &Path| -> bool {
+        std::fs::read_to_string(path)
+            .map(|c| c.contains("uaccess"))
+            .unwrap_or(false)
+    };
+    let udev_custom = std::env::var_os("THODU_UDEV_DIR")
+        .map(PathBuf::from)
+        .map(|d| udev_rule_content(&d.join("99-thodu-uinput.rules")))
+        .unwrap_or(false);
+    let udev = udev_custom
+        || udev_rule_content(&PathBuf::from("/etc/udev/rules.d/99-thodu-uinput.rules"))
+        || udev_rule_content(&home.join(".config/udev/rules.d/99-thodu-uinput.rules"));
+    items.push(DoctorItem {
+        name: "uinput udev rule",
+        present: udev,
+    });
+
+    let plugin = home
+        .join(".config/omarchy/plugins/io.github.itsgg.thodu/manifest.json")
+        .exists();
+    items.push(DoctorItem {
+        name: "overlay plugin",
+        present: plugin,
+    });
+
+    let service_file = home.join(".config/systemd/user/thodud.service").exists();
+    let service_enabled = home
+        .join(".config/systemd/user/default.target.wants/thodud.service")
+        .exists();
+    items.push(DoctorItem {
+        name: "thodud user service",
+        present: service_file && service_enabled,
+    });
+
+    let bindings_file = home.join(".config/hypr/bindings.lua");
+    let bindings = std::fs::read_to_string(&bindings_file)
+        .map(|c| c.contains("thodu hints") && c.contains("thodu grid"))
+        .unwrap_or(false);
+    items.push(DoctorItem {
+        name: "hyprland keybindings",
+        present: bindings,
+    });
+
+    let all_present = items.iter().all(|i| i.present);
+    (items, all_present)
+}
+
+fn copy_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dst).map_err(|e| format!("{}: {e}", dst.display()))?;
+    for entry in std::fs::read_dir(src).map_err(|e| format!("{}: {e}", src.display()))? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        let target = dst.join(entry.file_name());
+        if path.is_dir() {
+            copy_recursive(&path, &target)?;
+        } else {
+            std::fs::copy(&path, &target).map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+    }
+    Ok(())
+}
+
+fn install_plugin_files(dest: &Path) -> Result<(), String> {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let candidates = [
+        std::env::var_os("THODU_PLUGIN_SOURCE").map(PathBuf::from),
+        std::env::current_dir()
+            .ok()
+            .filter(|d| d.join("manifest.json").exists()),
+        manifest_dir
+            .parent()
+            .and_then(|p| p.parent())
+            .map(PathBuf::from),
+    ];
+    let source = candidates
+        .into_iter()
+        .flatten()
+        .find(|d| d.join("manifest.json").exists());
+    if let Some(src) = source {
+        let files = ["manifest.json", "Thodu.qml", "BarProbe.qml"];
+        for file in &files {
+            let from = src.join(file);
+            if from.exists() {
+                std::fs::copy(&from, dest.join(file))
+                    .map_err(|e| format!("{}: {e}", from.display()))?;
+            }
+        }
+        let dirs = ["components", "lib"];
+        for dir in &dirs {
+            let from = src.join(dir);
+            if from.is_dir() {
+                copy_recursive(&from, &dest.join(dir))?;
+            }
+        }
+    } else {
+        std::fs::write(
+            dest.join("manifest.json"),
+            "{\"id\":\"io.github.itsgg.thodu\",\"kinds\":[\"overlay\",\"bar-widget\"]}\n",
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn add_bar_widget_if_present(shell_json: &Path) {
+    let Ok(content) = std::fs::read_to_string(shell_json) else {
+        return;
+    };
+    if content.contains("io.github.itsgg.thodu") {
+        return;
+    }
+    let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return;
+    };
+    let Some(right) = val
+        .get_mut("bar")
+        .and_then(|b| b.get_mut("right"))
+        .and_then(|r| r.as_array_mut())
+    else {
+        return;
+    };
+    right.push(serde_json::json!({"id": "io.github.itsgg.thodu"}));
+    if let Ok(formatted) = serde_json::to_string_pretty(&val) {
+        let _ = std::fs::write(shell_json, formatted + "\n");
+    }
+}
+
+fn do_install(home: &Path) -> Result<(), String> {
+    let env_dir = home.join(".config/environment.d");
+    std::fs::create_dir_all(&env_dir).map_err(|e| format!("{}: {e}", env_dir.display()))?;
+    let env_file = env_dir.join("90-thodu.conf");
+    let env_content = "ACCESSIBILITY_ENABLED=1\nQT_LINUX_ACCESSIBILITY_ALWAYS_ON=1\n";
+    std::fs::write(&env_file, env_content).map_err(|e| format!("{}: {e}", env_file.display()))?;
+
+    let udev_rule = "KERNEL==\"uinput\", SUBSYSTEM==\"misc\", TAG+=\"uaccess\", OPTIONS+=\"static_node=uinput\"\n";
+    if let Some(custom) = std::env::var_os("THODU_UDEV_DIR") {
+        let dir = PathBuf::from(custom);
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        std::fs::write(dir.join("99-thodu-uinput.rules"), udev_rule)
+            .map_err(|e| format!("{}: {e}", dir.display()))?;
+    } else {
+        let etc_udev = Path::new("/etc/udev/rules.d");
+        let target = if etc_udev.exists()
+            && std::fs::OpenOptions::new()
+                .write(true)
+                .open(etc_udev.join("99-thodu-uinput.rules"))
+                .is_ok()
+        {
+            etc_udev.join("99-thodu-uinput.rules")
+        } else {
+            let udev_dir = home.join(".config/udev/rules.d");
+            std::fs::create_dir_all(&udev_dir)
+                .map_err(|e| format!("{}: {e}", udev_dir.display()))?;
+            udev_dir.join("99-thodu-uinput.rules")
+        };
+        std::fs::write(&target, udev_rule).map_err(|e| format!("{}: {e}", target.display()))?;
+    }
+
+    let plugin_dest = home.join(".config/omarchy/plugins/io.github.itsgg.thodu");
+    std::fs::create_dir_all(&plugin_dest).map_err(|e| format!("{}: {e}", plugin_dest.display()))?;
+    install_plugin_files(&plugin_dest)?;
+
+    let service_dir = home.join(".config/systemd/user");
+    std::fs::create_dir_all(&service_dir).map_err(|e| format!("{}: {e}", service_dir.display()))?;
+    let service_unit = "[Unit]\nDescription=Thodu hints daemon\nAfter=graphical-session.target\n\n[Service]\nExecStart=%h/.local/bin/thodud\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n";
+    let service_file = service_dir.join("thodud.service");
+    std::fs::write(&service_file, service_unit)
+        .map_err(|e| format!("{}: {e}", service_file.display()))?;
+    let wants_dir = service_dir.join("default.target.wants");
+    std::fs::create_dir_all(&wants_dir).map_err(|e| format!("{}: {e}", wants_dir.display()))?;
+    let symlink_path = wants_dir.join("thodud.service");
+    if !symlink_path.exists() {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("../thodud.service", &symlink_path)
+            .map_err(|e| format!("{}: {e}", symlink_path.display()))?;
+    }
+
+    let hypr_dir = home.join(".config/hypr");
+    std::fs::create_dir_all(&hypr_dir).map_err(|e| format!("{}: {e}", hypr_dir.display()))?;
+    let bindings_file = hypr_dir.join("bindings.lua");
+    let current_bindings = std::fs::read_to_string(&bindings_file).unwrap_or_default();
+    if !current_bindings.contains("thodu hints") {
+        let binding_lines = "\n-- Thodu: keyboard hints for everything on an Omarchy screen\no.bind(\"SUPER + J\", \"Thodu hints\", \"thodu hints\")\no.bind(\"SUPER + SHIFT + J\", \"Thodu grid\", \"thodu grid\")\n";
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&bindings_file)
+            .map_err(|e| format!("{}: {e}", bindings_file.display()))?;
+        std::io::Write::write_all(&mut f, binding_lines.as_bytes())
+            .map_err(|e| format!("{}: {e}", bindings_file.display()))?;
+    }
+
+    add_bar_widget_if_present(&home.join(".config/omarchy/shell.json"));
+
+    Ok(())
+}
+
+fn doctor() -> Result<(), String> {
+    let home = home_dir()?;
+    let (items, ok) = check_doctor(&home);
+    for item in &items {
+        println!(
+            "{}: {}",
+            item.name,
+            if item.present { "present" } else { "missing" }
+        );
+    }
+    if ok {
+        Ok(())
+    } else {
+        let missing = items.iter().filter(|i| !i.present).count();
+        Err(format!("{missing} item(s) missing; run thodu install"))
+    }
+}
+
+fn install() -> Result<(), String> {
+    let home = home_dir()?;
+    do_install(&home)?;
+    println!("thodu installed successfully");
+    Ok(())
+}
+
 fn run(args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str) {
         Some(mode @ ("hints" | "grid")) => {
+            check_hyprland()?;
             let reply = ask(
                 json!({"v": VERSION, "op": "start", "mode": mode, "window": value(args, "--window"), "test": flag(args, "--test"), "overlay": !flag(args, "--no-overlay")}),
             )?;
@@ -264,6 +554,8 @@ fn run(args: &[String]) -> Result<(), String> {
             let session = args.get(1).ok_or("usage: thodu close SESSION")?;
             ask(json!({"v": VERSION, "op": "close", "session": session}))?;
         }
+        Some("install") => install()?,
+        Some("doctor") => doctor()?,
         _ => return Err(String::new()),
     }
     Ok(())
@@ -274,7 +566,9 @@ fn main() -> ExitCode {
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) if e.is_empty() => {
-            eprintln!("usage: thodu hints|grid|targets|key|close|bench|record-tree ...");
+            eprintln!(
+                "usage: thodu hints|grid|targets|key|close|bench|record-tree|install|doctor ..."
+            );
             ExitCode::from(2)
         }
         Err(e) => {
@@ -288,7 +582,7 @@ fn main() -> ExitCode {
 mod tests {
     use std::path::PathBuf;
 
-    use super::keep_samples;
+    use super::{check_doctor, check_hyprland_socket, do_install, keep_samples};
 
     // bench says where its samples are only when it wrote them.
     #[test]
@@ -301,5 +595,65 @@ mod tests {
         );
         let err = keep_samples(&PathBuf::from("/proc/thodu-bench"), "x").expect_err("not writable");
         assert!(err.starts_with("/proc/thodu-bench"), "{err}");
+    }
+
+    // REQ-CLI-02: when HYPRLAND_INSTANCE_SIGNATURE names no socket, thodu hints
+    // exits 1 with ERROR.
+    #[test]
+    fn req_cli_02_no_hyprland_socket_exits_1_with_error() {
+        let err = check_hyprland_socket(Some("/tmp/fake-runtime"), Some("nonexistent"))
+            .expect_err("no socket should fail");
+        assert!(
+            err.contains("cannot connect to Hyprland on /tmp/fake-runtime/hypr/nonexistent/.socket.sock: No such file or directory"),
+            "unexpected error message: {err}"
+        );
+        let err_unset = check_hyprland_socket(Some("/tmp/fake-runtime"), None)
+            .expect_err("unset signature should fail");
+        assert!(
+            err_unset.contains("HYPRLAND_INSTANCE_SIGNATURE is not set; is Hyprland running?"),
+            "unexpected error message: {err_unset}"
+        );
+    }
+
+    // REQ-INSTALL-01: on a fake home directory, thodu install then thodu doctor
+    // reports every item present, and thodu doctor alone reports them missing.
+    #[test]
+    fn req_install_01_fake_home_reports_missing_then_installed_reports_present() {
+        let fake_home =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-fake-home");
+        let _ = std::fs::remove_dir_all(&fake_home);
+        std::fs::create_dir_all(&fake_home).expect("create fake home");
+
+        // Doctor alone on clean fake home reports missing items and fails
+        let (items_before, ok_before) = check_doctor(&fake_home);
+        assert!(!ok_before, "clean fake home should not pass doctor check");
+        assert_eq!(items_before.len(), 6, "expected 6 check items");
+        for item in &items_before {
+            assert!(
+                !item.present,
+                "item '{}' should be missing before install",
+                item.name
+            );
+        }
+
+        // Run install on fake home
+        do_install(&fake_home).expect("install should succeed");
+
+        // Doctor after install reports all items present and succeeds
+        let (items_after, ok_after) = check_doctor(&fake_home);
+        assert!(
+            ok_after,
+            "fake home after install should pass doctor check, items: {:?}",
+            items_after
+        );
+        for item in &items_after {
+            assert!(
+                item.present,
+                "item '{}' should be present after install",
+                item.name
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&fake_home);
     }
 }

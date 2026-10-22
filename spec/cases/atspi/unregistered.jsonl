@@ -1,0 +1,5 @@
+{"case": "an unregistered Chromium", "class": "chromium", "exe": "/usr/lib/chromium/chromium", "libs": ["/usr/lib/libgtk-3.so.0", "/usr/lib/chromium/libEGL.so"], "toolkit": "Chromium", "needs": "ACCESSIBILITY_ENABLED=1"}
+{"case": "an unregistered Electron app", "class": "md.obsidian.Obsidian", "exe": "/usr/lib/electron43/electron", "libs": ["/usr/lib/electron43/libffmpeg.so"], "toolkit": "Electron", "needs": "ACCESSIBILITY_ENABLED=1"}
+{"case": "an unregistered GTK3 app", "class": "org.gnome.Evince", "exe": "/usr/bin/evince", "libs": ["/usr/lib/libgtk-3.so.0.2400.43"], "toolkit": "GTK3", "needs": "NO_AT_BRIDGE=1"}
+{"case": "an unregistered Qt app", "class": "org.kde.okular", "exe": "/usr/bin/okular", "libs": ["/usr/lib/libQt6Gui.so.6", "/usr/lib/libgtk-3.so.0"], "toolkit": "Qt", "needs": "QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1"}
+{"case": "an app with no toolkit the bus knows", "class": "dev.zed.Zed", "exe": "/usr/lib/zed/zed-editor", "libs": ["/usr/lib/libxkbcommon.so.0"], "toolkit": "", "needs": "Space opens the grid"}

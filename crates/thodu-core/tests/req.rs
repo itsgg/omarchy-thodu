@@ -17,6 +17,7 @@ use thodu_core::protocol::{Envelope, LabeledTarget, OpenEvent, Reply, Request, T
 use thodu_core::session::{Button, DOUBLE_MS, Key, Session, State};
 use thodu_core::stale::is_stale;
 use thodu_core::tree::{self, App, Snapshot};
+use thodu_core::unregistered;
 
 fn cases(path: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -823,5 +824,47 @@ fn req_cli_01_targets_json_matches_the_recorded_targets() {
             })
             .collect();
         assert_eq!(printed, expected(name), "{name}");
+    }
+}
+
+// REQ-SESSION-04: with nothing to label, the session opens on the grid.
+#[test]
+fn req_session_04_nothing_to_label_opens_the_grid() {
+    let area = Rect::new(0, 0, 1536, 864);
+    let s = Session::begin(Vec::new(), area, false, false);
+    assert_eq!(s.grid, [area], "the grid covers the monitor");
+    assert_eq!(s.targets.len(), 26 * 26);
+    let s = Session::begin(
+        vec![target("Save", Rect::new(0, 0, 80, 30))],
+        area,
+        false,
+        false,
+    );
+    assert!(s.grid.is_empty(), "targets found: no grid");
+    let s = Session::begin(
+        vec![target("Save", Rect::new(0, 0, 80, 30))],
+        area,
+        false,
+        true,
+    );
+    assert_eq!(s.grid.len(), 1, "thodu grid asks for it");
+}
+
+// REQ-SESSION-05: an app not on the bus gets a status line naming what it
+// needs, from its executable and libraries.
+#[test]
+fn req_session_05_unregistered_apps_are_told_what_they_need() {
+    for case in jsonl("atspi/unregistered.jsonl") {
+        let name = case["case"].as_str().expect("case");
+        let libs: Vec<String> = serde_json::from_value(case["libs"].clone()).expect("libs");
+        let exe = case["exe"].as_str().expect("exe");
+        let class = case["class"].as_str().expect("class");
+        assert_eq!(unregistered::toolkit(exe, &libs), case["toolkit"], "{name}");
+        let message = unregistered::message(class, exe, &libs);
+        assert!(message.starts_with(class), "{name}: {message}");
+        assert!(
+            message.contains(case["needs"].as_str().expect("needs")),
+            "{name}: {message}"
+        );
     }
 }

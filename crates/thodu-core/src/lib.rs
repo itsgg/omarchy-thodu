@@ -12,3 +12,4 @@ pub mod protocol;
 pub mod session;
 pub mod stale;
 pub mod tree;
+pub mod unregistered;

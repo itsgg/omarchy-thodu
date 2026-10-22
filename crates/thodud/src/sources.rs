@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use thodu_core::model::{ActionKind, Monitor, Rect, Role, Source as From, Target, Window};
 use thodu_core::protocol::ShellItem;
-use thodu_core::tree;
+use thodu_core::{tree, unregistered};
 
 use crate::atspi;
 
@@ -112,12 +112,22 @@ impl Source for Atspi {
         let snapshot = atspi::snapshot(reader, window, monitor, &mut walk, &mut woken);
         let took = started.elapsed().as_millis();
         if snapshot.apps.is_empty() {
+            // REQ-SESSION-05: say what the app needs; the other sources
+            // carry on.
+            let proc = std::path::PathBuf::from(format!("/proc/{}", window.pid));
+            let exe = std::fs::read_link(proc.join("exe"))
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
+            let libs: Vec<String> = std::fs::read_to_string(proc.join("maps"))
+                .unwrap_or_default()
+                .lines()
+                .filter_map(|l| l.split_whitespace().nth(5))
+                .filter(|p| p.contains(".so"))
+                .map(String::from)
+                .collect();
             return Ok((
                 Vec::new(),
-                format!(
-                    "{} (pid {}) is not on the accessibility bus",
-                    window.class, window.pid
-                ),
+                unregistered::message(&window.class, &exe, &libs),
             ));
         }
         let targets = tree::match_frame(&snapshot)
