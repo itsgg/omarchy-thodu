@@ -1,6 +1,6 @@
 # 0008: Default install keybindings
 
-Status: merged
+Status: proposed
 Why: SPEC open question O4 says no keys are bound by default and GG chooses at install. GG decided that a fresh install should default to `SUPER + SHIFT + F12` for hints and `SUPER + CTRL + F12` for the grid. His own Hyprland configuration uses `CTRL + SPACE` and `CTRL + SHIFT + SPACE`; a repeat install without key options must preserve those local choices. The existing `--hints-key` and `--grid-key` options remain explicit overrides. On merge, resolve O4 with the F12 pair as the project default and GG's Ctrl pair as his personal override.
 
 ## Modified
