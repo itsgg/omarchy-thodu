@@ -179,9 +179,12 @@ Acceptance:
 ### Installing
 
 ### REQ-INSTALL-01: Works on Omarchy as installed
-When `thodu install` runs, the system shall set `ACCESSIBILITY_ENABLED=1` and `QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1` in the Hyprland session environment, install a udev rule giving the logged-in user `/dev/uinput` through `uaccess`, install and enable the overlay plugin and the `thodud` user service, and bind the keys GG chose in his Lua configuration; and `thodu doctor` shall report each of these as present or missing.
+When `thodu install` runs, the system shall set `ACCESSIBILITY_ENABLED=1` and `QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1` in the Hyprland session environment, install a udev rule giving the logged-in user `/dev/uinput` through `uaccess`, install and enable the overlay plugin and the `thodud` user service, and bind keys in the user's Lua configuration; `thodu doctor` shall report each of these as present or missing. On a fresh configuration with no active Thodu bindings, an install without key options shall bind `SUPER + SHIFT + F12` to `thodu hints` and `SUPER + CTRL + F12` to `thodu grid`. When both Thodu bindings already exist, an install without key options shall preserve them. Supplying both `--hints-key` and `--grid-key` shall replace both Thodu bindings with those choices.
 Acceptance:
 - scenario: on a fake home directory, `thodu install` then `thodu doctor` reports every item present, and `thodu doctor` alone reports them missing.
+- scenario: on a fresh fake home directory, non-interactive `thodu install` writes the F12 defaults and `thodu doctor` reports the bindings present.
+- scenario: on a fake home directory with both Thodu bindings, install without key options preserves them.
+- scenario: explicit key options replace both Thodu bindings.
 
 ## 7. Interfaces
 
@@ -249,7 +252,6 @@ Unit tests and properties cover labels, search, the grid, coordinates and the st
 - O1. Rust or another language for `thodud`: consequence, every later task; interim, Rust, measured on the GTK3 reference window at 61.2 ms median and 72.6 ms at the 95th percentile (release build, 50 sessions, 2026-10-21); next action, Slack's window after task 0005; owner, the coordinator, GG if it changes SEED.
 - O2. An accessibility bus inside a private headless display, so live checks can run without GG's session: interim, recorded trees and nightly live checks on his session; next action, a task after 0004.
 - O3. Labels-only or search-first as the default: interim, search-first as Homerow does; next action, GG's use after the first slice.
-- O4. The keys that start a session: interim, none bound by default; next action, GG chooses from his free bindings at install.
 
 ## 13. Changes and retired requirements
 
@@ -260,6 +262,7 @@ Unit tests and properties cover labels, search, the grid, coordinates and the st
 - 2026-10-21: change 0004, where the pointer goes back to, the wait for a second Return, and the grid's interface.
 - 2026-10-21: change 0005, recording trees, and the action that marks a clickable element.
 - 2026-10-21: change 0007, the bar's items come from a bar widget of the overlay plugin.
+- 2026-10-22: change 0008, fresh installs use the F12 defaults, preserve existing bindings, and accept explicit overrides; O4 is resolved, with GG's local Ctrl bindings retained.
 
 ### Retired
 
