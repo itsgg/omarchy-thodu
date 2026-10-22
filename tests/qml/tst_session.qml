@@ -150,7 +150,7 @@ Item {
             const keys = top.keysSent().map(k => k.key + (k.shift ? "+shift" : "") + (k.ctrl ? "+ctrl" : ""));
             keyClick(Qt.Key_Slash);
             compare(keys.concat(["/"]).length, top.keysSent().length);
-            compare(keys, ["s+shift", "l", "Tab", "Backtab+shift", "BackSpace", "Return+ctrl"]);
+            compare(keys, ["S+shift", "l", "Tab", "Backtab+shift", "BackSpace", "Return+ctrl"]);
             compare(top.keysSent()[6].key, "/", "REQ-SEARCH-02: slash starts a search in labels-only mode");
             verify(top.keysSent().every(k => k.session === "s1"));
         }
@@ -159,6 +159,18 @@ Item {
             const request = view.keyRequest(Qt.Key_A, Qt.NoModifier, "A");
             compare(request.key, "A");
             compare(request.shift, false);
+        }
+
+        function test_req_search_01_shifted_letter_key_event_is_uppercase() {
+            keyClick(Qt.Key_D, Qt.ShiftModifier);
+            compare(top.keysSent().length, 1);
+            compare(top.keysSent()[0].key, "D");
+            verify(top.keysSent()[0].shift);
+        }
+
+        function test_req_act_02_return_auto_repeat_is_ignored() {
+            compare(view.keyRequest(Qt.Key_Return, Qt.NoModifier, "", true), null);
+            compare(view.keyRequest(Qt.Key_Return, Qt.NoModifier, "", false).key, "Return");
         }
 
         function test_acting_hands_over_to_thodud() {

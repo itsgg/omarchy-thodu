@@ -405,6 +405,37 @@ fn req_act_01_uppercase_completion_acts_but_lowercase_only_focuses() {
     assert_eq!(focused.state, State::Showing);
 }
 
+#[test]
+fn req_act_01_single_letter_d_selects_and_uppercase_d_acts() {
+    let targets: Vec<Target> = (0..20)
+        .map(|i| target(&format!("t{i}"), Rect::new(0, i * 40, 100, 30)))
+        .collect();
+    let mut focused = Session::new(targets.clone(), true);
+    assert_eq!(focused.labels[2], "d");
+    assert!(
+        focused
+            .key(Key::Char {
+                c: 'd',
+                shift: false
+            })
+            .is_none()
+    );
+    assert_eq!(focused.focused, Some(2));
+    let action = focused
+        .key(Key::Return {
+            shift: false,
+            ctrl: false,
+        })
+        .expect("Return activates the focused d target");
+    assert_eq!(action.target, 2);
+
+    let mut automatic = Session::new(targets, true);
+    let action = automatic
+        .key(Key::Upper { c: 'D' })
+        .expect("uppercase D activates its single-letter target");
+    assert_eq!(action.target, 2);
+}
+
 // REQ-ACT-01: Return with nothing focused does nothing; Escape ends the session.
 #[test]
 fn req_act_01_return_needs_a_focus() {

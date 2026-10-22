@@ -153,7 +153,10 @@ FocusScope {
     }
 
     // A key as SPEC section 7 names it, or null for keys a session ignores.
-    function keyRequest(key, modifiers, text) {
+    function keyRequest(key, modifiers, text, autoRepeat) {
+        // REQ-ACT-02: an OS key repeat is not a second deliberate Return.
+        if (autoRepeat && (key === Qt.Key_Return || key === Qt.Key_Enter))
+            return null;
         const shift = (modifiers & Qt.ShiftModifier) !== 0;
         const ctrl = (modifiers & Qt.ControlModifier) !== 0;
         let name = "";
@@ -173,7 +176,8 @@ FocusScope {
             name = "/";
         else if (key >= Qt.Key_A && key <= Qt.Key_Z) {
             const lower = String.fromCharCode(key).toLowerCase();
-            name = text && text.length === 1 && text.toLowerCase() === lower ? text : lower;
+            const generatedUppercase = text && text.length === 1 && text !== text.toLowerCase();
+            name = shift || generatedUppercase ? lower.toUpperCase() : lower;
         }
         else
             return null;
@@ -207,7 +211,7 @@ FocusScope {
         event.accepted = true;
         if (!view.active)
             return;
-        const request = view.keyRequest(event.key, event.modifiers, event.text);
+        const request = view.keyRequest(event.key, event.modifiers, event.text, event.isAutoRepeat);
         if (!request)
             return;
         view.send(request);
