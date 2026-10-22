@@ -195,6 +195,18 @@ Item {
             compare(top.ended.why, "no second Return");
         }
 
+        function test_req_act_02_workspace_change_ends_the_linger() {
+            top.nextState = "acting";
+            top.nextLinger = true;
+            keyClick(Qt.Key_Return);
+            tryVerify(() => view.lingering, 1000, "the view waits after the click");
+            view.apply({ v: 1, ok: true, session: "s1", workspace_changed: true });
+            verify(top.ended !== null, "a workspace switch ends the old session");
+            compare(top.ended.why, "workspace changed");
+            compare(top.ended.acting, false);
+            verify(!view.activeFocus, "the overlay gives the keyboard back");
+        }
+
         function test_req_act_02_another_key_ends_the_wait_at_once() {
             top.nextState = "acting";
             top.nextLinger = true;

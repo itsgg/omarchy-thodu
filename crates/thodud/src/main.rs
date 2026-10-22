@@ -38,6 +38,8 @@ const SHELL_BUDGET: Duration = Duration::from_millis(40);
 const RECORD_BUDGET: Duration = Duration::from_secs(5);
 /// How long an action waits for the overlay to say it is gone.
 const HIDE_WAIT: Duration = Duration::from_millis(400);
+/// Wait briefly for an Omarchy bar command to report a workspace switch.
+const WORKSPACE_CHANGE_WAIT: Duration = Duration::from_millis(150);
 /// The longest a session waits after a click for a second Return before
 /// it puts the pointer back without the overlay saying so.
 const LINGER_MAX: Duration = Duration::from_millis(1000);
@@ -60,6 +62,8 @@ struct Entry {
     pending: u8,
     /// The first click is done.
     clicked: bool,
+    /// The click changed this monitor's active workspace.
+    workspace_changed: bool,
     /// The session was closed while a click was pending.
     closing: bool,
     /// Where the pointer goes back to when the session ends.
@@ -214,6 +218,7 @@ impl Daemon {
                     },
                     pending: 0,
                     clicked: false,
+                    workspace_changed: false,
                     closing: false,
                     restore: None,
                 },
@@ -404,11 +409,17 @@ impl Daemon {
         }) else {
             return;
         };
-        let Some((window, monitor, test, grid)) = sessions.get(id).map(|e| {
+        let Some((window, monitor, test, grid, source)) = sessions.get(id).map(|e| {
             // Grid and bar targets are points on the monitor, not in the
             // window, so the window moving does not make them stale.
             let grid = e.session.targets[act.target].source != Source::Atspi;
-            (e.window.clone(), e.monitor.clone(), e.test, grid)
+            (
+                e.window.clone(),
+                e.monitor.clone(),
+                e.test,
+                grid,
+                e.session.targets[act.target].source,
+            )
         }) else {
             return;
         };
@@ -441,14 +452,33 @@ impl Daemon {
                 hypr::window_at(act.point.0, act.point.1).as_deref(),
             )
         });
+        let workspace_before = (act.linger && source == Source::Shell)
+            .then(|| hypr::active_workspace_id(&monitor.name))
+            .flatten();
         let now = if act.linger {
             None
         } else {
             restore.as_ref().map(|(m, p)| (m, *p))
         };
-        if let Err(e) = self.perform(&monitor, act, now) {
+        let click_result = self.perform(&monitor, act, now);
+        if let Err(e) = &click_result {
             eprintln!("thodud: {id}: the click failed: {e}");
         }
+        let workspace_changed = click_result.is_ok()
+            && workspace_before.is_some_and(|before| {
+                let deadline = Instant::now() + WORKSPACE_CHANGE_WAIT;
+                loop {
+                    if hypr::active_workspace_id(&monitor.name)
+                        .is_some_and(|current| current != before)
+                    {
+                        break true;
+                    }
+                    if Instant::now() >= deadline {
+                        break false;
+                    }
+                    thread::sleep(Duration::from_millis(5));
+                }
+            });
         let Ok(mut sessions) = self.sessions.lock() else {
             return;
         };
@@ -456,6 +486,7 @@ impl Daemon {
             return;
         };
         entry.clicked = true;
+        entry.workspace_changed = workspace_changed;
         entry.pending = entry.pending.saturating_sub(1);
         if act.linger {
             entry.restore = restore;
@@ -544,17 +575,43 @@ impl Daemon {
     /// The overlay is out of the way: a pending click may run. A session
     /// that is not acting has nothing to wait for and ends.
     fn hidden(&self, id: &str) -> Res<Reply> {
-        let acting = {
-            let mut sessions = self.sessions.lock().map_err(|_| internal("session lock"))?;
-            match sessions.get_mut(id) {
-                Some(entry) => {
-                    entry.hidden = true;
-                    entry.session.state == State::Acting || entry.pending > 0
-                }
-                None => true,
+        let mut sessions = self.sessions.lock().map_err(|_| internal("session lock"))?;
+        let wait_for_click = match sessions.get_mut(id) {
+            Some(entry) => {
+                entry.hidden = true;
+                entry.session.state == State::Acting
+                    && entry.pending > 0
+                    && entry.session.act.as_ref().is_some_and(|act| act.linger)
             }
+            None => false,
         };
         self.changed.notify_all();
+
+        if wait_for_click {
+            let (sessions, _) = self
+                .changed
+                .wait_timeout_while(sessions, HIDE_WAIT, |sessions| {
+                    sessions
+                        .get(id)
+                        .is_some_and(|entry| !entry.clicked && !entry.closing)
+                })
+                .map_err(|_| internal("session lock"))?;
+            let clicked = sessions.get(id).is_some_and(|entry| entry.clicked);
+            let workspace_changed = sessions
+                .get(id)
+                .is_some_and(|entry| entry.workspace_changed);
+            return Ok(Reply {
+                session: Some(id.to_string()),
+                clicked: Some(clicked),
+                workspace_changed: Some(workspace_changed),
+                ..Reply::ok()
+            });
+        }
+
+        let acting = sessions
+            .get(id)
+            .is_some_and(|entry| entry.session.state == State::Acting || entry.pending > 0);
+        drop(sessions);
         if !acting {
             self.finish(id);
         }
@@ -816,13 +873,18 @@ fn main() {
 mod tests {
     use thodu_core::model::Window;
 
+    use std::collections::{HashMap, HashSet};
+    use std::path::PathBuf;
     use std::sync::Arc;
-    use std::time::Duration;
+    use std::sync::atomic::{AtomicBool, AtomicU64};
+    use std::sync::{Condvar, Mutex, mpsc};
+    use std::time::{Duration, Instant};
 
-    use thodu_core::model::{Monitor, Target};
-    use thodu_core::session::Session;
+    use thodu_core::model::{ActionKind, Monitor, Rect, Role, Source as TargetSource, Target};
+    use thodu_core::protocol::Timing;
+    use thodu_core::session::{Key, Session};
 
-    use super::{grid_window, with_grid_note};
+    use super::{Daemon, Entry, grid_window, with_grid_note};
     use crate::sources::{self, Found, Source};
 
     struct Empty(&'static str);
@@ -887,5 +949,96 @@ mod tests {
         assert_eq!(grid_window(Some(on(0)), 0), Some(on(0)));
         assert_eq!(grid_window(Some(on(1)), 0), None);
         assert_eq!(grid_window(None, 0), None);
+    }
+
+    // REQ-ACT-02: the focus handoff reply waits until the first click has
+    // completed and reports whether exclusive keyboard focus can be reclaimed.
+    #[test]
+    fn req_act_02_hidden_reply_waits_for_lingering_click() {
+        let target = Target {
+            id: "target".into(),
+            bounds: Rect::new(10, 10, 20, 20),
+            role: Role::Button,
+            text: "target".into(),
+            source: TargetSource::Shell,
+            actions: vec![ActionKind::Click],
+            window: String::new(),
+        };
+        let mut session = Session::new(vec![target], true);
+        session.focused = Some(0);
+        assert!(
+            session
+                .key_at(
+                    Key::Return {
+                        shift: false,
+                        ctrl: false,
+                    },
+                    0,
+                )
+                .is_some()
+        );
+        let daemon = Arc::new(Daemon {
+            socket: PathBuf::new(),
+            shutdown: AtomicBool::new(false),
+            sessions: Mutex::new(HashMap::from([(
+                "s1".into(),
+                Entry {
+                    session,
+                    window: None,
+                    monitor: Monitor {
+                        name: "M".into(),
+                        x: 0,
+                        y: 0,
+                        width: 100,
+                        height: 100,
+                        scale: 1.0,
+                    },
+                    status: String::new(),
+                    test: false,
+                    hidden: false,
+                    created: Instant::now(),
+                    timing: Timing::default(),
+                    pending: 1,
+                    clicked: false,
+                    workspace_changed: true,
+                    closing: false,
+                    restore: None,
+                },
+            )])),
+            changed: Condvar::new(),
+            next: AtomicU64::new(0),
+            atspi: Arc::new(sources::Atspi {
+                bus: Mutex::new(None),
+                woken: Mutex::new(HashSet::new()),
+                budget: Duration::ZERO,
+            }),
+            shell: Arc::new(sources::Shell {
+                items: Mutex::new(HashMap::new()),
+                budget: Duration::ZERO,
+            }),
+            sources: Vec::new(),
+            listeners: Mutex::new(crate::listeners::Listeners::new()),
+            keyboard: Mutex::new(None),
+        });
+        let worker = Arc::clone(&daemon);
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || tx.send(worker.hidden("s1")).unwrap());
+
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_millis(20)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        {
+            let mut sessions = daemon.sessions.lock().unwrap();
+            let entry = sessions.get_mut("s1").unwrap();
+            assert!(entry.hidden, "the action is released while the reply waits");
+            entry.clicked = true;
+        }
+        daemon.changed.notify_all();
+
+        let reply = rx.recv_timeout(Duration::from_secs(1)).unwrap().unwrap();
+        assert_eq!(reply.session.as_deref(), Some("s1"));
+        assert_eq!(reply.clicked, Some(true));
+        assert_eq!(reply.workspace_changed, Some(true));
     }
 }

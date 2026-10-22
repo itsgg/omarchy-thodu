@@ -234,6 +234,13 @@ pub struct Reply {
     pub status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub timing: Option<Timing>,
+    /// For a lingering action, the first click attempt is complete.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub clicked: Option<bool>,
+    /// The click changed the active workspace, so the overlay should end
+    /// without reclaiming keyboard focus.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub workspace_changed: Option<bool>,
     /// A recorded snapshot, in the shape of spec/cases/atspi/*.json.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub snapshot: Option<serde_json::Value>,

@@ -138,6 +138,21 @@ pub fn focused_monitor() -> Result<MonitorEntry, String> {
         .ok_or_else(|| format!("no monitor {focused}"))
 }
 
+/// The active workspace on a monitor, or None when Hyprland has no report.
+pub fn active_workspace_id(name: &str) -> Option<i64> {
+    let list = json("monitors").ok()?;
+    active_workspace_id_from(&list, name)
+}
+
+fn active_workspace_id_from(list: &Value, name: &str) -> Option<i64> {
+    list.as_array()?
+        .iter()
+        .find(|m| m.get("name").and_then(Value::as_str) == Some(name))?
+        .get("activeWorkspace")?
+        .get("id")?
+        .as_i64()
+}
+
 pub fn monitor_of(window: &Window) -> Result<Monitor, String> {
     monitors()?
         .into_iter()
@@ -216,4 +231,20 @@ pub fn window_at(x: i32, y: i32) -> Option<String> {
         })
         .min()
         .map(|(_, address)| address)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    #[test]
+    fn req_act_02_active_workspace_is_scoped_to_monitor() {
+        let monitors = json!([
+            { "name": "DP-1", "activeWorkspace": { "id": 3 } },
+            { "name": "eDP-1", "activeWorkspace": { "id": 1 } }
+        ]);
+        assert_eq!(super::active_workspace_id_from(&monitors, "eDP-1"), Some(1));
+        assert_eq!(super::active_workspace_id_from(&monitors, "DP-1"), Some(3));
+        assert_eq!(super::active_workspace_id_from(&monitors, "missing"), None);
+    }
 }

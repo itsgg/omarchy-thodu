@@ -18,6 +18,11 @@ Item {
     property bool opened: false
     property bool test: false
     property string session: ""
+    property string pendingHiddenSession: ""
+    property string hiddenClickSession: ""
+    property string lingerFocusSession: ""
+    property int keyboardFocusMode: WlrKeyboardFocus.Exclusive
+    property bool focusReleasePending: false
     property bool drawnSent: false
     readonly property string socketPath: Quickshell.env("XDG_RUNTIME_DIR") + "/thodu.sock"
     // Avoid a visibility binding loop through PanelWindow.screen.
@@ -49,6 +54,11 @@ Item {
         view.end("replaced", false);
         root.test = test;
         root.session = session;
+        root.pendingHiddenSession = "";
+        root.hiddenClickSession = "";
+        root.lingerFocusSession = "";
+        root.focusReleasePending = false;
+        root.keyboardFocusMode = WlrKeyboardFocus.Exclusive;
         root.drawnSent = false;
         client.connectTo(socket);
         root.opened = true;
@@ -80,7 +90,14 @@ Item {
 
     Client {
         id: client
-        onReply: reply => view.apply(reply)
+        onReply: reply => {
+            if (reply.clicked === true && reply.session === root.hiddenClickSession) {
+                root.hiddenClickSession = "";
+                if (reply.workspace_changed !== true)
+                    root.keyboardFocusMode = WlrKeyboardFocus.Exclusive;
+            }
+            view.apply(reply);
+        }
         onLost: view.end("thodud closed the connection", false)
     }
 
@@ -99,6 +116,19 @@ Item {
         ignoreUnknownSignals: true
 
         function onFrameSwapped() {
+            if (root.focusReleasePending) {
+                root.focusReleasePending = false;
+                root.lingerFocusSession = "";
+                root.opened = false;
+                return;
+            }
+            if (root.pendingHiddenSession !== "" && view.lingering) {
+                const id = root.pendingHiddenSession;
+                root.pendingHiddenSession = "";
+                root.hiddenClickSession = id;
+                hidden.stop();
+                client.send({ op: "hidden", session: id });
+            }
             if (!root.opened || !view.loaded || root.drawnSent)
                 return;
             root.drawnSent = true;
@@ -117,16 +147,20 @@ Item {
             right: true
         }
         color: "transparent"
-        // While it waits for a second Return after a click, the pointer
-        // passes through to the window beneath (REQ-ACT-02).
-        mask: view.lingering ? passThrough : null
+        // Keep the surface mapped but remove its input region during the wait.
+        mask: view.lingering || root.focusReleasePending ? passThrough : null
         exclusionMode: ExclusionMode.Ignore
         WlrLayershell.namespace: "thodu"
         WlrLayershell.layer: WlrLayer.Overlay
-        WlrLayershell.keyboardFocus: view.active && !root.test ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
+        WlrLayershell.keyboardFocus: root.opened && !root.test ? root.keyboardFocusMode : WlrKeyboardFocus.None
 
         Region {
             id: passThrough
+            intersection: Intersection.Subtract
+            x: 0
+            y: 0
+            width: panel.width
+            height: panel.height
         }
 
         // A click anywhere ends the session without acting.
@@ -138,6 +172,7 @@ Item {
         SessionView {
             id: view
             anchors.fill: parent
+            visible: view.active
             background: Color.menu.background
             foreground: Color.menu.text
             border: Color.menu.border
@@ -147,13 +182,25 @@ Item {
 
             onSend: request => client.send(request)
             onLingered: {
-                hidden.session = view.session;
-                hidden.restart();
+                // Hyprland's exclusive layer fallback catches pointer events
+                // outside an empty mask. Use on-demand focus while the click
+                // passes through, then restore it for a possible second Return.
+                root.keyboardFocusMode = WlrKeyboardFocus.OnDemand;
+                root.lingerFocusSession = view.session;
+                root.pendingHiddenSession = view.session;
             }
             onFinished: (why, acting) => {
                 const id = view.session;
-                root.opened = false;
-                if (acting) {
+                if (root.lingerFocusSession === id) {
+                    // Give Hyprland a frame with normal focus semantics before
+                    // removing the layer; otherwise it can restore the old workspace.
+                    root.keyboardFocusMode = WlrKeyboardFocus.OnDemand;
+                    root.focusReleasePending = true;
+                } else {
+                    root.opened = false;
+                }
+                if (acting || root.pendingHiddenSession === id) {
+                    root.pendingHiddenSession = "";
                     hidden.session = id;
                     hidden.restart();
                 } else if (why !== "thodud stopped answering" && why !== "thodud closed the connection") {
@@ -162,4 +209,5 @@ Item {
             }
         }
     }
+
 }

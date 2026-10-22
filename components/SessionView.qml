@@ -104,6 +104,10 @@ FocusScope {
             view.end(reply.message || "thodud refused the session", false);
             return;
         }
+        if (reply.workspace_changed === true) {
+            view.end("workspace changed", false);
+            return;
+        }
         const shownGeneration = reply.view ? (reply.view.generation || 0) : view.generation;
         if (reply.targets && (!view.loaded || shownGeneration !== view.generation)) {
             view.targets = reply.targets;
