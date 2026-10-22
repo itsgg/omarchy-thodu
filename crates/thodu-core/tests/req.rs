@@ -312,6 +312,28 @@ fn req_search_01_shift_types_labels_and_tab_moves() {
     assert_eq!(s.focused, Some(29));
 }
 
+// REQ-SEARCH-01: uppercase text starts label entry without relying on Shift.
+#[test]
+fn req_search_01_uppercase_types_a_label_without_shift() {
+    let targets: Vec<Target> = (0..30)
+        .map(|i| target(&format!("t{i}"), Rect::new(0, i * 40, 100, 30)))
+        .collect();
+    let mut s = Session::new(targets, false);
+    let label = s
+        .labels
+        .iter()
+        .find(|label| label.len() == 2)
+        .expect("a two-letter label")
+        .clone();
+    let first = label.chars().next().expect("first label letter");
+    s.key(Key::Upper {
+        c: first.to_ascii_uppercase(),
+    });
+    assert_eq!(s.search, "");
+    assert_eq!(s.label_prefix, first.to_string());
+    assert_eq!(s.focused, None);
+}
+
 // REQ-ACT-01: Return clicks the focused target's center with the left button.
 #[test]
 fn req_act_01_return_clicks_the_center() {
@@ -344,6 +366,43 @@ fn req_act_01_return_clicks_the_center() {
     assert_eq!(s.state, State::Closed);
     let physical = monitor().to_physical(act.point.0, act.point.1);
     assert_eq!(physical, (175, 269), "at scale 1.25");
+}
+
+// REQ-ACT-01: uppercase completion clicks; lowercase completion only focuses.
+#[test]
+fn req_act_01_uppercase_completion_acts_but_lowercase_only_focuses() {
+    let targets: Vec<Target> = (0..30)
+        .map(|i| target(&format!("t{i}"), Rect::new(0, i * 40, 100, 30)))
+        .collect();
+    let mut automatic = Session::new(targets.clone(), true);
+    let index = automatic
+        .labels
+        .iter()
+        .position(|label| label.len() == 2)
+        .expect("a two-letter label");
+    let label = automatic.labels[index].clone();
+    let mut action = None;
+    for (position, c) in label.chars().enumerate() {
+        action = if position + 1 == label.len() {
+            automatic.key(Key::Upper {
+                c: c.to_ascii_uppercase(),
+            })
+        } else {
+            automatic.key(Key::Char { c, shift: false })
+        };
+    }
+    let action = action.expect("uppercase completion clicks");
+    assert_eq!(action.target, index);
+    assert_eq!(action.button, Button::Left);
+    assert_eq!(automatic.state, State::Acting);
+
+    let mut focused = Session::new(targets, true);
+    let label = focused.labels[index].clone();
+    for c in label.chars() {
+        assert!(focused.key(Key::Char { c, shift: false }).is_none());
+    }
+    assert_eq!(focused.focused, Some(index));
+    assert_eq!(focused.state, State::Showing);
 }
 
 // REQ-ACT-01: Return with nothing focused does nothing; Escape ends the session.

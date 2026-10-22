@@ -21,6 +21,7 @@ FocusScope {
     // Ids of the targets the search and the typed label still keep.
     property var kept: ({})
     property string focusedId: ""
+    property bool labelSelected: false
     property string search: ""
     // With labels_only, / started a search (REQ-SEARCH-02).
     property bool searching: false
@@ -67,6 +68,7 @@ FocusScope {
         view.monitorName = "";
         view.kept = {};
         view.focusedId = "";
+        view.labelSelected = false;
         view.search = "";
         view.searching = false;
         view.labelPrefix = "";
@@ -133,6 +135,7 @@ FocusScope {
             kept[id] = true;
         view.kept = kept;
         view.focusedId = shown.focused || "";
+        view.labelSelected = shown.label_selected === true;
         view.search = shown.search || "";
         view.searching = shown.searching === true;
         view.labelPrefix = shown.label_prefix || "";
@@ -150,7 +153,7 @@ FocusScope {
     }
 
     // A key as SPEC section 7 names it, or null for keys a session ignores.
-    function keyRequest(key, modifiers) {
+    function keyRequest(key, modifiers, text) {
         const shift = (modifiers & Qt.ShiftModifier) !== 0;
         const ctrl = (modifiers & Qt.ControlModifier) !== 0;
         let name = "";
@@ -168,8 +171,10 @@ FocusScope {
             name = "space";
         else if (key === Qt.Key_Slash)
             name = "/";
-        else if (key >= Qt.Key_A && key <= Qt.Key_Z)
-            name = String.fromCharCode(key).toLowerCase();
+        else if (key >= Qt.Key_A && key <= Qt.Key_Z) {
+            const lower = String.fromCharCode(key).toLowerCase();
+            name = text && text.length === 1 && text.toLowerCase() === lower ? text : lower;
+        }
         else
             return null;
         return { op: "key", session: view.session, key: name, shift: shift, ctrl: ctrl };
@@ -202,7 +207,7 @@ FocusScope {
         event.accepted = true;
         if (!view.active)
             return;
-        const request = view.keyRequest(event.key, event.modifiers);
+        const request = view.keyRequest(event.key, event.modifiers, event.text);
         if (!request)
             return;
         view.send(request);
@@ -240,8 +245,9 @@ FocusScope {
     // one label yet.
     Rectangle {
         id: focusRing
+        objectName: "focus-ring"
         readonly property var target: view.targets.find(t => t.id === view.focusedId) || null
-        visible: view.loaded && target !== null && !view.lingering
+        visible: view.loaded && target !== null && !view.labelSelected && !view.lingering
         x: target ? target.bounds.x - view.area.x - 2 : 0
         y: target ? target.bounds.y - view.area.y - 2 : 0
         width: target ? target.bounds.w + 4 : 0
@@ -346,14 +352,14 @@ FocusScope {
             height: modelData.placed.h
             radius: 3
             color: focusedOne ? view.selectedBackground : view.background
-            border.width: 1
+            border.width: focusedOne ? 2 : 1
             border.color: focusedOne ? view.selectedText : view.border
 
             Text {
                 anchors.centerIn: parent
                 text: view.labelText(chip.modelData.label)
                 textFormat: Text.StyledText
-                color: view.foreground
+                color: chip.focusedOne ? view.selectedText : view.foreground
                 font.family: view.fontFamily
                 font.pixelSize: 12
                 font.bold: true
@@ -361,26 +367,61 @@ FocusScope {
         }
     }
 
+    TextMetrics {
+        id: statusMetrics
+        text: statusText.text
+        font: statusText.font
+    }
+
+    TextMetrics {
+        id: hintMetrics
+        text: hintText.text
+        font: hintText.font
+    }
+
     Rectangle {
         id: statusLine
+        objectName: "status-line"
+        readonly property real maxWidth: Math.max(1, Math.min(parent.width - 32, 640))
         visible: view.loaded && statusText.text.length > 0 && !view.lingering
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: parent.bottom
         anchors.bottomMargin: 24
-        width: statusText.implicitWidth + 24
-        height: statusText.implicitHeight + 12
+        width: Math.min(maxWidth, Math.max(statusMetrics.width, hintMetrics.width) + 24)
+        height: statusContent.implicitHeight + 16
         radius: 6
         color: view.background
         border.width: 1
         border.color: view.border
 
-        Text {
-            id: statusText
+        Column {
+            id: statusContent
             anchors.centerIn: parent
-            text: view.search || view.searching ? "/" + view.search : view.status
-            color: view.foreground
-            font.family: view.fontFamily
-            font.pixelSize: 13
+            width: parent.width - 24
+            spacing: 3
+
+            Text {
+                id: statusText
+                objectName: "status-text"
+                width: parent.width
+                text: view.labelPrefix.length > 0 ? view.labelPrefix.toUpperCase() :
+                    (view.search || view.searching ? "/" + view.search : view.status)
+                wrapMode: Text.Wrap
+                color: view.foreground
+                font.family: view.fontFamily
+                font.pixelSize: 13
+            }
+
+            Text {
+                id: hintText
+                objectName: "hint-text"
+                width: parent.width
+                text: "Label mode: lowercase selects | uppercase final activates"
+                wrapMode: Text.Wrap
+                color: view.selectedText
+                font.family: view.fontFamily
+                font.pixelSize: 11
+            }
         }
     }
 }

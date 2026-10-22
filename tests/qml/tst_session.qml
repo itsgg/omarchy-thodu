@@ -155,6 +155,12 @@ Item {
             verify(top.keysSent().every(k => k.session === "s1"));
         }
 
+        function test_req_search_01_uppercase_key_text_is_preserved() {
+            const request = view.keyRequest(Qt.Key_A, Qt.NoModifier, "A");
+            compare(request.key, "A");
+            compare(request.shift, false);
+        }
+
         function test_acting_hands_over_to_thodud() {
             top.nextState = "acting";
             keyClick(Qt.Key_Return);
@@ -276,6 +282,34 @@ Item {
             top.shownView = { state: "showing", visible: ["a0"], focused: "a0", search: "o", label_prefix: "" };
             tryVerify(() => !findChild(view, "label-s").visible, 1000, "a label the search drops is hidden");
             verify(findChild(view, "label-a").visible);
+        }
+
+        function test_req_session_01_label_focus_uses_chip_and_status_wraps() {
+            const longStatus = "atspi missed its 80 ms budget; 22 targets from the bar; " +
+                "additional source details that should wrap inside the compact status toast";
+            view.apply({
+                v: 1, ok: true, session: "s1", status: longStatus,
+                view: { state: "showing", visible: ["a0"], focused: "a0", search: "", label_prefix: "", label_selected: true }
+            });
+            const ring = findChild(view, "focus-ring");
+            const chip = findChild(view, "label-a");
+            const toast = findChild(view, "status-line");
+            const message = findChild(view, "status-text");
+            const cue = findChild(view, "hint-text");
+            verify(ring !== null);
+            verify(!ring.visible, "a label-focused target uses its chip without the large outline");
+            verify(chip.visible);
+            compare(chip.color, view.selectedBackground);
+            verify(toast !== null);
+            verify(message !== null && message.implicitHeight > 18, "long status wraps into more than one line");
+            verify(cue.text.indexOf("uppercase final activates") !== -1);
+            verify(toast.width <= 640, "the status toast stays within its maximum width");
+            verify(toast.height > 38, "the wrapped status and activation cue fit in the toast");
+            view.apply({
+                v: 1, ok: true, session: "s1", status: longStatus,
+                view: { state: "showing", visible: ["a0"], focused: "a0", search: "o", label_prefix: "", label_selected: false }
+            });
+            verify(ring.visible, "text-search focus keeps the target outline");
         }
 
         // A session thodud pushed draws from its reply, with no request.

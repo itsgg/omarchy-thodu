@@ -187,6 +187,9 @@ pub struct View {
     pub state: State,
     pub visible: Vec<String>,
     pub focused: Option<String>,
+    /// Whether the focus came from completing a label (REQ-SESSION-01).
+    #[serde(default)]
+    pub label_selected: bool,
     pub search: String,
     /// With labels_only, whether / started a search (REQ-SEARCH-02).
     #[serde(default)]

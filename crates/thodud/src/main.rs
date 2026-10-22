@@ -278,6 +278,7 @@ impl Daemon {
             state: s.state,
             visible: s.visible().into_iter().map(id).collect(),
             focused: s.focused.map(id),
+            label_selected: s.label_selected,
             search: s.search.clone(),
             searching: s.searching,
             label_prefix: s.label_prefix.clone(),
@@ -716,9 +717,10 @@ fn parse_key(name: &str, shift: bool, ctrl: bool) -> Option<Key> {
             if chars.next().is_some() {
                 return None;
             }
-            Key::Char {
-                c,
-                shift: shift || c.is_uppercase(),
+            if c.is_uppercase() {
+                Key::Upper { c }
+            } else {
+                Key::Char { c, shift }
             }
         }
     };
@@ -884,7 +886,7 @@ mod tests {
     use thodu_core::protocol::Timing;
     use thodu_core::session::{Key, Session};
 
-    use super::{Daemon, Entry, grid_window, with_grid_note};
+    use super::{Daemon, Entry, grid_window, parse_key, with_grid_note};
     use crate::sources::{self, Found, Source};
 
     struct Empty(&'static str);
@@ -1040,5 +1042,18 @@ mod tests {
         assert_eq!(reply.session.as_deref(), Some("s1"));
         assert_eq!(reply.clicked, Some(true));
         assert_eq!(reply.workspace_changed, Some(true));
+    }
+
+    // REQ-SEARCH-01: generated uppercase key text survives IPC parsing.
+    #[test]
+    fn req_search_01_uppercase_key_text_marks_label_input() {
+        assert_eq!(parse_key("A", false, false), Some(Key::Upper { c: 'A' }));
+        assert_eq!(
+            parse_key("a", false, false),
+            Some(Key::Char {
+                c: 'a',
+                shift: false
+            })
+        );
     }
 }

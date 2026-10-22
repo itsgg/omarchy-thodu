@@ -1,8 +1,9 @@
 //! A session's keys and what they do (REQ-SEARCH-01, REQ-SEARCH-02,
 //! REQ-ACT-01, REQ-ACT-02, REQ-GRID-01).
 //!
-//! Letters search the targets' text; Shift and letters type a label; Tab
-//! moves the focus; Return acts on the focused target; Escape ends the
+//! Lowercase letters search the targets' text; Shift and uppercase letters
+//! type a label; uppercase completion activates it. Tab moves the focus;
+//! Return acts on the focused target; Escape ends the
 //! session. With labels_only, letters type labels and / starts a search.
 //! Space with nothing focused opens the grid, where letters choose cells.
 //! The session decides; `thodud` carries the action out.
@@ -20,9 +21,22 @@ pub const DOUBLE_MS: u64 = 300;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "key", rename_all = "kebab-case")]
 pub enum Key {
-    Char { c: char, shift: bool },
-    Return { shift: bool, ctrl: bool },
-    Tab { shift: bool },
+    Char {
+        c: char,
+        shift: bool,
+    },
+    /// An uppercase character from the generated key text. Completing a
+    /// label with this key activates its target (REQ-ACT-01).
+    Upper {
+        c: char,
+    },
+    Return {
+        shift: bool,
+        ctrl: bool,
+    },
+    Tab {
+        shift: bool,
+    },
     Backspace,
     Escape,
     Space,
@@ -68,6 +82,9 @@ pub struct Session {
     pub search: String,
     pub label_prefix: String,
     pub focused: Option<usize>,
+    /// The focus came from completing a label, so the overlay can emphasize
+    /// the label chip without outlining the whole target (REQ-SESSION-01).
+    pub label_selected: bool,
     pub state: State,
     pub labels_only: bool,
     /// With labels_only, whether / started a search.
@@ -102,6 +119,7 @@ impl Session {
             search: String::new(),
             label_prefix: String::new(),
             focused: None,
+            label_selected: false,
             state: State::Showing,
             labels_only,
             searching: false,
@@ -138,6 +156,7 @@ impl Session {
         self.search.clear();
         self.label_prefix.clear();
         self.focused = None;
+        self.label_selected = false;
         self.generation += 1;
     }
 
@@ -154,6 +173,7 @@ impl Session {
         let cell = self.targets[i].bounds;
         if grid::is_fine(&cell) {
             self.focused = Some(i);
+            self.label_selected = true;
         } else {
             self.show_grid(cell);
         }
@@ -179,6 +199,7 @@ impl Session {
 
     fn refocus(&mut self) {
         let visible = self.visible();
+        self.label_selected = false;
         self.focused = if self.search.is_empty() {
             None
         } else {
@@ -186,19 +207,27 @@ impl Session {
         };
     }
 
-    fn type_label(&mut self, c: char) {
+    fn type_label(&mut self, c: char, activate: bool, at_ms: u64) -> Option<Act> {
+        if self.label_prefix.is_empty() {
+            self.label_selected = false;
+        }
         self.label_prefix.extend(c.to_lowercase());
         let prefix = self.label_prefix.clone();
         if let Some(i) = self.labels.iter().position(|l| *l == prefix) {
             self.label_prefix.clear();
             if self.grid.is_empty() {
                 self.focused = Some(i);
+                self.label_selected = true;
             } else {
                 self.choose_cell(i);
+            }
+            if activate {
+                return self.act_focused(false, false, at_ms);
             }
         } else if !self.labels.iter().any(|l| l.starts_with(&prefix)) {
             self.label_prefix.clear();
         }
+        None
     }
 
     fn move_focus(&mut self, back: bool) {
@@ -216,6 +245,25 @@ impl Session {
             (Some(i), true) => (i + visible.len() - 1) % visible.len(),
         };
         self.focused = Some(visible[next]);
+        self.label_selected = false;
+    }
+
+    fn act_focused(&mut self, shift: bool, ctrl: bool, at_ms: u64) -> Option<Act> {
+        let target = self.focused?;
+        let plain = !shift && !ctrl;
+        let act = Act {
+            target,
+            point: self.targets[target].bounds.center(),
+            button: if shift { Button::Right } else { Button::Left },
+            count: 1,
+            ctrl,
+            again: false,
+            linger: plain && self.targets[target].role != Role::Entry,
+        };
+        self.state = State::Acting;
+        self.acted_at = at_ms;
+        self.act = Some(act.clone());
+        Some(act)
     }
 
     /// Handle one key with no clock: every key counts as at the same time.
@@ -238,7 +286,10 @@ impl Session {
                 c: '/',
                 shift: false,
             } if labels_first && !in_grid => self.searching = true,
-            Key::Char { c, shift } if shift || labels_first => self.type_label(c),
+            Key::Upper { c } => return self.type_label(c, true, at_ms),
+            Key::Char { c, shift } if shift || labels_first || !self.label_prefix.is_empty() => {
+                return self.type_label(c, false, at_ms);
+            }
             Key::Char { c, .. } => {
                 self.search.push(c);
                 self.refocus();
@@ -246,6 +297,7 @@ impl Session {
             Key::Backspace => {
                 if self.label_prefix.pop().is_some() {
                     // The typed label lost a letter.
+                    self.label_selected = false;
                 } else if in_grid {
                     self.grid_back();
                 } else {
@@ -263,21 +315,7 @@ impl Session {
                 }
             }
             Key::Return { shift, ctrl } => {
-                let target = self.focused?;
-                let plain = !shift && !ctrl;
-                let act = Act {
-                    target,
-                    point: self.targets[target].bounds.center(),
-                    button: if shift { Button::Right } else { Button::Left },
-                    count: 1,
-                    ctrl,
-                    again: false,
-                    linger: plain && self.targets[target].role != Role::Entry,
-                };
-                self.state = State::Acting;
-                self.acted_at = at_ms;
-                self.act = Some(act.clone());
-                return Some(act);
+                return self.act_focused(shift, ctrl, at_ms);
             }
         }
         None
