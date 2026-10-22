@@ -1,6 +1,7 @@
 # QML steps: Qt's qmllint with Omarchy's shell imports, the plugin manifest,
-# and tests/qml/tst_*.qml under qmltestrunner with no display. They need the
-# machine's Qt and Omarchy's shell, so CI skips them. Sourced by tools/gate.
+# and tests/qml/tst_*.qml under qmltestrunner with no display. CI runs the tests
+# with stock Qt and skips only qmllint, which needs the machine's shell. Sourced
+# by tools/gate.
 
 # Qt's tools come from QT_BIN_DIR (default /usr/lib/qt6/bin), else PATH.
 qt_bin() {
@@ -44,7 +45,8 @@ qml_tests() {
 qml_turn() {
     step manifest checks manifest
     if [ -n "${GATE_CI:-}" ]; then
-        skip qml "qmllint and the QML tests need Omarchy's Qt and shell; they run on the machine"
+        skip qmllint "qmllint needs Omarchy's shell imports; QML tests run with stock Qt"
+        step qml-tests qml_tests
         return
     fi
     step qmllint qml_lint

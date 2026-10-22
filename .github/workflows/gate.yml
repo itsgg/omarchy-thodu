@@ -22,6 +22,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      - name: Install Qt test runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y qt6-declarative-dev-tools qml6-module-qtquick qml6-module-qttest qml6-module-qtqml-workerscript qml6-module-qtquick-window
       - name: The gate
         env:
           GATE_CI: "1"

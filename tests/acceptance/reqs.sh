@@ -2,8 +2,7 @@
 # Acceptance of record: tests/acceptance/reqs.sh REQ-AREA-NN... checks that each
 # requirement has a test named for it (its ID in snake case, as in
 # req_act_01_clicks_the_center, in Rust or in tests/qml/tst_*.qml), and that
-# every Rust and QML test passes. CI checks QML test names but skips execution,
-# because its runner does not have Omarchy's Qt and shell.
+# every Rust and QML test passes.
 set -eu
 cd "$(dirname "$0")/../.."
 [ $# -gt 0 ] || { echo "ERROR name at least one requirement"; exit 2; }
@@ -20,10 +19,6 @@ for req in "$@"; do
 done
 cargo test --workspace --locked --quiet
 if [ -n "$qml" ]; then
-    if [ -n "${GATE_CI:-}" ]; then
-        echo "skip QML acceptance: Omarchy Qt and shell are unavailable in CI"
-    else
-        QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qmltestrunner -input tests/qml -import .
-    fi
+    QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qmltestrunner -input tests/qml -import .
 fi
 echo "ok: $*"
