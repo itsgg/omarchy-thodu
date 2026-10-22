@@ -69,6 +69,11 @@ fn is_null(r: &Ref) -> bool {
     r.1.as_str() == NULL_PATH
 }
 
+/// After waking a dormant tree, an empty child list is ready to read too.
+fn children_ready(children: &[Ref]) -> bool {
+    children.is_empty() || !children.iter().all(is_null)
+}
+
 impl Bus {
     pub fn connect() -> Result<Self, String> {
         let session =
@@ -338,7 +343,7 @@ pub fn snapshot(
                 // The tree fills in tens of milliseconds; wait for its first
                 // children, within the budget.
                 while Instant::now() + WAKE_POLL < walk.deadline
-                    && bus.children(&at).iter().all(is_null)
+                    && !children_ready(&bus.children(&at))
                 {
                     std::thread::sleep(WAKE_POLL);
                 }
@@ -517,6 +522,15 @@ mod tests {
         let mut walk = Walk::new(Duration::from_millis(200));
         snapshot(&bus, &window(), &monitor(), &mut walk, &mut woken);
         assert_eq!(bus.attribute_calls.get(), 1, "at most once per process");
+    }
+
+    // REQ-SRC-03: an empty child list after a wake is not mistaken for a
+    // null-only dormant tree, so polling does not consume the whole budget.
+    #[test]
+    fn req_src_03_empty_children_are_ready_after_wake() {
+        assert!(children_ready(&[]));
+        assert!(!children_ready(&[r(NULL_PATH)]));
+        assert!(children_ready(&[r("/button")]));
     }
 
     // REQ-SRC-03: a tree that is not dormant is never woken.

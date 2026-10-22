@@ -193,6 +193,14 @@ Item {
                     "a lowercase repeat cannot complete an active prefix");
         }
 
+        // REQ-SESSION-01: only labels matching the active prefix are styled
+        // as a partial selection.
+        function test_req_session_01_only_matching_labels_highlight_prefix() {
+            view.labelPrefix = "a";
+            verify(view.labelText("a").indexOf("<font color=") === 0);
+            compare(view.labelText("s"), "S");
+        }
+
         function test_acting_hands_over_to_thodud() {
             top.nextState = "acting";
             keyClick(Qt.Key_Return);

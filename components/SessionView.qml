@@ -205,6 +205,8 @@ FocusScope {
 
     function labelText(label) {
         const typed = view.labelPrefix.length;
+        if (typed > 0 && !label.toLowerCase().startsWith(view.labelPrefix.toLowerCase()))
+            return label.toUpperCase();
         const head = label.slice(0, typed).toUpperCase();
         const rest = label.slice(typed).toUpperCase();
         if (!head)

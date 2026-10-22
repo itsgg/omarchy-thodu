@@ -98,8 +98,8 @@ pub const fn button_code(button: Button) -> u32 {
 const CTRL_SETTLE: Duration = Duration::from_millis(30);
 
 /// Carry out `inputs` on `monitor` in order (REQ-ACT-01, REQ-ACT-02), with
-/// `ctrl` holding or releasing Control, then move the pointer back to
-/// `restore`, whatever happened.
+/// `ctrl` holding or releasing Control, then release Control and move the
+/// pointer back to `restore`, even if an input or roundtrip fails.
 pub fn perform(
     monitor: &Monitor,
     inputs: &[Input],
@@ -139,6 +139,7 @@ pub fn perform(
         };
     let pointer = pointer_on(monitor)?;
     let mut result = Ok(());
+    let mut ctrl_down = false;
     for input in inputs {
         match *input {
             Input::Move(x, y) => move_to(&pointer, monitor, (x, y)),
@@ -157,29 +158,68 @@ pub fn perform(
                     result = Err(e.to_string());
                     break;
                 }
+                // A failed emit leaves the modifier state uncertain, so
+                // cleanup tries to release it after a failed press too.
+                if down {
+                    ctrl_down = true;
+                }
                 if let Err(e) = ctrl(down) {
                     result = Err(e);
                     break;
                 }
+                ctrl_down = down;
                 thread::sleep(CTRL_SETTLE);
             }
         }
     }
-    queue.roundtrip(&mut globals).map_err(|e| e.to_string())?;
+    if let Err(e) = release_ctrl_if_held(ctrl, &mut ctrl_down) {
+        keep_error(&mut result, e);
+    }
+    if let Err(e) = queue.roundtrip(&mut globals) {
+        keep_error(&mut result, e.to_string());
+    }
     if let Some((m, p)) = restore {
-        let back = if m.name == monitor.name {
-            pointer.clone()
+        match if m.name == monitor.name {
+            Ok(pointer.clone())
         } else {
-            pointer_on(m)?
-        };
-        move_to(&back, m, p);
-        if back != pointer {
-            back.destroy();
+            pointer_on(m)
+        } {
+            Ok(back) => {
+                move_to(&back, m, p);
+                if back != pointer {
+                    back.destroy();
+                }
+            }
+            Err(e) => keep_error(&mut result, e),
         }
     }
     pointer.destroy();
-    queue.roundtrip(&mut globals).map_err(|e| e.to_string())?;
+    if let Err(e) = queue.roundtrip(&mut globals) {
+        keep_error(&mut result, e.to_string());
+    }
     result
+}
+
+fn release_ctrl_if_held(
+    ctrl: &mut dyn FnMut(bool) -> Result<(), String>,
+    ctrl_down: &mut bool,
+) -> Result<(), String> {
+    if !*ctrl_down {
+        return Ok(());
+    }
+    ctrl(false)?;
+    *ctrl_down = false;
+    Ok(())
+}
+
+fn keep_error(result: &mut Result<(), String>, error: String) {
+    match result {
+        Ok(()) => *result = Err(error),
+        Err(previous) => {
+            previous.push_str("; cleanup: ");
+            previous.push_str(&error);
+        }
+    }
 }
 
 /// Move the pointer to a logical point on `monitor`.
@@ -187,4 +227,27 @@ pub fn move_to(monitor: &Monitor, point: (i32, i32)) -> Result<(), String> {
     perform(monitor, &[Input::Move(point.0, point.1)], None, &mut |_| {
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::release_ctrl_if_held;
+
+    // REQ-ACT-02: when an action exits while Control is held, cleanup sends
+    // a release before returning.
+    #[test]
+    fn req_act_02_control_is_released_after_action_error() {
+        let mut ctrl_down = true;
+        let mut sent = Vec::new();
+        release_ctrl_if_held(
+            &mut |down| {
+                sent.push(down);
+                Ok(())
+            },
+            &mut ctrl_down,
+        )
+        .expect("release succeeds");
+        assert_eq!(sent, [false]);
+        assert!(!ctrl_down);
+    }
 }

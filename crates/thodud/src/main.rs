@@ -730,6 +730,10 @@ fn parse_key(name: &str, shift: bool, ctrl: bool) -> Option<Key> {
             }
             if c.is_uppercase() {
                 Key::Upper { c }
+            } else if shift && c.is_ascii_alphabetic() {
+                Key::Upper {
+                    c: c.to_ascii_uppercase(),
+                }
             } else {
                 Key::Char { c, shift }
             }
@@ -1092,5 +1096,12 @@ mod tests {
                 shift: false
             })
         );
+    }
+
+    // REQ-ACT-01: shifted lowercase key text activates the label just like
+    // the uppercase key text sent by the overlay.
+    #[test]
+    fn req_act_01_shifted_lowercase_key_text_activates_label() {
+        assert_eq!(parse_key("d", true, false), Some(Key::Upper { c: 'D' }));
     }
 }
