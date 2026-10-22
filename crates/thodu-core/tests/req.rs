@@ -351,6 +351,56 @@ fn req_search_01_lowercase_continues_a_shifted_label_prefix() {
     assert_eq!(s.state, State::Showing);
 }
 
+// REQ-SEARCH-01: a label that is not visible in the current search cannot act.
+#[test]
+fn req_search_01_hidden_label_does_not_activate_or_steal_focus() {
+    let mut s = Session::new(
+        vec![
+            target("Open", Rect::new(0, 0, 100, 30)),
+            target("Save", Rect::new(0, 40, 100, 30)),
+            target("Close", Rect::new(0, 80, 100, 30)),
+        ],
+        false,
+    );
+    s.key(Key::Char {
+        c: 'o',
+        shift: false,
+    });
+    assert_eq!(s.focused, Some(0));
+    assert!(s.visible().contains(&0));
+    assert!(!s.visible().contains(&1));
+
+    assert!(s.key(Key::Upper { c: 'S' }).is_none());
+    assert_eq!(s.focused, Some(0));
+    assert_eq!(s.state, State::Showing);
+    assert!(s.label_prefix.is_empty());
+}
+
+// REQ-SEARCH-01: an invalid label prefix keeps the current search focus.
+#[test]
+fn req_search_01_invalid_label_prefix_preserves_search_focus() {
+    let mut s = Session::new(
+        vec![
+            target("Open", Rect::new(0, 0, 100, 30)),
+            target("Save", Rect::new(0, 40, 100, 30)),
+            target("Close", Rect::new(0, 80, 100, 30)),
+        ],
+        false,
+    );
+    s.key(Key::Char {
+        c: 'o',
+        shift: false,
+    });
+    let focused = s.focused;
+    assert!(focused.is_some());
+    assert!(s.key(Key::Upper { c: 'Z' }).is_none());
+    assert_eq!(s.focused, focused);
+    assert!(s.label_prefix.is_empty());
+
+    assert!(s.key(Key::Space).is_none());
+    assert!(s.grid.is_empty(), "Space does not discard the search focus");
+}
+
 // REQ-ACT-01: Return clicks the focused target's center with the left button.
 #[test]
 fn req_act_01_return_clicks_the_center() {
@@ -479,6 +529,14 @@ fn req_session_01_new_label_prefix_clears_previous_focus() {
     assert_eq!(s.label_prefix, "a");
     assert_eq!(s.focused, None);
     assert!(!s.label_selected);
+
+    assert!(s.key(Key::Backspace).is_none());
+    assert_eq!(s.label_prefix, "");
+    assert_eq!(s.focused, s.labels.iter().position(|label| label == "d"));
+    assert!(
+        s.label_selected,
+        "Backspace restores the focus that preceded the prefix"
+    );
 }
 
 // REQ-SESSION-01: focusing a fine grid cell keeps its bounds outline.
@@ -492,6 +550,42 @@ fn req_session_01_fine_grid_cell_is_not_a_label_selected_target() {
     }
     assert_eq!(s.focused, Some(0));
     assert!(!s.label_selected);
+}
+
+// REQ-SEARCH-02: slash cancels an incomplete prefix before search begins.
+#[test]
+fn req_search_02_slash_clears_a_pending_label_prefix() {
+    let targets: Vec<Target> = (0..30)
+        .map(|i| target(&format!("item{i}"), Rect::new(0, i * 40, 100, 30)))
+        .collect();
+    let mut s = Session::new(targets, true);
+    assert!(
+        s.key(Key::Char {
+            c: 'a',
+            shift: false
+        })
+        .is_none()
+    );
+    assert_eq!(s.label_prefix, "a");
+
+    assert!(
+        s.key(Key::Char {
+            c: '/',
+            shift: false
+        })
+        .is_none()
+    );
+    assert!(s.searching);
+    assert!(s.label_prefix.is_empty());
+    assert!(
+        s.key(Key::Char {
+            c: 's',
+            shift: false
+        })
+        .is_none()
+    );
+    assert_eq!(s.search, "s");
+    assert!(s.label_prefix.is_empty());
 }
 
 // REQ-ACT-01: Return with nothing focused does nothing; Escape ends the session.

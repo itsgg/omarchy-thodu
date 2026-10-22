@@ -187,6 +187,9 @@ pub struct View {
     pub state: State,
     pub visible: Vec<String>,
     pub focused: Option<String>,
+    /// Whether lowercase letters type labels before `/` starts a search.
+    #[serde(default)]
+    pub labels_only: bool,
     /// Whether the focus came from completing a label (REQ-SESSION-01).
     #[serde(default)]
     pub label_selected: bool,

@@ -278,6 +278,7 @@ impl Daemon {
             state: s.state,
             visible: s.visible().into_iter().map(id).collect(),
             focused: s.focused.map(id),
+            labels_only: s.labels_only,
             label_selected: s.label_selected,
             search: s.search.clone(),
             searching: s.searching,

@@ -8,20 +8,21 @@ Why: GG asked for a clearer selected hint and a way for capitalized hint input t
 ## Modified
 
 ### REQ-SEARCH-01: Typing searches; Shift types a label
-While a session is showing, lowercase letters typed without Shift and with no label prefix shall keep only the targets whose text contains the typed letters, ignoring case and spaces, and focus the first in reading order. Shifted letters shall type a target label. Lowercase letters shall continue an active label prefix. Completing a label with a lowercase final character focuses its target; completing it with an uppercase final character activates it under REQ-ACT-01. Operating-system key repeats shall not complete or activate a label. Tab and Shift-Tab move focus through the kept targets.
+In search-first mode, lowercase letters typed without Shift and with no active label prefix shall keep only the targets whose text contains the typed letters, ignoring case and spaces, and focus the first in reading order. In labels-only mode, lowercase letters type labels until `/` starts a search. Shifted letters type a target label in either mode. Lowercase letters continue an active label prefix. Completing a label with a lowercase final character focuses its target; completing it with an uppercase final character activates it under REQ-ACT-01. A label hidden by the current search shall not activate or take focus. An invalid label prefix shall leave the prior focus intact. Operating-system key repeats shall not complete or activate a label. Tab and Shift-Tab move focus through the kept targets.
 Acceptance:
 - cases: `spec/cases/search/filter.jsonl`, typed input against target texts with the expected kept targets and focus.
 - scenario: a session test covers an uppercase prefix and lowercase completion in search-first mode.
-- scenario: a QML test covers a shifted key whose event text is lowercase, ignores Caps Lock text as an activation signal, and ignores repeated shifted letters.
+- scenario: session tests cover hidden labels, invalid prefixes, prefix cancellation with `/`, and focus restoration on Backspace.
+- scenario: a QML test covers a shifted key whose event text is lowercase, ignores Caps Lock text as an activation signal, and filters repeats while label input is active but preserves search repeats.
 
 ### REQ-ACT-01: Return clicks
-When Return is pressed with a focused target, or the final character of a target label is uppercase, the system shall move the pointer to the target's center, click the left button there through the virtual pointer, end the session and return the pointer to where it was, unless Hyprland's focus follows the mouse and that point is not over the clicked window, where returning it would take the keyboard from that window; then the pointer stays on the target. A session started with `test` always returns it. Completing the label in lowercase focuses the target without acting. An uppercase label activation performs one click and does not begin the double-Return wait.
+When Return is pressed with a focused target, or the final character of a target label is uppercase, the system shall move the pointer to the target's center, click the left button there through the virtual pointer, end the session and return the pointer to where it was, unless Hyprland's focus follows the mouse and that point is not over the clicked window, where returning it would take the keyboard from that window; then the pointer stays on the target. A session started with `test` always returns it. Completing an active label prefix in lowercase focuses the target without acting; in labels-only mode, typing a complete label in lowercase also focuses it. An uppercase label activation performs one click and does not begin the double-Return wait.
 Acceptance:
 - scenario: WHEN a session on a recorded tree focuses a button at bounds (100, 200, 80, 30) on a monitor at scale 1.25 THEN the fake pointer receives a move to (140, 215) logical and one left click.
 - scenario: WHEN focus follows the mouse and the pointer was over another window, or over none while the click was on a window, THEN the pointer is not returned; over the same window, over none after a click on none, or with focus on click, it is.
 - scenario: a session test types a two-letter label with lowercase completion and then uppercase completion, confirming focus-only then the same action as Return.
 
-### REQ-ACT-02: Deliberate double Return
+### REQ-ACT-02: The other clicks and deliberate double Return
 When Shift-Return is pressed the system shall right-click, when Return is pressed twice within 300 ms it shall double-click, and when Control-Return is pressed it shall click with Control held. After a plain Return on a target that is not an entry, the overlay keeps the keyboard for 300 ms, drawing nothing and letting the pointer through, so a second Return can come; any other key ends the session. After an entry, a right click or a Control click it gives the keyboard back at once. A key event generated by operating-system key repeat shall not count as the second Return.
 Acceptance:
 - cases: `spec/cases/act/keys.jsonl`, key sequences with the expected pointer and keyboard events and whether the overlay keeps the keyboard.
@@ -30,11 +31,11 @@ Acceptance:
 - scenario: two distinct Return presses within 300 ms make one double click; a later Return does not.
 
 ### REQ-SESSION-01: Labels on the focused window
-When `thodu hints` runs and a window is focused, the system shall show a label for each target of that window and of the Omarchy bar on the same monitor. While focus comes from text search or keyboard navigation, the overlay shall outline the target bounds. After a label focuses a target, it shall hide the target outline and emphasize the label chip. The status toast shall wrap within the monitor width and a maximum width of 640 logical units, and show the lowercase-focus and uppercase-activate cue. The QML view uses an additive `label_selected` field to distinguish label focus.
+When `thodu hints` runs and a window is focused, the system shall show a label for each target of that window and of the Omarchy bar on the same monitor. While focus comes from text search or keyboard navigation, the overlay shall outline the target bounds. After a label focuses a target, it shall hide the target outline and emphasize the label chip; while a label prefix is incomplete, it shall not leave the previous target outlined as if it were still focused. The status toast shall wrap within the monitor width and a maximum width of 640 logical units. Its cue shall describe the current search-first or labels-only behavior accurately. The session view carries additive `label_selected` and `labels_only` fields for this presentation.
 Acceptance:
 - replay: each recorded tree in `spec/cases/atspi/*.json` through the fake source yields the targets listed beside it in `spec/cases/atspi/*.targets.jsonl`.
 - measured: REQ-PERF-01.
-- scenario: a QML test checks focused label and search treatments, plus a wrapped, bounded status toast.
+- scenario: a QML test checks label focus, search focus, a mode-accurate cue and a wrapped, bounded status toast.
 
 ## Removed
 

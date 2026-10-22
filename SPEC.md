@@ -70,10 +70,11 @@ Invariants, checked as properties:
 ### Sessions
 
 ### REQ-SESSION-01: Labels on the focused window
-When `thodu hints` runs and a window is focused, the system shall show a label for each target of that window and of the Omarchy bar on the same monitor.
+When `thodu hints` runs and a window is focused, the system shall show a label for each target of that window and of the Omarchy bar on the same monitor. While focus comes from text search or keyboard navigation, the overlay shall outline the target bounds. After a label focuses a target, it shall hide the target outline and emphasize the label chip; while a label prefix is incomplete, it shall not leave the previous target outlined as if it were still focused. The status toast shall wrap within the monitor width and a maximum width of 640 logical units. Its cue shall describe the current search-first or labels-only behavior accurately. The session view carries additive `label_selected` and `labels_only` fields for this presentation.
 Acceptance:
 - replay: each recorded tree in `spec/cases/atspi/*.json` through the fake source yields the targets listed beside it in `spec/cases/atspi/*.targets.jsonl`.
 - measured: REQ-PERF-01.
+- scenario: a QML test checks label focus, search focus, a mode-accurate cue and a wrapped, bounded status toast.
 
 ### REQ-SESSION-02: Escape gives the keyboard back
 When Escape is pressed during a session, the system shall end the session and release the keyboard; no key after Escape reaches the overlay.
@@ -128,11 +129,12 @@ Acceptance:
 ### Search
 
 ### REQ-SEARCH-01: Typing searches; Shift types a label
-While a session is showing, when lowercase letters are typed without Shift and with no label prefix, the system shall keep only the targets whose text contains the typed letters, ignoring case and spaces, and focus the first in reading order. Shifted letters type a target label. Lowercase letters continue an active label prefix. Completing a label with a lowercase final character focuses its target; completing it with an uppercase final character activates it according to REQ-ACT-01. Operating-system key repeats shall not complete or activate a label. Tab and Shift-Tab move the focus through the kept targets. This follows Homerow's defaults (SEED R1).
+While a session is showing in search-first mode, lowercase letters typed without Shift and with no active label prefix shall keep only the targets whose text contains the typed letters, ignoring case and spaces, and focus the first in reading order. In labels-only mode, lowercase letters type labels until `/` starts a search. Shifted letters type a target label in either mode. Lowercase letters continue an active label prefix. Completing a label with a lowercase final character focuses its target; completing it with an uppercase final character activates it according to REQ-ACT-01. A label that is hidden by the current search shall not activate or take focus. An invalid label prefix shall leave the prior focus intact. Operating-system key repeats shall not complete or activate a label. Tab and Shift-Tab move the focus through the kept targets. This follows Homerow's defaults (SEED R1).
 Acceptance:
 - cases: `spec/cases/search/filter.jsonl`, typed input against target texts with the expected kept targets and focus.
 - scenario: a session test covers an uppercase prefix and lowercase completion in search-first mode.
-- scenario: a QML test covers a shifted key whose event text is lowercase, ignores Caps Lock text as an activation signal, and ignores repeated shifted letters.
+- scenario: session tests cover hidden labels, invalid prefixes, prefix cancellation with `/`, and focus restoration on Backspace.
+- scenario: a QML test covers a shifted key whose event text is lowercase, ignores Caps Lock text as an activation signal, and filters repeats while label input is active but preserves search repeats.
 
 ### REQ-SEARCH-02: Labels-only mode
 Where the setting `labels_only` is true, letters without Shift type labels and `/` starts a search.
@@ -142,17 +144,18 @@ Acceptance:
 ### Actions
 
 ### REQ-ACT-01: Return clicks
-When Return is pressed with a focused target, or the final character of a target label is uppercase, the system shall move the pointer to the target's center, click the left button there through the virtual pointer, end the session and return the pointer to where it was, unless Hyprland's focus follows the mouse and that point is not over the clicked window, where returning it would take the keyboard from that window; then the pointer stays on the target. A session started with `test` always returns it. Completing the label in lowercase focuses the target without acting. An uppercase label activation performs one click and does not begin the double-Return wait.
+When Return is pressed with a focused target, or the final character of a target label is uppercase, the system shall move the pointer to the target's center, click the left button there through the virtual pointer, end the session and return the pointer to where it was, unless Hyprland's focus follows the mouse and that point is not over the clicked window, where returning it would take the keyboard from that window; then the pointer stays on the target. A session started with `test` always returns it. Completing an active label prefix in lowercase focuses the target without acting; in labels-only mode, typing a complete label in lowercase also focuses it. An uppercase label activation performs one click and does not begin the double-Return wait.
 Acceptance:
 - scenario: WHEN a session on a recorded tree focuses a button at bounds (100, 200, 80, 30) on a monitor at scale 1.25 THEN the fake pointer receives a move to (140, 215) logical and one left click.
 - scenario: WHEN focus follows the mouse and the pointer was over another window, or over none while the click was on a window, THEN it is not returned; over the same window, over none after a click on none, or with focus on click, it is.
 - scenario: a session test types a two-letter label with lowercase completion and then uppercase completion, confirming focus-only then the same action as Return.
 
-### REQ-ACT-02: The other clicks
+### REQ-ACT-02: The other clicks and deliberate double Return
 When Shift-Return is pressed the system shall right-click, when Return is pressed twice within 300 ms it shall double-click, and when Control-Return is pressed it shall click with Control held. After a plain Return on a target that is not an entry, the overlay keeps the keyboard for 300 ms, drawing nothing and letting the pointer through, so a second Return can come; any other key ends the session. After an entry, a right click or a Control click it gives the keyboard back at once. A key event generated by operating-system key repeat shall not count as the second Return.
 Acceptance:
 - cases: `spec/cases/act/keys.jsonl`, key sequences with the expected pointer and keyboard events and whether the overlay keeps the keyboard.
 - scenario: a QML key adapter ignores an auto-repeated Return while forwarding a distinct Return.
+- scenario: a QML key adapter ignores auto-repeated shifted letters so they cannot complete an unintended click.
 - scenario: two distinct Return presses within 300 ms make one double click; a later Return does not.
 
 ### REQ-ACT-03: Never act on a stale target
@@ -196,7 +199,7 @@ Acceptance:
 The IPC is JSON lines over the Unix socket `$XDG_RUNTIME_DIR/thodu.sock`, one request and one reply per line, each with a `v` field equal to 1.
 
 - `{"v":1,"op":"start","mode":"hints"|"grid","scope":"focused"}` returns `{"v":1,"ok":true,"session":ID,"status":TEXT}` and summons the overlay with the session. An optional `window` (a Hyprland address) replaces the focused window, `overlay` false runs the session over the IPC alone, and `test` true summons the overlay without the keyboard, for live checks.
-- `{"v":1,"op":"session","session":ID}` returns the session's monitor, targets and labels and its view for the overlay; with `"brief":true`, the view alone, for the overlay's heartbeat (REQ-SESSION-03).
+- `{"v":1,"op":"session","session":ID}` returns the session's monitor, targets and labels and its view for the overlay; with `"brief":true`, the view alone, for the overlay's heartbeat (REQ-SESSION-03). The view's `labels_only` and `label_selected` booleans are additive presentation fields.
 - `{"v":1,"op":"key","session":ID,"key":NAME,"shift":B,"ctrl":B}` returns the session's new view: its state (showing, acting or closed), the targets still kept, the focused target, the search and the typed label.
 - `{"v":1,"op":"hidden","session":ID}`: the overlay's surface is gone, so a pending action may run (REQ-ACT-01); `thodud` acts anyway 400 ms after the action if none comes.
 - `{"v":1,"op":"targets"}` returns the focused window's targets without a session, or those of an optional `window`.
@@ -214,7 +217,7 @@ A `window` is a Hyprland address, or `class:NAME` for the first window of that c
 
 Errors are `{"v":1,"ok":false,"error":KIND,"message":TEXT}` with KIND one of no-window, no-tree, busy, stale, internal, bad-request. The command line prints an ERROR line with the message and exits 1 on any error, 2 on bad arguments.
 
-Keys inside a session: lowercase letters search (REQ-SEARCH-01), Shift with letters types a label, and an uppercase final label character activates its target (REQ-SEARCH-01, REQ-ACT-01); Tab and Shift-Tab move the focus, Return, Shift-Return, Control-Return and a double Return act (REQ-ACT-01, REQ-ACT-02), Space opens the grid, Backspace deletes the last letter, Escape ends the session.
+Keys inside a session: in search-first mode lowercase letters search, while in labels-only mode they type labels until `/` starts a search (REQ-SEARCH-01, REQ-SEARCH-02); Shift with letters types a label, and an uppercase final label character activates its visible target (REQ-SEARCH-01, REQ-ACT-01); Tab and Shift-Tab move the focus, Return, Shift-Return, Control-Return and a double Return act (REQ-ACT-01, REQ-ACT-02), Space opens the grid, Backspace deletes the last letter, Escape ends the session.
 
 ## 8. Unwanted behavior
 

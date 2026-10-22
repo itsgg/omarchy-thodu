@@ -180,6 +180,19 @@ Item {
             verify(request.shift);
         }
 
+        function test_req_search_01_label_repeats_are_ignored_but_search_repeats_are_kept() {
+            view.labelsOnly = true;
+            view.searching = false;
+            compare(view.keyRequest(Qt.Key_A, Qt.NoModifier, "a", true), null,
+                    "a repeated lowercase label key cannot complete a prefix");
+            view.searching = true;
+            compare(view.keyRequest(Qt.Key_A, Qt.NoModifier, "a", true).key, "a",
+                    "search text keeps normal key repeat");
+            view.labelPrefix = "a";
+            compare(view.keyRequest(Qt.Key_A, Qt.NoModifier, "a", true), null,
+                    "a lowercase repeat cannot complete an active prefix");
+        }
+
         function test_acting_hands_over_to_thodud() {
             top.nextState = "acting";
             keyClick(Qt.Key_Return);
@@ -264,6 +277,7 @@ Item {
             tryVerify(() => view.targets.length === 2 && view.targets[0].id === "g0", 1000, "the cells are drawn");
             compare(view.generation, 1);
             verify(findChild(view, "label-s").visible);
+            verify(!findChild(view, "hint-text").visible, "the hint cue is hidden while choosing a grid cell");
         }
 
         // REQ-GRID-01: a cell's own cells are drawn magnified beside it,
@@ -308,7 +322,7 @@ Item {
                 "additional source details that should wrap inside the compact status toast";
             view.apply({
                 v: 1, ok: true, session: "s1", status: longStatus,
-                view: { state: "showing", visible: ["a0"], focused: "a0", search: "", label_prefix: "", label_selected: true }
+                view: { state: "showing", visible: ["a0"], focused: "a0", search: "", label_prefix: "", label_selected: true, labels_only: true }
             });
             const ring = findChild(view, "focus-ring");
             const chip = findChild(view, "label-a");
@@ -321,14 +335,22 @@ Item {
             compare(chip.color, view.selectedBackground);
             verify(toast !== null);
             verify(message !== null && message.implicitHeight > 18, "long status wraps into more than one line");
-            verify(cue.text.indexOf("uppercase final activates") !== -1);
+            verify(cue.text.indexOf("lowercase selects") !== -1);
             verify(toast.width <= 640, "the status toast stays within its maximum width");
             verify(toast.height > 38, "the wrapped status and activation cue fit in the toast");
             view.apply({
                 v: 1, ok: true, session: "s1", status: longStatus,
-                view: { state: "showing", visible: ["a0"], focused: "a0", search: "o", label_prefix: "", label_selected: false }
+                view: { state: "showing", visible: ["a0"], focused: "a0", search: "o", searching: true, label_prefix: "", label_selected: false, labels_only: true }
             });
             verify(ring.visible, "text-search focus keeps the target outline");
+            verify(cue.text.indexOf("lowercase searches") !== -1);
+            view.apply({
+                v: 1, ok: true, session: "s1", status: longStatus,
+                view: { state: "showing", visible: ["a0"], focused: "a0", search: "", label_prefix: "", label_selected: false, labels_only: false }
+            });
+            verify(cue.text.indexOf("type to search") !== -1);
+            verify(cue.text.indexOf("lowercase selects") === -1,
+                   "the cue does not claim labels select in search-first mode");
         }
 
         // A session thodud pushed draws from its reply, with no request.

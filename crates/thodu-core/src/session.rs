@@ -85,6 +85,9 @@ pub struct Session {
     /// The focus came from completing a label, so the overlay can emphasize
     /// the label chip without outlining the whole target (REQ-SESSION-01).
     pub label_selected: bool,
+    /// Focus to restore when an incomplete label prefix is cancelled or
+    /// does not match a visible label.
+    prefix_origin: Option<(Option<usize>, bool)>,
     pub state: State,
     pub labels_only: bool,
     /// With labels_only, whether / started a search.
@@ -120,6 +123,7 @@ impl Session {
             label_prefix: String::new(),
             focused: None,
             label_selected: false,
+            prefix_origin: None,
             state: State::Showing,
             labels_only,
             searching: false,
@@ -154,7 +158,9 @@ impl Session {
         self.targets = grid::targets(&area);
         self.labels = labels::assign(self.targets.len());
         self.search.clear();
+        self.searching = false;
         self.label_prefix.clear();
+        self.prefix_origin = None;
         self.focused = None;
         self.label_selected = false;
         self.generation += 1;
@@ -201,6 +207,8 @@ impl Session {
 
     fn refocus(&mut self) {
         let visible = self.visible();
+        self.label_prefix.clear();
+        self.prefix_origin = None;
         self.label_selected = false;
         self.focused = if self.search.is_empty() {
             None
@@ -211,13 +219,19 @@ impl Session {
 
     fn type_label(&mut self, c: char, activate: bool, at_ms: u64) -> Option<Act> {
         if self.label_prefix.is_empty() {
-            self.label_selected = false;
-            self.focused = None;
+            self.prefix_origin = Some((self.focused, self.label_selected));
         }
         self.label_prefix.extend(c.to_lowercase());
         let prefix = self.label_prefix.clone();
-        if let Some(i) = self.labels.iter().position(|l| *l == prefix) {
+        let visible = self.visible();
+        if let Some(i) = self
+            .labels
+            .iter()
+            .enumerate()
+            .find_map(|(i, label)| (visible.contains(&i) && *label == prefix).then_some(i))
+        {
             self.label_prefix.clear();
+            self.prefix_origin = None;
             if self.grid.is_empty() {
                 self.focused = Some(i);
                 self.label_selected = true;
@@ -227,13 +241,27 @@ impl Session {
             if activate {
                 return self.act_focused(false, false, false, at_ms);
             }
-        } else if !self.labels.iter().any(|l| l.starts_with(&prefix)) {
+        } else if self
+            .labels
+            .iter()
+            .enumerate()
+            .any(|(i, label)| visible.contains(&i) && label.starts_with(&prefix))
+        {
+            self.focused = None;
+            self.label_selected = false;
+        } else {
             self.label_prefix.clear();
+            if let Some((focused, selected)) = self.prefix_origin.take() {
+                self.focused = focused;
+                self.label_selected = selected;
+            }
         }
         None
     }
 
     fn move_focus(&mut self, back: bool) {
+        self.label_prefix.clear();
+        self.prefix_origin = None;
         let visible = self.visible();
         if visible.is_empty() {
             return;
@@ -294,7 +322,12 @@ impl Session {
             Key::Char {
                 c: '/',
                 shift: false,
-            } if labels_first && !in_grid => self.searching = true,
+            } if labels_first && !in_grid => {
+                self.label_prefix.clear();
+                self.prefix_origin = None;
+                self.searching = true;
+                self.refocus();
+            }
             Key::Upper { c } => return self.type_label(c, true, at_ms),
             Key::Char { c, shift } if shift || labels_first || !self.label_prefix.is_empty() => {
                 return self.type_label(c, false, at_ms);
@@ -305,8 +338,15 @@ impl Session {
             }
             Key::Backspace => {
                 if self.label_prefix.pop().is_some() {
-                    // The typed label lost a letter.
-                    self.label_selected = false;
+                    if self.label_prefix.is_empty() {
+                        if let Some((focused, selected)) = self.prefix_origin.take() {
+                            self.focused = focused;
+                            self.label_selected = selected;
+                        }
+                    } else {
+                        self.focused = None;
+                        self.label_selected = false;
+                    }
                 } else if in_grid {
                     self.grid_back();
                 } else {

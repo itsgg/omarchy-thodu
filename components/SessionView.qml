@@ -23,6 +23,7 @@ FocusScope {
     property string focusedId: ""
     property bool labelSelected: false
     property string search: ""
+    property bool labelsOnly: false
     // With labels_only, / started a search (REQ-SEARCH-02).
     property bool searching: false
     property string labelPrefix: ""
@@ -70,6 +71,7 @@ FocusScope {
         view.focusedId = "";
         view.labelSelected = false;
         view.search = "";
+        view.labelsOnly = false;
         view.searching = false;
         view.labelPrefix = "";
         view.status = "";
@@ -136,6 +138,7 @@ FocusScope {
         view.kept = kept;
         view.focusedId = shown.focused || "";
         view.labelSelected = shown.label_selected === true;
+        view.labelsOnly = shown.labels_only === true;
         view.search = shown.search || "";
         view.searching = shown.searching === true;
         view.labelPrefix = shown.label_prefix || "";
@@ -157,8 +160,9 @@ FocusScope {
         // Caps Lock can make text uppercase without Shift. Only Shift means
         // activation; repeats cannot complete labels or double-click.
         const shift = (modifiers & Qt.ShiftModifier) !== 0;
-        if (autoRepeat && (key === Qt.Key_Return || key === Qt.Key_Enter ||
-                           (shift && key >= Qt.Key_A && key <= Qt.Key_Z)))
+        const letter = key >= Qt.Key_A && key <= Qt.Key_Z;
+        const labelInput = shift || view.labelPrefix.length > 0 || (view.labelsOnly && !view.searching);
+        if (autoRepeat && (key === Qt.Key_Return || key === Qt.Key_Enter || (letter && labelInput)))
             return null;
         const ctrl = (modifiers & Qt.ControlModifier) !== 0;
         let name = "";
@@ -206,6 +210,21 @@ FocusScope {
         if (!head)
             return rest;
         return "<font color=\"" + view.selectedText + "\">" + head + "</font>" + rest;
+    }
+
+    function inGrid() {
+        return view.targets.length > 0 && view.targets[0].source === "grid";
+    }
+
+    function hintCue() {
+        if (view.inGrid())
+            return "";
+        if (view.labelPrefix.length > 0)
+            return "lowercase continues | uppercase final activates";
+        if (view.labelsOnly)
+            return view.searching ? "lowercase searches | uppercase final activates" :
+                "lowercase selects | uppercase final activates | / searches";
+        return "type to search | Shift+hint activates";
     }
 
     Keys.onPressed: event => {
@@ -421,7 +440,8 @@ FocusScope {
                 id: hintText
                 objectName: "hint-text"
                 width: parent.width
-                text: "Label mode: lowercase selects | uppercase final activates"
+                text: view.hintCue()
+                visible: text.length > 0
                 wrapMode: Text.Wrap
                 color: view.selectedText
                 font.family: view.fontFamily
