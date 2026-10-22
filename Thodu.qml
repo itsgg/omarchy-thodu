@@ -20,6 +20,8 @@ Item {
     property string session: ""
     property bool drawnSent: false
     readonly property string socketPath: Quickshell.env("XDG_RUNTIME_DIR") + "/thodu.sock"
+    // Avoid a visibility binding loop through PanelWindow.screen.
+    readonly property var sessionScreen: root.screenNamed(view.monitorName)
 
     Component.onCompleted: {
         listener.start(root.socketPath);
@@ -106,8 +108,8 @@ Item {
 
     PanelWindow {
         id: panel
-        visible: root.opened && view.loaded && screen !== null
-        screen: root.screenNamed(view.monitorName)
+        visible: root.opened && view.loaded && root.sessionScreen !== null
+        screen: root.sessionScreen
         anchors {
             top: true
             bottom: true
