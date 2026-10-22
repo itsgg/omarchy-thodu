@@ -7,7 +7,15 @@
 pub fn toolkit(exe: &str, libs: &[String]) -> &'static str {
     let exe = exe.rsplit('/').next().unwrap_or(exe).to_lowercase();
     let has = |needle: &str| libs.iter().any(|l| l.contains(needle));
-    if exe.starts_with("electron") || has("libnode.so") {
+    // Packaged Electron applications often statically link Node and use GTK
+    // for native integration, so neither libnode nor the absence of GTK is a
+    // reliable Electron marker. Keep the common application executable names
+    // ahead of the GTK checks.
+    let packaged_electron = [
+        "slack", "obsidian", "discord", "code", "code-oss", "codium", "cursor", "windsurf",
+    ]
+    .contains(&exe.as_str());
+    if exe.starts_with("electron") || has("libnode.so") || packaged_electron {
         "Electron"
     } else if exe.contains("chrom")
         || exe.contains("brave")

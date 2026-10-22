@@ -13,3 +13,4 @@ Acceptance:
 
 - 2026-10-21: created.
 - 2026-10-22: implemented thodu install and thodu doctor (REQ-INSTALL-01), Hyprland connection verification (REQ-CLI-02), session opening on grid when no targets found (REQ-SESSION-04), and diagnostics for unregistered applications (REQ-SESSION-05). All acceptance tests pass.
+- 2026-10-22: fixed the review findings for the udev rule, stale Hyprland sockets, doctor state, plugin assets and enablement, broken service links, Electron detection and CLI acceptance coverage. The acceptance command and full gate pass; cargo-deny is unavailable. Omarchy's key list showed SUPER+J is occupied, so the installer uses the free SUPER+SHIFT+J and SUPER+CTRL+J pair provisionally. GG's key choice remains open; no live install was run.

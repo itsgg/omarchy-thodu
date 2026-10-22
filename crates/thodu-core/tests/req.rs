@@ -867,4 +867,19 @@ fn req_session_05_unregistered_apps_are_told_what_they_need() {
             "{name}: {message}"
         );
     }
+
+    let gtk_lib = vec!["/usr/lib/libgtk-3.so.0".to_string()];
+    for exe in [
+        "/usr/lib/slack/slack",
+        "/usr/lib/obsidian/obsidian",
+        "/usr/lib/discord/Discord",
+        "/usr/lib/code/code",
+    ] {
+        assert_eq!(unregistered::toolkit(exe, &gtk_lib), "Electron", "{exe}");
+        assert!(
+            unregistered::message("electron-app", exe, &gtk_lib)
+                .contains("ACCESSIBILITY_ENABLED=1"),
+            "{exe}"
+        );
+    }
 }
