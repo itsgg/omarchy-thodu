@@ -2,12 +2,18 @@
 //! one request and one reply per line, each with `v` equal to 1.
 
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 use crate::model::{Rect, Role, Source};
 use crate::session::State;
 
 pub const VERSION: u32 = 1;
 pub const SOCKET_NAME: &str = "thodu.sock";
+
+/// Hyprland's request socket for one compositor instance.
+pub fn hyprland_socket_path(runtime: &Path, signature: &str) -> PathBuf {
+    runtime.join("hypr").join(signature).join(".socket.sock")
+}
 /// The label size `thodud` places labels for, in logical units: the overlay
 /// draws them in this box.
 pub const LABEL_HEIGHT: i32 = 18;

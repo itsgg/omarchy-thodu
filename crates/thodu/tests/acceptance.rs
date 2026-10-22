@@ -27,6 +27,8 @@ impl TestRoot {
         std::fs::create_dir_all(&path).expect("create test data directory");
         let bin = path.join("bin");
         std::fs::create_dir_all(&bin).expect("create stub command directory");
+        let uinput = path.join("uinput");
+        std::fs::write(&uinput, []).expect("create fake uinput node");
         write_executable(
             &bin.join("omarchy-shell"),
             r##"#!/bin/sh
@@ -67,6 +69,35 @@ fi
 exit 2
 "##,
         );
+        write_executable(
+            &bin.join("systemctl"),
+            r##"#!/bin/sh
+set -eu
+mkdir -p "$HOME/.local/share/thodu/tests"
+printf 'systemctl %s\n' "$*" >> "$HOME/.local/share/thodu/tests/systemctl.log"
+if [ "$2" = is-active ]; then
+  [ ! -e "$HOME/.local/share/thodu/tests/service-inactive" ] || exit 3
+  printf 'active\n'
+fi
+"##,
+        );
+        write_executable(
+            &bin.join("udevadm"),
+            r##"#!/bin/sh
+set -eu
+mkdir -p "$HOME/.local/share/thodu/tests"
+printf 'udevadm %s\n' "$*" >> "$HOME/.local/share/thodu/tests/udevadm.log"
+"##,
+        );
+        write_executable(
+            &bin.join("hyprctl"),
+            r##"#!/bin/sh
+set -eu
+mkdir -p "$HOME/.local/share/thodu/tests"
+printf 'hyprctl %s\n' "$*" >> "$HOME/.local/share/thodu/tests/hyprctl.log"
+[ "$1" = reload ]
+"##,
+        );
         Self(path)
     }
 
@@ -103,10 +134,94 @@ fn thodu(home: &Path, udev_dir: &Path, args: &[&str], cwd: &Path) -> Output {
         .env("HOME", home)
         .env("PATH", search_path)
         .env("THODU_UDEV_DIR", udev_dir)
+        .env(
+            "THODU_UDEVADM",
+            cwd.parent().expect("test root").join("bin/udevadm"),
+        )
+        .env(
+            "THODU_UINPUT_DEVICE",
+            cwd.parent().expect("test root").join("uinput"),
+        )
+        .env(
+            "THODU_SYSTEMCTL",
+            cwd.parent().expect("test root").join("bin/systemctl"),
+        )
+        .env(
+            "THODU_HYPRCTL",
+            cwd.parent().expect("test root").join("bin/hyprctl"),
+        )
         .env("ACCESSIBILITY_ENABLED", "1")
         .env("QT_LINUX_ACCESSIBILITY_ALWAYS_ON", "1")
         .output()
         .expect("run thodu")
+}
+
+fn plugin_asset_paths() -> Vec<PathBuf> {
+    fn visit(path: &Path, root: &Path, files: &mut Vec<PathBuf>) {
+        if path.is_dir() {
+            let mut entries: Vec<_> = std::fs::read_dir(path)
+                .expect("read plugin asset directory")
+                .map(|entry| entry.expect("read plugin asset").path())
+                .collect();
+            entries.sort();
+            for entry in entries {
+                visit(&entry, root, files);
+            }
+        } else {
+            files.push(
+                path.strip_prefix(root)
+                    .expect("asset below root")
+                    .to_path_buf(),
+            );
+        }
+    }
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut files = Vec::new();
+    for item in include_str!("../../../plugin-files.txt")
+        .lines()
+        .map(str::trim)
+        .filter(|item| !item.is_empty() && !item.starts_with('#'))
+    {
+        visit(&root.join(item), &root, &mut files);
+    }
+    files.sort();
+    files
+}
+
+fn install_args() -> [&'static str; 5] {
+    [
+        "install",
+        "--hints-key",
+        "SUPER + SHIFT + F12",
+        "--grid-key",
+        "SUPER + CTRL + F12",
+    ]
+}
+
+// REQ-INSTALL-01: install never substitutes unchosen keybindings in a
+// non-interactive run.
+#[test]
+fn req_install_01_noninteractive_install_requires_both_key_choices() {
+    let root = TestRoot::new("unselected-keys");
+    let home = root.home();
+    let udev_dir = root.udev_dir();
+    let cwd = root.0.join("elsewhere");
+    std::fs::create_dir_all(&cwd).expect("create unrelated working directory");
+
+    let output = thodu(&home, &udev_dir, &["install"], &cwd);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.starts_with("ERROR "), "{stderr}");
+    assert!(stderr.contains("choose both keybindings"), "{stderr}");
+    assert!(
+        !home.join(".config/hypr/bindings.lua").exists(),
+        "install must not write an unchosen binding"
+    );
+    assert!(
+        !udev_dir.join("72-thodu-uinput.rules").exists(),
+        "key choice is requested before installing system changes"
+    );
 }
 
 // REQ-INSTALL-01: thodu install writes every required file and doctor reports
@@ -140,22 +255,22 @@ fn req_install_01_fake_home_reports_missing_then_installed_reports_present() {
     assert_eq!(before.status.code(), Some(1));
     let before = String::from_utf8_lossy(&before.stdout);
     assert!(
-        before.contains("ACCESSIBILITY_ENABLED=1: missing"),
+        before.contains("ACCESSIBILITY_ENABLED=1 in Hyprland: missing"),
         "{before}"
     );
     assert!(
-        before.contains("QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1: missing"),
+        before.contains("QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 in Hyprland: missing"),
         "{before}"
     );
 
-    let installed = thodu(&home, &udev_dir, &["install"], &cwd);
+    let installed = thodu(&home, &udev_dir, &install_args(), &cwd);
     assert!(
         installed.status.success(),
         "{}",
         String::from_utf8_lossy(&installed.stderr)
     );
 
-    let rule = std::fs::read_to_string(udev_dir.join("99-thodu-uinput.rules"))
+    let rule = std::fs::read_to_string(udev_dir.join("72-thodu-uinput.rules"))
         .expect("udev rule installed in the configured rules directory");
     assert!(rule.contains("TAG+=\"uaccess\""), "{rule}");
     assert!(
@@ -165,16 +280,14 @@ fn req_install_01_fake_home_reports_missing_then_installed_reports_present() {
         "udev rule must not be installed in a home config directory"
     );
 
-    for path in [
-        ".config/omarchy/plugins/io.github.itsgg.thodu/manifest.json",
-        ".config/omarchy/plugins/io.github.itsgg.thodu/Thodu.qml",
-        ".config/omarchy/plugins/io.github.itsgg.thodu/BarProbe.qml",
-        ".config/omarchy/plugins/io.github.itsgg.thodu/components/Client.qml",
-        ".config/omarchy/plugins/io.github.itsgg.thodu/components/Listener.qml",
-        ".config/omarchy/plugins/io.github.itsgg.thodu/components/SessionView.qml",
-        ".config/omarchy/plugins/io.github.itsgg.thodu/lib/BarScan.js",
-    ] {
-        assert!(home.join(path).is_file(), "missing plugin asset {path}");
+    for path in plugin_asset_paths() {
+        assert!(
+            home.join(".config/omarchy/plugins/io.github.itsgg.thodu")
+                .join(&path)
+                .is_file(),
+            "missing plugin asset {}",
+            path.display()
+        );
     }
     let adjacent_daemon = PathBuf::from(env!("CARGO_BIN_EXE_thodu")).with_file_name("thodud");
     let expected_daemon = if adjacent_daemon.exists() {
@@ -187,6 +300,23 @@ fn req_install_01_fake_home_reports_missing_then_installed_reports_present() {
     assert!(
         service.contains(&format!("ExecStart={}", expected_daemon.display())),
         "{service}"
+    );
+    assert!(
+        service.contains("PartOf=graphical-session.target"),
+        "{service}"
+    );
+    assert!(
+        service.contains("After=graphical-session.target"),
+        "{service}"
+    );
+    assert!(
+        service.contains("WantedBy=graphical-session.target"),
+        "{service}"
+    );
+    assert!(
+        home.join(".config/systemd/user/graphical-session.target.wants/thodud.service")
+            .is_symlink(),
+        "service enabled for the graphical session"
     );
     let config: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&shell_json).expect("read enabled Omarchy config"))
@@ -227,22 +357,76 @@ fn req_install_01_fake_home_reports_missing_then_installed_reports_present() {
     );
     let installed_bindings = std::fs::read_to_string(&bindings).expect("read installed bindings");
     assert!(
-        installed_bindings
-            .lines()
-            .any(|line| !line.trim_start().starts_with("--") && line.contains("thodu hints")),
+        installed_bindings.contains("hl.env(\"ACCESSIBILITY_ENABLED\", \"1\")")
+            && installed_bindings.contains("hl.env(\"QT_LINUX_ACCESSIBILITY_ALWAYS_ON\", \"1\")"),
         "{installed_bindings}"
     );
     assert!(
-        installed_bindings
-            .lines()
-            .any(|line| !line.trim_start().starts_with("--") && line.contains("thodu grid")),
+        installed_bindings.contains("SUPER + SHIFT + F12"),
         "{installed_bindings}"
     );
     assert!(
-        installed_bindings.contains("SUPER + SHIFT + J")
-            && installed_bindings.contains("SUPER + CTRL + J"),
+        installed_bindings.contains("SUPER + CTRL + F12"),
         "{installed_bindings}"
     );
+    assert!(
+        installed_bindings.contains(&env!("CARGO_BIN_EXE_thodu").replace('\\', "\\\\")),
+        "keybindings launch the installed command by path: {installed_bindings}"
+    );
+    let udev_log = std::fs::read_to_string(home.join(".local/share/thodu/tests/udevadm.log"))
+        .expect("read udevadm log");
+    assert!(udev_log.contains("control --reload-rules"), "{udev_log}");
+    assert!(
+        udev_log.contains("trigger --action=change --subsystem-match=misc --sysname-match=uinput"),
+        "{udev_log}"
+    );
+    let systemctl_log =
+        std::fs::read_to_string(home.join(".local/share/thodu/tests/systemctl.log"))
+            .expect("read systemctl log");
+    assert!(
+        systemctl_log.contains("--user daemon-reload"),
+        "{systemctl_log}"
+    );
+    assert!(
+        systemctl_log.contains("--user enable thodud.service"),
+        "{systemctl_log}"
+    );
+    assert!(
+        systemctl_log.contains("--user restart thodud.service"),
+        "{systemctl_log}"
+    );
+    let hyprctl_log = std::fs::read_to_string(home.join(".local/share/thodu/tests/hyprctl.log"))
+        .expect("read Hyprland command log");
+    assert!(hyprctl_log.contains("hyprctl reload"), "{hyprctl_log}");
+
+    std::fs::write(
+        home.join(".local/share/thodu/tests/service-inactive"),
+        "inactive",
+    )
+    .expect("mark the fake service inactive");
+    let inactive = thodu(&home, &udev_dir, &["doctor"], &cwd);
+    assert_eq!(inactive.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&inactive.stdout).contains("thodud user service: missing"),
+        "{}",
+        String::from_utf8_lossy(&inactive.stdout)
+    );
+    std::fs::remove_file(home.join(".local/share/thodu/tests/service-inactive"))
+        .expect("restore the fake service state");
+
+    let udev_calls_before_rerun = udev_log.lines().count();
+    let rerun = thodu(&home, &udev_dir, &install_args(), &cwd);
+    assert!(
+        rerun.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rerun.stderr)
+    );
+    let udev_calls_after_rerun =
+        std::fs::read_to_string(home.join(".local/share/thodu/tests/udevadm.log"))
+            .expect("read repeated udevadm log")
+            .lines()
+            .count();
+    assert_eq!(udev_calls_after_rerun, udev_calls_before_rerun);
 
     std::fs::remove_file(
         home.join(".config/omarchy/plugins/io.github.itsgg.thodu/components/Client.qml"),
@@ -266,12 +450,12 @@ fn req_install_01_install_repairs_a_dangling_service_link() {
     let cwd = root.0.join("elsewhere");
     std::fs::create_dir_all(&cwd).expect("create unrelated working directory");
 
-    let wants = home.join(".config/systemd/user/default.target.wants");
+    let wants = home.join(".config/systemd/user/graphical-session.target.wants");
     std::fs::create_dir_all(&wants).expect("create wants directory");
     std::os::unix::fs::symlink("../missing.service", wants.join("thodud.service"))
         .expect("create dangling link");
 
-    let installed = thodu(&home, &udev_dir, &["install"], &cwd);
+    let installed = thodu(&home, &udev_dir, &install_args(), &cwd);
     assert!(
         installed.status.success(),
         "{}",

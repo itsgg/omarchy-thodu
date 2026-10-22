@@ -866,6 +866,16 @@ fn req_session_05_unregistered_apps_are_told_what_they_need() {
             message.contains(case["needs"].as_str().expect("needs")),
             "{name}: {message}"
         );
+        if case["toolkit"] == "GTK3" {
+            assert!(
+                message.contains("remove it and restart the app"),
+                "GTK3 advice must remove the blocking variable: {message}"
+            );
+            assert!(
+                !message.contains("set NO_AT_BRIDGE=1"),
+                "GTK3 advice must not recommend setting NO_AT_BRIDGE: {message}"
+            );
+        }
     }
 
     let gtk_lib = vec!["/usr/lib/libgtk-3.so.0".to_string()];

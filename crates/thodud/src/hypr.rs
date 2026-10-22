@@ -3,21 +3,19 @@
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde_json::Value;
 use thodu_core::model::{Monitor, Window};
+use thodu_core::protocol::hyprland_socket_path as hypr_socket_path;
 
 pub fn socket_path() -> Result<PathBuf, String> {
     let runtime =
         std::env::var("XDG_RUNTIME_DIR").map_err(|_| "XDG_RUNTIME_DIR is not set".to_string())?;
     let signature = std::env::var("HYPRLAND_INSTANCE_SIGNATURE")
         .map_err(|_| "HYPRLAND_INSTANCE_SIGNATURE is not set; is Hyprland running?".to_string())?;
-    Ok(PathBuf::from(runtime)
-        .join("hypr")
-        .join(signature)
-        .join(".socket.sock"))
+    Ok(hypr_socket_path(Path::new(&runtime), &signature))
 }
 
 /// One request; Hyprland answers and closes the connection.

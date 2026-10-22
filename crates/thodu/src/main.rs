@@ -8,7 +8,7 @@
 //!   thodu close SESSION
 //!   thodu bench [--sessions N] [--window ADDRESS]   time to labels drawn
 //!   thodu record-tree --out FILE [--window ADDRESS]  record the tree
-//!   thodu install                             install plugin, service and bindings
+//!   thodu install [--hints-key KEY --grid-key KEY] install plugin, service and bindings
 //!   thodu doctor                              check environment, rule and service
 //!
 //! ADDRESS is a Hyprland window address, or class:NAME for the first window
@@ -17,7 +17,7 @@
 //! It starts thodud when nothing answers on the socket. Errors print an
 //! ERROR line and exit 1; bad arguments exit 2.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, IsTerminal, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
@@ -25,7 +25,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::json;
 use thodu_core::perf;
-use thodu_core::protocol::{Reply, SOCKET_NAME, VERSION};
+use thodu_core::protocol::{Reply, SOCKET_NAME, VERSION, hyprland_socket_path};
 
 fn socket() -> Result<PathBuf, String> {
     std::env::var("XDG_RUNTIME_DIR")
@@ -48,10 +48,7 @@ fn check_hyprland_socket(
     let signature = signature.ok_or_else(|| {
         "HYPRLAND_INSTANCE_SIGNATURE is not set; is Hyprland running?".to_string()
     })?;
-    let path = PathBuf::from(runtime)
-        .join("hypr")
-        .join(signature)
-        .join(".socket.sock");
+    let path = hyprland_socket_path(Path::new(runtime), signature);
     UnixStream::connect(&path)
         .map_err(|e| format!("cannot connect to Hyprland on {}: {e}", path.display()))?;
     Ok(path)
@@ -251,41 +248,92 @@ struct DoctorItem {
     present: bool,
 }
 
+const UDEV_RULE_FILE: &str = "72-thodu-uinput.rules";
+const UDEV_RULE_CONTENT: &str =
+    "KERNEL==\"uinput\", SUBSYSTEM==\"misc\", TAG+=\"uaccess\", OPTIONS+=\"static_node=uinput\"\n";
+
+fn output_from(
+    program_env: &str,
+    program: &str,
+    args: &[&str],
+) -> Result<std::process::Output, String> {
+    let program = std::env::var_os(program_env).unwrap_or_else(|| program.into());
+    Command::new(program)
+        .args(args)
+        .output()
+        .map_err(|e| format!("cannot run {}: {e}", args.join(" ")))
+}
+
+fn systemctl_output(args: &[&str]) -> Result<std::process::Output, String> {
+    output_from("THODU_SYSTEMCTL", "systemctl", args)
+}
+
+fn command_succeeded(program_env: &str, program: &str, args: &[&str]) -> Result<(), String> {
+    let output = output_from(program_env, program, args)?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(format!(
+            "{} failed with {}{}",
+            args.join(" "),
+            output.status,
+            if detail.is_empty() {
+                String::new()
+            } else {
+                format!(": {detail}")
+            }
+        ))
+    }
+}
+
+fn uinput_path() -> PathBuf {
+    std::env::var_os("THODU_UINPUT_DEVICE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/dev/uinput"))
+}
+
+fn uinput_accessible() -> bool {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(uinput_path())
+        .is_ok()
+}
+
+fn active_config_line(content: &str, needle: &str) -> bool {
+    content.lines().any(|line| {
+        let line = line.trim_start();
+        !line.starts_with("--") && line.contains(needle)
+    })
+}
+
 fn check_doctor(home: &Path) -> (Vec<DoctorItem>, bool) {
     let mut items = Vec::new();
-    let env_file = home.join(".config/environment.d/90-thodu.conf");
-    let env_content = std::fs::read_to_string(&env_file).unwrap_or_default();
-
-    let a11y = env_content
-        .lines()
-        .any(|l| l.trim() == "ACCESSIBILITY_ENABLED=1");
+    let bindings_file = home.join(".config/hypr/bindings.lua");
+    let bindings = std::fs::read_to_string(&bindings_file).unwrap_or_default();
+    let active_line = |needle: &str| active_config_line(&bindings, needle);
+    let a11y = active_line("hl.env(\"ACCESSIBILITY_ENABLED\", \"1\")");
     items.push(DoctorItem {
-        name: "ACCESSIBILITY_ENABLED=1",
+        name: "ACCESSIBILITY_ENABLED=1 in Hyprland",
         present: a11y,
     });
 
-    let qt_a11y = env_content
-        .lines()
-        .any(|l| l.trim() == "QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1");
+    let qt_a11y = active_line("hl.env(\"QT_LINUX_ACCESSIBILITY_ALWAYS_ON\", \"1\")");
     items.push(DoctorItem {
-        name: "QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1",
+        name: "QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 in Hyprland",
         present: qt_a11y,
     });
 
-    let udev_rule_content = |path: &Path| -> bool {
-        std::fs::read_to_string(path)
-            .map(|content| {
-                content.contains("KERNEL==\"uinput\"") && content.contains("TAG+=\"uaccess\"")
-            })
-            .unwrap_or(false)
-    };
     let udev_rule = std::env::var_os("THODU_UDEV_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/etc/udev/rules.d"))
-        .join("99-thodu-uinput.rules");
-    let udev = udev_rule_content(&udev_rule);
+        .join(UDEV_RULE_FILE);
+    let udev = std::fs::read_to_string(&udev_rule)
+        .is_ok_and(|content| content == UDEV_RULE_CONTENT)
+        && uinput_accessible();
     items.push(DoctorItem {
-        name: "uinput udev rule",
+        name: "uinput rule and access",
         present: udev,
     });
 
@@ -299,24 +347,30 @@ fn check_doctor(home: &Path) -> (Vec<DoctorItem>, bool) {
         present: plugin,
     });
 
-    let service_file = home.join(".config/systemd/user/thodud.service").exists();
-    let service_enabled = home
-        .join(".config/systemd/user/default.target.wants/thodud.service")
-        .exists();
+    let service_file = std::fs::read_to_string(home.join(".config/systemd/user/thodud.service"))
+        .is_ok_and(|content| {
+            content.contains("PartOf=graphical-session.target")
+                && content.contains("After=graphical-session.target")
+                && content.contains("WantedBy=graphical-session.target")
+        });
+    let service_link =
+        home.join(".config/systemd/user/graphical-session.target.wants/thodud.service");
+    let service_enabled = std::fs::symlink_metadata(&service_link).is_ok_and(|metadata| {
+        metadata.file_type().is_symlink()
+            && std::fs::read_link(&service_link).ok().as_deref()
+                == Some(Path::new("../thodud.service"))
+    });
+    let service_running = systemctl_output(&["--user", "is-active", "thodud.service"])
+        .is_ok_and(|output| output.status.success());
     items.push(DoctorItem {
         name: "thodud user service",
-        present: service_file && service_enabled,
+        present: service_file && service_enabled && service_running,
     });
 
-    let bindings_file = home.join(".config/hypr/bindings.lua");
-    let bindings = std::fs::read_to_string(&bindings_file).unwrap_or_default();
     let binding_is_configured = |name: &str| {
-        bindings.lines().any(|line| {
-            let line = line.trim_start();
-            !line.starts_with("--") && line.contains(name)
-        })
+        active_line(&format!("\"Thodu {name}\"")) && active_line(&format!(" {name}\")"))
     };
-    let bindings = binding_is_configured("thodu hints") && binding_is_configured("thodu grid");
+    let bindings = binding_is_configured("hints") && binding_is_configured("grid");
     items.push(DoctorItem {
         name: "hyprland keybindings",
         present: bindings,
@@ -326,24 +380,7 @@ fn check_doctor(home: &Path) -> (Vec<DoctorItem>, bool) {
     (items, all_present)
 }
 
-const PLUGIN_ASSETS: &[(&str, &[u8])] = &[
-    ("manifest.json", include_bytes!("../../../manifest.json")),
-    ("Thodu.qml", include_bytes!("../../../Thodu.qml")),
-    ("BarProbe.qml", include_bytes!("../../../BarProbe.qml")),
-    (
-        "components/Client.qml",
-        include_bytes!("../../../components/Client.qml"),
-    ),
-    (
-        "components/Listener.qml",
-        include_bytes!("../../../components/Listener.qml"),
-    ),
-    (
-        "components/SessionView.qml",
-        include_bytes!("../../../components/SessionView.qml"),
-    ),
-    ("lib/BarScan.js", include_bytes!("../../../lib/BarScan.js")),
-];
+include!(concat!(env!("OUT_DIR"), "/plugin_assets.rs"));
 
 const PLUGIN_ID: &str = "io.github.itsgg.thodu";
 
@@ -358,30 +395,138 @@ fn install_plugin_files(dest: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn do_install(home: &Path) -> Result<(), String> {
-    let env_dir = home.join(".config/environment.d");
-    std::fs::create_dir_all(&env_dir).map_err(|e| format!("{}: {e}", env_dir.display()))?;
-    let env_file = env_dir.join("90-thodu.conf");
-    let env_content = "ACCESSIBILITY_ENABLED=1\nQT_LINUX_ACCESSIBILITY_ALWAYS_ON=1\n";
-    std::fs::write(&env_file, env_content).map_err(|e| format!("{}: {e}", env_file.display()))?;
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct KeyBindings {
+    hints: String,
+    grid: String,
+}
 
-    install_udev_rule(home)?;
+fn validate_key(key: &str, option: &str) -> Result<String, String> {
+    let key = key.trim();
+    if key.is_empty()
+        || !key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || " +_-".contains(c))
+    {
+        return Err(format!(
+            "{option} must contain only key names, spaces, plus signs, underscores or hyphens"
+        ));
+    }
+    Ok(key.to_string())
+}
 
-    let plugin_dest = home.join(".config/omarchy/plugins/io.github.itsgg.thodu");
-    std::fs::create_dir_all(&plugin_dest).map_err(|e| format!("{}: {e}", plugin_dest.display()))?;
-    install_plugin_files(&plugin_dest)?;
-    enable_shell_plugin()?;
+fn prompt_key(prompt: &str) -> Result<String, String> {
+    print!("{prompt}");
+    std::io::stdout().flush().map_err(|e| e.to_string())?;
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .map_err(|e| format!("cannot read key choice: {e}"))?;
+    validate_key(&line, prompt.trim_end_matches(": "))
+}
 
+fn install_key_choices(args: &[String], home: &Path) -> Result<Option<KeyBindings>, String> {
+    let hints = value(args, "--hints-key");
+    let grid = value(args, "--grid-key");
+    match (hints, grid) {
+        (Some(hints), Some(grid)) => Ok(Some(KeyBindings {
+            hints: validate_key(&hints, "--hints-key")?,
+            grid: validate_key(&grid, "--grid-key")?,
+        })),
+        (Some(_), None) | (None, Some(_)) => {
+            Err("--hints-key and --grid-key must be supplied together".into())
+        }
+        (None, None) => {
+            let path = home.join(".config/hypr/bindings.lua");
+            let current = std::fs::read_to_string(path).unwrap_or_default();
+            if active_config_line(&current, "\"Thodu hints\"")
+                && active_config_line(&current, "\"Thodu grid\"")
+            {
+                return Ok(None);
+            }
+            if !std::io::stdin().is_terminal() {
+                return Err(
+                    "choose both keybindings with --hints-key and --grid-key, or run thodu install in a terminal".into(),
+                );
+            }
+            println!("Choose the two free Omarchy keybindings for Thodu.");
+            Ok(Some(KeyBindings {
+                hints: prompt_key("Key for Thodu hints: ")?,
+                grid: prompt_key("Key for Thodu grid: ")?,
+            }))
+        }
+    }
+}
+
+fn lua_string(value: &str) -> String {
+    serde_json::to_string(value).expect("strings serialize as JSON")
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn install_hyprland_config(home: &Path, choices: Option<&KeyBindings>) -> Result<(), String> {
+    let hypr_dir = home.join(".config/hypr");
+    std::fs::create_dir_all(&hypr_dir).map_err(|e| format!("{}: {e}", hypr_dir.display()))?;
+    let bindings_file = hypr_dir.join("bindings.lua");
+    let current = std::fs::read_to_string(&bindings_file).unwrap_or_default();
+    let mut lines = String::new();
+    for line in [
+        "hl.env(\"ACCESSIBILITY_ENABLED\", \"1\")",
+        "hl.env(\"QT_LINUX_ACCESSIBILITY_ALWAYS_ON\", \"1\")",
+    ] {
+        if !active_config_line(&current, line) {
+            lines.push_str(line);
+            lines.push('\n');
+        }
+    }
+
+    let executable = std::env::current_exe()
+        .map_err(|e| format!("cannot find thodu executable: {e}"))?
+        .to_string_lossy()
+        .into_owned();
+    let command = |mode: &str| lua_string(&format!("{} {mode}", shell_quote(&executable)));
+    for (name, key) in choices.into_iter().flat_map(|choices| {
+        [
+            ("hints", choices.hints.as_str()),
+            ("grid", choices.grid.as_str()),
+        ]
+    }) {
+        let needle = format!("\"Thodu {name}\"");
+        if !active_config_line(&current, &needle) {
+            lines.push_str(&format!(
+                "o.bind({}, {}, {})\n",
+                lua_string(key),
+                lua_string(&format!("Thodu {name}")),
+                command(name)
+            ));
+        }
+    }
+    if !lines.is_empty() {
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&bindings_file)
+            .map_err(|e| format!("{}: {e}", bindings_file.display()))?;
+        if std::fs::metadata(&bindings_file).is_ok_and(|metadata| metadata.len() > 0) {
+            file.write_all(b"\n")
+                .map_err(|e| format!("{}: {e}", bindings_file.display()))?;
+        }
+        file.write_all(lines.as_bytes())
+            .map_err(|e| format!("{}: {e}", bindings_file.display()))?;
+    }
+    command_succeeded("THODU_HYPRCTL", "hyprctl", &["reload"])
+        .map_err(|e| format!("could not reload Hyprland config: {e}"))
+}
+
+fn enable_user_service(home: &Path, unit: &str) -> Result<(), String> {
     let service_dir = home.join(".config/systemd/user");
     std::fs::create_dir_all(&service_dir).map_err(|e| format!("{}: {e}", service_dir.display()))?;
-    let service_unit = format!(
-        "[Unit]\nDescription=Thodu hints daemon\nAfter=graphical-session.target\n\n[Service]\nExecStart={}\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n",
-        daemon_binary().display()
-    );
     let service_file = service_dir.join("thodud.service");
-    std::fs::write(&service_file, service_unit)
-        .map_err(|e| format!("{}: {e}", service_file.display()))?;
-    let wants_dir = service_dir.join("default.target.wants");
+    std::fs::write(&service_file, unit).map_err(|e| format!("{}: {e}", service_file.display()))?;
+
+    let wants_dir = service_dir.join("graphical-session.target.wants");
     std::fs::create_dir_all(&wants_dir).map_err(|e| format!("{}: {e}", wants_dir.display()))?;
     let symlink_path = wants_dir.join("thodud.service");
     let link_target = Path::new("../thodud.service");
@@ -407,35 +552,40 @@ fn do_install(home: &Path) -> Result<(), String> {
         Err(e) => return Err(format!("{}: {e}", symlink_path.display())),
     }
 
-    let hypr_dir = home.join(".config/hypr");
-    std::fs::create_dir_all(&hypr_dir).map_err(|e| format!("{}: {e}", hypr_dir.display()))?;
-    let bindings_file = hypr_dir.join("bindings.lua");
-    let current_bindings = std::fs::read_to_string(&bindings_file).unwrap_or_default();
-    let binding_is_configured = |name: &str| {
-        current_bindings.lines().any(|line| {
-            let line = line.trim_start();
-            !line.starts_with("--") && line.contains(name)
-        })
-    };
-    let mut binding_lines = String::new();
-    if !binding_is_configured("thodu hints") || !binding_is_configured("thodu grid") {
-        binding_lines.push_str("\n-- Thodu: keyboard hints for everything on an Omarchy screen\n");
+    command_succeeded("THODU_SYSTEMCTL", "systemctl", &["--user", "daemon-reload"])?;
+    command_succeeded(
+        "THODU_SYSTEMCTL",
+        "systemctl",
+        &["--user", "enable", "thodud.service"],
+    )?;
+    let active = systemctl_output(&["--user", "is-active", "graphical-session.target"])
+        .is_ok_and(|output| output.status.success());
+    if active {
+        command_succeeded(
+            "THODU_SYSTEMCTL",
+            "systemctl",
+            &["--user", "restart", "thodud.service"],
+        )
+        .map_err(|e| format!("cannot start thodud in the graphical session: {e}"))?;
     }
-    if !binding_is_configured("thodu hints") {
-        binding_lines.push_str("o.bind(\"SUPER + SHIFT + J\", \"Thodu hints\", \"thodu hints\")\n");
-    }
-    if !binding_is_configured("thodu grid") {
-        binding_lines.push_str("o.bind(\"SUPER + CTRL + J\", \"Thodu grid\", \"thodu grid\")\n");
-    }
-    if !binding_lines.is_empty() {
-        let mut f = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&bindings_file)
-            .map_err(|e| format!("{}: {e}", bindings_file.display()))?;
-        std::io::Write::write_all(&mut f, binding_lines.as_bytes())
-            .map_err(|e| format!("{}: {e}", bindings_file.display()))?;
-    }
+    Ok(())
+}
+
+fn do_install(home: &Path, choices: Option<&KeyBindings>) -> Result<(), String> {
+    install_udev_rule(home)?;
+
+    let plugin_dest = home.join(".config/omarchy/plugins/io.github.itsgg.thodu");
+    std::fs::create_dir_all(&plugin_dest).map_err(|e| format!("{}: {e}", plugin_dest.display()))?;
+    install_plugin_files(&plugin_dest)?;
+    enable_shell_plugin()?;
+
+    install_hyprland_config(home, choices)?;
+
+    let service_unit = format!(
+        "[Unit]\nDescription=Thodu hints daemon\nPartOf=graphical-session.target\nAfter=graphical-session.target\n\n[Service]\nExecStart={}\nEnvironment=XDG_RUNTIME_DIR=%t\nRestart=on-failure\n\n[Install]\nWantedBy=graphical-session.target\n",
+        daemon_binary().display()
+    );
+    enable_user_service(home, &service_unit)?;
 
     Ok(())
 }
@@ -545,42 +695,93 @@ fn enable_shell_plugin() -> Result<(), String> {
 }
 
 fn install_udev_rule(home: &Path) -> Result<(), String> {
-    const CONTENT: &str = "KERNEL==\"uinput\", SUBSYSTEM==\"misc\", TAG+=\"uaccess\", OPTIONS+=\"static_node=uinput\"\n";
-    const FILE: &str = "99-thodu-uinput.rules";
+    let custom_directory = std::env::var_os("THODU_UDEV_DIR").map(PathBuf::from);
+    let directory = custom_directory
+        .as_deref()
+        .unwrap_or_else(|| Path::new("/etc/udev/rules.d"));
+    let target = directory.join(UDEV_RULE_FILE);
+    let unchanged =
+        std::fs::read_to_string(&target).is_ok_and(|content| content == UDEV_RULE_CONTENT);
+    let mut changed = false;
 
-    if let Some(custom) = std::env::var_os("THODU_UDEV_DIR") {
-        let directory = PathBuf::from(custom);
-        std::fs::create_dir_all(&directory).map_err(|e| format!("{}: {e}", directory.display()))?;
-        let target = directory.join(FILE);
-        return std::fs::write(&target, CONTENT).map_err(|e| format!("{}: {e}", target.display()));
+    if !unchanged {
+        if let Some(directory) = custom_directory.as_deref() {
+            std::fs::create_dir_all(directory)
+                .map_err(|e| format!("{}: {e}", directory.display()))?;
+            std::fs::write(&target, UDEV_RULE_CONTENT)
+                .map_err(|e| format!("{}: {e}", target.display()))?;
+        } else {
+            let staged_dir = home.join(".local/share/thodu/install");
+            std::fs::create_dir_all(&staged_dir)
+                .map_err(|e| format!("{}: {e}", staged_dir.display()))?;
+            let staged = staged_dir.join(UDEV_RULE_FILE);
+            std::fs::write(&staged, UDEV_RULE_CONTENT)
+                .map_err(|e| format!("{}: {e}", staged.display()))?;
+            let result = Command::new("/usr/bin/pkexec")
+                .args(["/usr/bin/install", "-D", "-m", "644"])
+                .arg(&staged)
+                .arg(&target)
+                .status();
+            let _ = std::fs::remove_file(&staged);
+            match result {
+                Ok(status) if status.success() => {}
+                Ok(status) => {
+                    return Err(format!(
+                        "pkexec could not install the udev rule at {} (exit status {status}); rerun thodu install and approve the system prompt",
+                        target.display()
+                    ));
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "cannot start pkexec to install the udev rule at {}: {e}",
+                        target.display()
+                    ));
+                }
+            }
+        }
+        changed = true;
     }
 
-    let target = Path::new("/etc/udev/rules.d").join(FILE);
-    if std::fs::write(&target, CONTENT).is_ok() {
-        return Ok(());
+    let marker = home.join(".local/share/thodu/install/udev-applied");
+    if changed || !marker.is_file() {
+        if custom_directory.is_some() || std::env::var_os("THODU_UDEVADM").is_some() {
+            for args in [
+                &["control", "--reload-rules"][..],
+                &[
+                    "trigger",
+                    "--action=change",
+                    "--subsystem-match=misc",
+                    "--sysname-match=uinput",
+                ][..],
+            ] {
+                command_succeeded("THODU_UDEVADM", "udevadm", args)
+                    .map_err(|e| format!("could not apply the udev rule: {e}"))?;
+            }
+        } else {
+            let script = "/usr/bin/udevadm control --reload-rules && /usr/bin/udevadm trigger --action=change --subsystem-match=misc --sysname-match=uinput";
+            let output = Command::new("/usr/bin/pkexec")
+                .args(["/usr/bin/sh", "-c", script])
+                .output()
+                .map_err(|e| format!("cannot reload udev rules through pkexec: {e}"))?;
+            if !output.status.success() {
+                let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                return Err(format!(
+                    "pkexec could not reload and apply the udev rule{}; rerun thodu install and approve the system prompt",
+                    if detail.is_empty() {
+                        String::new()
+                    } else {
+                        format!(": {detail}")
+                    }
+                ));
+            }
+        }
+        if let Some(parent) = marker.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        std::fs::write(&marker, UDEV_RULE_CONTENT)
+            .map_err(|e| format!("{}: {e}", marker.display()))?;
     }
-
-    let staged_dir = home.join(".local/share/thodu/install");
-    std::fs::create_dir_all(&staged_dir).map_err(|e| format!("{}: {e}", staged_dir.display()))?;
-    let staged = staged_dir.join(FILE);
-    std::fs::write(&staged, CONTENT).map_err(|e| format!("{}: {e}", staged.display()))?;
-    let result = Command::new("/usr/bin/pkexec")
-        .args(["/usr/bin/install", "-D", "-m", "644"])
-        .arg(&staged)
-        .arg(&target)
-        .status();
-    let _ = std::fs::remove_file(&staged);
-    match result {
-        Ok(status) if status.success() => Ok(()),
-        Ok(status) => Err(format!(
-            "pkexec could not install the udev rule at {} (exit status {status}); rerun thodu install and approve the system prompt",
-            target.display()
-        )),
-        Err(e) => Err(format!(
-            "cannot start pkexec to install the udev rule at {}: {e}",
-            target.display()
-        )),
-    }
+    Ok(())
 }
 
 fn doctor() -> Result<(), String> {
@@ -601,9 +802,10 @@ fn doctor() -> Result<(), String> {
     }
 }
 
-fn install() -> Result<(), String> {
+fn install(args: &[String]) -> Result<(), String> {
     let home = home_dir()?;
-    do_install(&home)?;
+    let choices = install_key_choices(args, &home)?;
+    do_install(&home, choices.as_ref())?;
     println!("thodu installed successfully");
     Ok(())
 }
@@ -662,7 +864,7 @@ fn run(args: &[String]) -> Result<(), String> {
             let session = args.get(1).ok_or("usage: thodu close SESSION")?;
             ask(json!({"v": VERSION, "op": "close", "session": session}))?;
         }
-        Some("install") => install()?,
+        Some("install") => install(args)?,
         Some("doctor") => doctor()?,
         _ => return Err(String::new()),
     }
@@ -675,7 +877,7 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) if e.is_empty() => {
             eprintln!(
-                "usage: thodu hints|grid|targets|key|close|bench|record-tree|install|doctor ..."
+                "usage: thodu hints|grid|targets|key|close|bench|record-tree|install [--hints-key KEY --grid-key KEY]|doctor ..."
             );
             ExitCode::from(2)
         }
