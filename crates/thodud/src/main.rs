@@ -40,6 +40,8 @@ const RECORD_BUDGET: Duration = Duration::from_secs(5);
 const HIDE_WAIT: Duration = Duration::from_millis(400);
 /// Wait briefly for an Omarchy bar command to report a workspace switch.
 const WORKSPACE_CHANGE_WAIT: Duration = Duration::from_millis(150);
+/// Avoid reconnecting to Hyprland's JSON socket in a busy loop.
+const WORKSPACE_CHANGE_POLL: Duration = Duration::from_millis(25);
 /// The longest a session waits after a click for a second Return before
 /// it puts the pointer back without the overlay saying so.
 const LINGER_MAX: Duration = Duration::from_millis(1000);
@@ -113,6 +115,23 @@ fn now_us() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_micros() as u64)
         .unwrap_or_default()
+}
+
+fn wait_for_workspace_change<F>(before: i64, wait: Duration, mut current: F) -> bool
+where
+    F: FnMut() -> Option<i64>,
+{
+    let deadline = Instant::now() + wait;
+    loop {
+        if current().is_some_and(|workspace| workspace != before) {
+            return true;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        thread::sleep(WORKSPACE_CHANGE_POLL.min(remaining));
+    }
 }
 
 type Res<T> = Result<T, Box<Reply>>;
@@ -468,18 +487,9 @@ impl Daemon {
         }
         let workspace_changed = click_result.is_ok()
             && workspace_before.is_some_and(|before| {
-                let deadline = Instant::now() + WORKSPACE_CHANGE_WAIT;
-                loop {
-                    if hypr::active_workspace_id(&monitor.name)
-                        .is_some_and(|current| current != before)
-                    {
-                        break true;
-                    }
-                    if Instant::now() >= deadline {
-                        break false;
-                    }
-                    thread::sleep(Duration::from_millis(5));
-                }
+                wait_for_workspace_change(before, WORKSPACE_CHANGE_WAIT, || {
+                    hypr::active_workspace_id(&monitor.name)
+                })
             });
         let Ok(mut sessions) = self.sessions.lock() else {
             return;
@@ -887,8 +897,34 @@ mod tests {
     use thodu_core::protocol::Timing;
     use thodu_core::session::{Key, Session};
 
-    use super::{Daemon, Entry, grid_window, parse_key, with_grid_note};
+    use super::{
+        Daemon, Entry, WORKSPACE_CHANGE_WAIT, grid_window, parse_key, wait_for_workspace_change,
+        with_grid_note,
+    };
     use crate::sources::{self, Found, Source};
+
+    // REQ-ACT-02: the shell workspace guard checks at a bounded rate and
+    // still notices a workspace update before the wait expires.
+    #[test]
+    fn req_act_02_workspace_change_wait_is_rate_limited() {
+        let mut probes = 0;
+        assert!(!wait_for_workspace_change(
+            1,
+            Duration::from_millis(80),
+            || {
+                probes += 1;
+                Some(1)
+            }
+        ));
+        assert!(probes <= 5, "the guard queried Hyprland {probes} times");
+
+        let mut probes = 0;
+        assert!(wait_for_workspace_change(1, WORKSPACE_CHANGE_WAIT, || {
+            probes += 1;
+            (probes == 3).then_some(2)
+        }));
+        assert_eq!(probes, 3);
+    }
 
     struct Empty(&'static str);
 

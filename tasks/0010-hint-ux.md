@@ -1,6 +1,6 @@
 # 0010: Clear hint selection and activation
 
-Status: review
+Status: done
 Depends on: none
 Spec: REQ-SEARCH-01, REQ-SEARCH-02, REQ-ACT-01, REQ-ACT-02, REQ-SESSION-01
 Goal: Make hint selection visually clear, keep status feedback compact, and let an uppercase final label character activate a target while lowercase completion only focuses it.
