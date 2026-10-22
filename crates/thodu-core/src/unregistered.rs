@@ -5,6 +5,7 @@
 /// The toolkit a process uses, from its executable's name and its loaded
 /// libraries' file names.
 pub fn toolkit(exe: &str, libs: &[String]) -> &'static str {
+    let exe = exe.strip_suffix(" (deleted)").unwrap_or(exe);
     let exe = exe.rsplit('/').next().unwrap_or(exe).to_lowercase();
     let has = |needle: &str| libs.iter().any(|l| l.contains(needle));
     // Packaged Electron applications often statically link Node and use GTK
@@ -12,7 +13,15 @@ pub fn toolkit(exe: &str, libs: &[String]) -> &'static str {
     // reliable Electron marker. Keep the common application executable names
     // ahead of the GTK checks.
     let packaged_electron = [
-        "slack", "obsidian", "discord", "code", "code-oss", "codium", "cursor", "windsurf",
+        "slack",
+        "obsidian",
+        "discord",
+        "code",
+        "code-oss",
+        "codium",
+        "cursor",
+        "windsurf",
+        "1password",
     ]
     .contains(&exe.as_str());
     if exe.starts_with("electron") || has("libnode.so") || packaged_electron {
@@ -49,4 +58,12 @@ pub fn message(class: &str, exe: &str, libs: &[String]) -> String {
         _ => "it does not use the accessibility bus; Space opens the grid",
     };
     format!("{class} is not on the accessibility bus: {needs}")
+}
+
+/// A process inspection error must not be reported as evidence that an app
+/// does not use an accessibility toolkit.
+pub fn inspection_failed(class: &str) -> String {
+    format!(
+        "{class} is not on the accessibility bus: could not inspect its process; Space opens the grid"
+    )
 }

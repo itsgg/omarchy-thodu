@@ -861,11 +861,25 @@ fn req_session_05_unregistered_apps_are_told_what_they_need() {
         let class = case["class"].as_str().expect("class");
         assert_eq!(unregistered::toolkit(exe, &libs), case["toolkit"], "{name}");
         let message = unregistered::message(class, exe, &libs);
-        assert!(message.starts_with(class), "{name}: {message}");
-        assert!(
-            message.contains(case["needs"].as_str().expect("needs")),
-            "{name}: {message}"
-        );
+        let expected = match name {
+            "an unregistered Chromium" => {
+                "chromium is not on the accessibility bus: it starts its accessibility tree only with ACCESSIBILITY_ENABLED=1 in its environment; thodu install sets it, then restart the app"
+            }
+            "an unregistered Electron app" => {
+                "md.obsidian.Obsidian is not on the accessibility bus: it starts its accessibility tree only with ACCESSIBILITY_ENABLED=1 in its environment; thodu install sets it, then restart the app"
+            }
+            "an unregistered GTK3 app" => {
+                "org.gnome.Evince is not on the accessibility bus: GTK registers unless NO_AT_BRIDGE=1 or GTK_A11Y=none is in its environment; remove it and restart the app"
+            }
+            "an unregistered Qt app" => {
+                "org.kde.okular is not on the accessibility bus: Qt registers only with QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 in its environment; thodu install sets it, then restart the app"
+            }
+            "an app with no toolkit the bus knows" => {
+                "dev.zed.Zed is not on the accessibility bus: it does not use the accessibility bus; Space opens the grid"
+            }
+            _ => panic!("unexpected case {name}"),
+        };
+        assert_eq!(message, expected, "{name}");
         if case["toolkit"] == "GTK3" {
             assert!(
                 message.contains("remove it and restart the app"),
@@ -881,9 +895,11 @@ fn req_session_05_unregistered_apps_are_told_what_they_need() {
     let gtk_lib = vec!["/usr/lib/libgtk-3.so.0".to_string()];
     for exe in [
         "/usr/lib/slack/slack",
+        "/usr/lib/slack/slack (deleted)",
         "/usr/lib/obsidian/obsidian",
         "/usr/lib/discord/Discord",
         "/usr/lib/code/code",
+        "/opt/1Password/1password",
     ] {
         assert_eq!(unregistered::toolkit(exe, &gtk_lib), "Electron", "{exe}");
         assert!(
@@ -892,4 +908,8 @@ fn req_session_05_unregistered_apps_are_told_what_they_need() {
             "{exe}"
         );
     }
+    assert_eq!(
+        unregistered::inspection_failed("org.example.App"),
+        "org.example.App is not on the accessibility bus: could not inspect its process; Space opens the grid"
+    );
 }

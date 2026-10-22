@@ -79,6 +79,8 @@ pub enum Request {
     Close {
         session: String,
     },
+    /// Stop the current daemon so systemd can take over its socket.
+    Shutdown,
 }
 
 /// One of the bar's clickable items, relative to the bar's window.

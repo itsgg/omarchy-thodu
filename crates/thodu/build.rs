@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 fn visit(path: &Path, root: &Path, files: &mut Vec<String>) {
     let metadata = fs::symlink_metadata(path).expect("read plugin asset metadata");
@@ -50,10 +50,15 @@ fn main() {
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
     {
-        let source = root.join(line);
-        if !source.starts_with(&root) {
+        let relative = Path::new(line);
+        if relative.as_os_str().is_empty()
+            || relative
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_)))
+        {
             panic!("plugin asset path must stay under repository root: {line}");
         }
+        let source = root.join(relative);
         visit(&source, &root, &mut files);
     }
     files.sort();

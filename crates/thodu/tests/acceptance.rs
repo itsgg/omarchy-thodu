@@ -1,7 +1,9 @@
+use std::io::{BufRead, BufReader};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 struct TestRoot(PathBuf);
@@ -76,7 +78,10 @@ set -eu
 mkdir -p "$HOME/.local/share/thodu/tests"
 printf 'systemctl %s\n' "$*" >> "$HOME/.local/share/thodu/tests/systemctl.log"
 if [ "$2" = is-active ]; then
-  [ ! -e "$HOME/.local/share/thodu/tests/service-inactive" ] || exit 3
+  if [ "$3" = thodud.service ] && [ -e "$HOME/.local/share/thodu/tests/service-inactive" ]; then
+    printf 'inactive\n'
+    exit 3
+  fi
   printf 'active\n'
 fi
 "##,
@@ -87,6 +92,14 @@ fi
 set -eu
 mkdir -p "$HOME/.local/share/thodu/tests"
 printf 'udevadm %s\n' "$*" >> "$HOME/.local/share/thodu/tests/udevadm.log"
+"##,
+        );
+        write_executable(
+            &bin.join("modprobe"),
+            r##"#!/bin/sh
+set -eu
+mkdir -p "$HOME/.local/share/thodu/tests"
+printf 'modprobe %s\n' "$*" >> "$HOME/.local/share/thodu/tests/modprobe.log"
 "##,
         );
         write_executable(
@@ -107,6 +120,10 @@ printf 'hyprctl %s\n' "$*" >> "$HOME/.local/share/thodu/tests/hyprctl.log"
 
     fn udev_dir(&self) -> PathBuf {
         self.0.join("udev")
+    }
+
+    fn runtime_dir(&self) -> PathBuf {
+        self.0.join("runtime")
     }
 }
 
@@ -139,6 +156,10 @@ fn thodu(home: &Path, udev_dir: &Path, args: &[&str], cwd: &Path) -> Output {
             cwd.parent().expect("test root").join("bin/udevadm"),
         )
         .env(
+            "THODU_MODPROBE",
+            cwd.parent().expect("test root").join("bin/modprobe"),
+        )
+        .env(
             "THODU_UINPUT_DEVICE",
             cwd.parent().expect("test root").join("uinput"),
         )
@@ -149,6 +170,10 @@ fn thodu(home: &Path, udev_dir: &Path, args: &[&str], cwd: &Path) -> Output {
         .env(
             "THODU_HYPRCTL",
             cwd.parent().expect("test root").join("bin/hyprctl"),
+        )
+        .env(
+            "XDG_RUNTIME_DIR",
+            cwd.parent().expect("test root").join("runtime"),
         )
         .env("ACCESSIBILITY_ENABLED", "1")
         .env("QT_LINUX_ACCESSIBILITY_ALWAYS_ON", "1")
@@ -197,6 +222,40 @@ fn install_args() -> [&'static str; 5] {
         "--grid-key",
         "SUPER + CTRL + F12",
     ]
+}
+
+fn alternate_install_args() -> [&'static str; 5] {
+    [
+        "install",
+        "--hints-key",
+        "SUPER + SHIFT + code:201",
+        "--grid-key",
+        "SUPER + F10",
+    ]
+}
+
+fn fake_running_daemon(root: &TestRoot) -> thread::JoinHandle<()> {
+    let runtime = root.runtime_dir();
+    std::fs::create_dir_all(&runtime).expect("create fake runtime directory");
+    let listener =
+        UnixListener::bind(runtime.join("thodu.sock")).expect("start fake existing thodud");
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept daemon handoff");
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .expect("set daemon handoff timeout");
+        let mut line = String::new();
+        let mut reader = BufReader::new(stream.try_clone().expect("clone daemon stream"));
+        reader
+            .read_line(&mut line)
+            .expect("read daemon handoff request");
+        let request: serde_json::Value = serde_json::from_str(&line).expect("parse request");
+        assert_eq!(request["op"], "shutdown");
+        use std::io::Write;
+        stream
+            .write_all(b"{\"v\":1,\"ok\":true}\n")
+            .expect("reply to handoff");
+    })
 }
 
 // REQ-INSTALL-01: install never substitutes unchosen keybindings in a
@@ -254,6 +313,12 @@ fn req_install_01_fake_home_reports_missing_then_installed_reports_present() {
     let before = thodu(&home, &udev_dir, &["doctor"], &cwd);
     assert_eq!(before.status.code(), Some(1));
     let before = String::from_utf8_lossy(&before.stdout);
+    let before_items: Vec<_> = before.lines().collect();
+    assert_eq!(before_items.len(), 6, "{before}");
+    assert!(
+        before_items.iter().all(|line| line.ends_with(": missing")),
+        "{before}"
+    );
     assert!(
         before.contains("ACCESSIBILITY_ENABLED=1 in Hyprland: missing"),
         "{before}"
@@ -263,7 +328,9 @@ fn req_install_01_fake_home_reports_missing_then_installed_reports_present() {
         "{before}"
     );
 
+    let handoff = fake_running_daemon(&root);
     let installed = thodu(&home, &udev_dir, &install_args(), &cwd);
+    handoff.join().expect("complete fake daemon handoff");
     assert!(
         installed.status.success(),
         "{}",
@@ -380,6 +447,11 @@ fn req_install_01_fake_home_reports_missing_then_installed_reports_present() {
         udev_log.contains("trigger --action=change --subsystem-match=misc --sysname-match=uinput"),
         "{udev_log}"
     );
+    assert!(udev_log.contains("udevadm settle"), "{udev_log}");
+    let modprobe_log = std::fs::read_to_string(home.join(".local/share/thodu/tests/modprobe.log"))
+        .expect("read modprobe log");
+    assert_eq!(modprobe_log.lines().count(), 1, "{modprobe_log}");
+    assert!(modprobe_log.contains("modprobe uinput"), "{modprobe_log}");
     let systemctl_log =
         std::fs::read_to_string(home.join(".local/share/thodu/tests/systemctl.log"))
             .expect("read systemctl log");
@@ -392,7 +464,11 @@ fn req_install_01_fake_home_reports_missing_then_installed_reports_present() {
         "{systemctl_log}"
     );
     assert!(
-        systemctl_log.contains("--user restart thodud.service"),
+        systemctl_log.contains("--user stop thodud.service"),
+        "{systemctl_log}"
+    );
+    assert!(
+        systemctl_log.contains("--user start thodud.service"),
         "{systemctl_log}"
     );
     let hyprctl_log = std::fs::read_to_string(home.join(".local/share/thodu/tests/hyprctl.log"))
@@ -404,6 +480,17 @@ fn req_install_01_fake_home_reports_missing_then_installed_reports_present() {
         "inactive",
     )
     .expect("mark the fake service inactive");
+    let failed_start = thodu(&home, &udev_dir, &install_args(), &cwd);
+    assert_eq!(failed_start.status.code(), Some(1));
+    let failed_start_stderr = String::from_utf8_lossy(&failed_start.stderr);
+    assert!(
+        failed_start_stderr.starts_with("ERROR "),
+        "{failed_start_stderr}"
+    );
+    assert!(
+        failed_start_stderr.contains("did not stay active after start"),
+        "{failed_start_stderr}"
+    );
     let inactive = thodu(&home, &udev_dir, &["doctor"], &cwd);
     assert_eq!(inactive.status.code(), Some(1));
     assert!(
@@ -414,6 +501,9 @@ fn req_install_01_fake_home_reports_missing_then_installed_reports_present() {
     std::fs::remove_file(home.join(".local/share/thodu/tests/service-inactive"))
         .expect("restore the fake service state");
 
+    let plugin_dir = home.join(".config/omarchy/plugins/io.github.itsgg.thodu");
+    let stale_asset = plugin_dir.join("components/Old.qml");
+    std::fs::write(&stale_asset, "stale").expect("add a stale installed asset");
     let udev_calls_before_rerun = udev_log.lines().count();
     let rerun = thodu(&home, &udev_dir, &install_args(), &cwd);
     assert!(
@@ -421,12 +511,51 @@ fn req_install_01_fake_home_reports_missing_then_installed_reports_present() {
         "{}",
         String::from_utf8_lossy(&rerun.stderr)
     );
+    assert!(
+        !stale_asset.exists(),
+        "install removes assets absent from the manifest"
+    );
     let udev_calls_after_rerun =
         std::fs::read_to_string(home.join(".local/share/thodu/tests/udevadm.log"))
             .expect("read repeated udevadm log")
             .lines()
             .count();
     assert_eq!(udev_calls_after_rerun, udev_calls_before_rerun);
+    let omarchy_log_after_rerun =
+        std::fs::read_to_string(home.join(".local/share/thodu/tests/omarchy.log"))
+            .expect("read repeated Omarchy log");
+    assert_eq!(
+        omarchy_log_after_rerun
+            .lines()
+            .filter(|line| line.contains("plugin enable io.github.itsgg.thodu"))
+            .count(),
+        1,
+        "reinstall leaves an already enabled plugin in place"
+    );
+
+    let changed_keys = thodu(&home, &udev_dir, &alternate_install_args(), &cwd);
+    assert!(
+        changed_keys.status.success(),
+        "{}",
+        String::from_utf8_lossy(&changed_keys.stderr)
+    );
+    let changed_bindings = std::fs::read_to_string(&bindings).expect("read changed keybindings");
+    assert!(
+        changed_bindings.contains("SUPER + SHIFT + code:201"),
+        "{changed_bindings}"
+    );
+    assert!(
+        changed_bindings.contains("SUPER + F10"),
+        "{changed_bindings}"
+    );
+    assert!(
+        !changed_bindings.contains("SUPER + SHIFT + F12"),
+        "{changed_bindings}"
+    );
+    assert!(
+        !changed_bindings.contains("SUPER + CTRL + F12"),
+        "{changed_bindings}"
+    );
 
     std::fs::remove_file(
         home.join(".config/omarchy/plugins/io.github.itsgg.thodu/components/Client.qml"),
@@ -511,4 +640,50 @@ fn req_cli_02_no_hyprland_socket_exits_1_with_error() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.starts_with("ERROR "), "{stderr}");
     assert!(stderr.contains("cannot connect to Hyprland"), "{stderr}");
+    assert!(
+        stderr.contains("start or return to Hyprland and retry"),
+        "{stderr}"
+    );
+}
+
+// REQ-INSTALL-01: failed uinput access never records installation as applied,
+// and a later install retries the permission setup.
+#[test]
+fn req_install_01_uinput_access_failure_does_not_block_retry() {
+    let root = TestRoot::new("uinput-retry");
+    let home = root.home();
+    let udev_dir = root.udev_dir();
+    let cwd = root.0.join("elsewhere");
+    std::fs::create_dir_all(&cwd).expect("create unrelated working directory");
+    let uinput = root.0.join("uinput");
+    std::fs::remove_file(&uinput).expect("remove accessible fake uinput device");
+
+    let failed = thodu(&home, &udev_dir, &install_args(), &cwd);
+    assert_eq!(failed.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&failed.stderr);
+    assert!(stderr.starts_with("ERROR "), "{stderr}");
+    assert!(
+        stderr.contains("/dev/uinput is still unavailable"),
+        "{stderr}"
+    );
+    assert!(
+        !home
+            .join(".local/share/thodu/install/udev-applied")
+            .exists(),
+        "failed access must not write the applied marker"
+    );
+
+    std::fs::write(&uinput, []).expect("restore accessible fake uinput device");
+    let retried = thodu(&home, &udev_dir, &install_args(), &cwd);
+    assert!(
+        retried.status.success(),
+        "stdout: {}; stderr: {}",
+        String::from_utf8_lossy(&retried.stdout),
+        String::from_utf8_lossy(&retried.stderr)
+    );
+    assert!(
+        home.join(".local/share/thodu/install/udev-applied")
+            .is_file(),
+        "successful access records the applied marker"
+    );
 }

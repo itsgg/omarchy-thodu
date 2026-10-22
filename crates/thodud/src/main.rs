@@ -15,7 +15,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -68,6 +68,7 @@ struct Entry {
 
 struct Daemon {
     socket: PathBuf,
+    shutdown: AtomicBool,
     sessions: Mutex<HashMap<String, Entry>>,
     /// Signalled whenever a session's hidden, clicked, pending or closing
     /// changes, or it ends.
@@ -622,6 +623,7 @@ impl Daemon {
                 self.finish(&session);
                 Ok(Reply::ok())
             }
+            Request::Shutdown => Ok(Reply::ok()),
         };
         result.unwrap_or_else(|e| *e)
     }
@@ -699,6 +701,15 @@ fn serve(daemon: &Arc<Daemon>, stream: UnixStream) {
                 listeners.add(stream);
             }
         }
+        if reply.ok
+            && matches!(
+                serde_json::from_str::<Envelope>(&line).map(|e| e.request),
+                Ok(Request::Shutdown)
+            )
+        {
+            daemon.shutdown.store(true, Ordering::Release);
+            return;
+        }
     }
 }
 
@@ -709,8 +720,41 @@ fn main() {
     };
     let socket = PathBuf::from(runtime).join(protocol::SOCKET_NAME);
     if UnixStream::connect(&socket).is_ok() {
-        eprintln!("thodud is already running on {}", socket.display());
-        return;
+        if std::env::var_os("INVOCATION_ID").is_none() {
+            eprintln!("thodud is already running on {}", socket.display());
+            return;
+        }
+        let request = format!("{{\"v\":{},\"op\":\"shutdown\"}}\n", protocol::VERSION);
+        let handed_off = UnixStream::connect(&socket).and_then(|mut stream| {
+            stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+            stream.write_all(request.as_bytes())?;
+            let mut reply = String::new();
+            BufReader::new(stream).read_line(&mut reply)?;
+            let reply: Reply = serde_json::from_str(&reply).map_err(std::io::Error::other)?;
+            if reply.ok {
+                Ok(())
+            } else {
+                Err(std::io::Error::other("existing daemon refused shutdown"))
+            }
+        });
+        if handed_off.is_err() {
+            eprintln!(
+                "ERROR an existing thodud owns {}; stop it and start the Thodu service again",
+                socket.display()
+            );
+            return;
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline && UnixStream::connect(&socket).is_ok() {
+            thread::sleep(Duration::from_millis(10));
+        }
+        if UnixStream::connect(&socket).is_ok() {
+            eprintln!(
+                "ERROR the existing thodud did not release {}; stop it and start the Thodu service again",
+                socket.display()
+            );
+            return;
+        }
     }
     let _ = std::fs::remove_file(&socket);
     let listener = match UnixListener::bind(&socket) {
@@ -735,6 +779,7 @@ fn main() {
     });
     let daemon = Arc::new(Daemon {
         socket,
+        shutdown: AtomicBool::new(false),
         sessions: Mutex::new(HashMap::new()),
         changed: Condvar::new(),
         next: AtomicU64::new(1),
@@ -744,10 +789,27 @@ fn main() {
         listeners: Mutex::new(listeners::Listeners::new()),
         keyboard: Mutex::new(None),
     });
-    for stream in listener.incoming().flatten() {
-        let daemon = Arc::clone(&daemon);
-        thread::spawn(move || serve(&daemon, stream));
+    if let Err(e) = listener.set_nonblocking(true) {
+        eprintln!("ERROR cannot make the service listener nonblocking: {e}");
+        std::process::exit(1);
     }
+    while !daemon.shutdown.load(Ordering::Acquire) {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                let daemon = Arc::clone(&daemon);
+                thread::spawn(move || serve(&daemon, stream));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(e) => {
+                eprintln!("ERROR cannot accept a Thodu client: {e}");
+                break;
+            }
+        }
+    }
+    drop(listener);
+    let _ = std::fs::remove_file(&daemon.socket);
 }
 
 #[cfg(test)]

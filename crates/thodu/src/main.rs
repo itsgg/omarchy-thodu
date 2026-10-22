@@ -49,8 +49,12 @@ fn check_hyprland_socket(
         "HYPRLAND_INSTANCE_SIGNATURE is not set; is Hyprland running?".to_string()
     })?;
     let path = hyprland_socket_path(Path::new(runtime), signature);
-    UnixStream::connect(&path)
-        .map_err(|e| format!("cannot connect to Hyprland on {}: {e}", path.display()))?;
+    UnixStream::connect(&path).map_err(|e| {
+        format!(
+            "cannot connect to Hyprland on {}: {e}; start or return to Hyprland and retry",
+            path.display()
+        )
+    })?;
     Ok(path)
 }
 
@@ -268,6 +272,66 @@ fn systemctl_output(args: &[&str]) -> Result<std::process::Output, String> {
     output_from("THODU_SYSTEMCTL", "systemctl", args)
 }
 
+fn shutdown_existing_daemon() -> Result<(), String> {
+    let Ok(path) = socket() else {
+        return Ok(());
+    };
+    let Ok(mut stream) = UnixStream::connect(&path) else {
+        return Ok(());
+    };
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .map_err(|e| format!("cannot talk to the current thodud: {e}"))?;
+    let request = json!({"v": VERSION, "op": "shutdown"});
+    stream
+        .write_all(format!("{request}\n").as_bytes())
+        .map_err(|e| format!("cannot ask the current thodud to stop: {e}"))?;
+    let mut line = String::new();
+    BufReader::new(stream)
+        .read_line(&mut line)
+        .map_err(|e| format!("the current thodud did not answer its shutdown request: {e}"))?;
+    let reply: Reply = serde_json::from_str(&line)
+        .map_err(|e| format!("the current thodud does not support service handoff: {e}"))?;
+    if !reply.ok {
+        return Err(
+            "the current thodud refused service handoff; stop it and rerun thodu install".into(),
+        );
+    }
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if UnixStream::connect(&path).is_err() {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    Err("the current thodud did not release its socket; stop it and rerun thodu install".into())
+}
+
+fn wait_for_service_active() -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut active_since = None;
+    while Instant::now() < deadline {
+        let active =
+            systemctl_output(&["--user", "is-active", "thodud.service"]).is_ok_and(|output| {
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).trim() == "active"
+            });
+        if active {
+            let since = active_since.get_or_insert_with(Instant::now);
+            if since.elapsed() >= Duration::from_millis(100) {
+                return Ok(());
+            }
+        } else {
+            active_since = None;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    Err(
+        "thodud did not stay active after start; stop the existing daemon and rerun thodu install"
+            .into(),
+    )
+}
+
 fn command_succeeded(program_env: &str, program: &str, args: &[&str]) -> Result<(), String> {
     let output = output_from(program_env, program, args)?;
     if output.status.success() {
@@ -299,6 +363,17 @@ fn uinput_accessible() -> bool {
         .write(true)
         .open(uinput_path())
         .is_ok()
+}
+
+fn wait_for_uinput_accessible() -> bool {
+    let deadline = Instant::now() + Duration::from_millis(750);
+    while Instant::now() < deadline {
+        if uinput_accessible() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    uinput_accessible()
 }
 
 fn active_config_line(content: &str, needle: &str) -> bool {
@@ -384,7 +459,45 @@ include!(concat!(env!("OUT_DIR"), "/plugin_assets.rs"));
 
 const PLUGIN_ID: &str = "io.github.itsgg.thodu";
 
+fn prune_plugin_dir(directory: &Path, relative: &Path, expected: &[PathBuf]) -> Result<(), String> {
+    let entries = match std::fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("{}: {e}", directory.display())),
+    };
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("{}: {e}", directory.display()))?;
+        let name = entry.file_name();
+        let child_relative = relative.join(name);
+        let child = entry.path();
+        let metadata =
+            std::fs::symlink_metadata(&child).map_err(|e| format!("{}: {e}", child.display()))?;
+        if metadata.file_type().is_symlink() {
+            std::fs::remove_file(&child).map_err(|e| format!("{}: {e}", child.display()))?;
+            continue;
+        }
+        if metadata.is_dir() {
+            if expected
+                .iter()
+                .any(|path| path.starts_with(&child_relative) && path != &child_relative)
+            {
+                prune_plugin_dir(&child, &child_relative, expected)?;
+            } else {
+                std::fs::remove_dir_all(&child).map_err(|e| format!("{}: {e}", child.display()))?;
+            }
+        } else if !expected.iter().any(|path| path == &child_relative) {
+            std::fs::remove_file(&child).map_err(|e| format!("{}: {e}", child.display()))?;
+        }
+    }
+    Ok(())
+}
+
 fn install_plugin_files(dest: &Path) -> Result<(), String> {
+    let expected: Vec<PathBuf> = PLUGIN_ASSETS
+        .iter()
+        .map(|(path, _)| PathBuf::from(path))
+        .collect();
+    prune_plugin_dir(dest, Path::new(""), &expected)?;
     for (path, contents) in PLUGIN_ASSETS {
         let target = dest.join(path);
         if let Some(parent) = target.parent() {
@@ -406,10 +519,10 @@ fn validate_key(key: &str, option: &str) -> Result<String, String> {
     if key.is_empty()
         || !key
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || " +_-".contains(c))
+            .all(|c| c.is_ascii_alphanumeric() || " +_-:".contains(c))
     {
         return Err(format!(
-            "{option} must contain only key names, spaces, plus signs, underscores or hyphens"
+            "{option} must contain only key names, spaces, plus signs, underscores, hyphens or colons"
         ));
     }
     Ok(key.to_string())
@@ -429,10 +542,16 @@ fn install_key_choices(args: &[String], home: &Path) -> Result<Option<KeyBinding
     let hints = value(args, "--hints-key");
     let grid = value(args, "--grid-key");
     match (hints, grid) {
-        (Some(hints), Some(grid)) => Ok(Some(KeyBindings {
-            hints: validate_key(&hints, "--hints-key")?,
-            grid: validate_key(&grid, "--grid-key")?,
-        })),
+        (Some(hints), Some(grid)) => {
+            let choices = KeyBindings {
+                hints: validate_key(&hints, "--hints-key")?,
+                grid: validate_key(&grid, "--grid-key")?,
+            };
+            if choices.hints == choices.grid {
+                return Err("--hints-key and --grid-key must be different".into());
+            }
+            Ok(Some(choices))
+        }
         (Some(_), None) | (None, Some(_)) => {
             Err("--hints-key and --grid-key must be supplied together".into())
         }
@@ -450,10 +569,14 @@ fn install_key_choices(args: &[String], home: &Path) -> Result<Option<KeyBinding
                 );
             }
             println!("Choose the two free Omarchy keybindings for Thodu.");
-            Ok(Some(KeyBindings {
+            let choices = KeyBindings {
                 hints: prompt_key("Key for Thodu hints: ")?,
                 grid: prompt_key("Key for Thodu grid: ")?,
-            }))
+            };
+            if choices.hints == choices.grid {
+                return Err("the Thodu hints and grid keys must be different".into());
+            }
+            Ok(Some(choices))
         }
     }
 }
@@ -471,49 +594,61 @@ fn install_hyprland_config(home: &Path, choices: Option<&KeyBindings>) -> Result
     std::fs::create_dir_all(&hypr_dir).map_err(|e| format!("{}: {e}", hypr_dir.display()))?;
     let bindings_file = hypr_dir.join("bindings.lua");
     let current = std::fs::read_to_string(&bindings_file).unwrap_or_default();
-    let mut lines = String::new();
-    for line in [
-        "hl.env(\"ACCESSIBILITY_ENABLED\", \"1\")",
-        "hl.env(\"QT_LINUX_ACCESSIBILITY_ALWAYS_ON\", \"1\")",
-    ] {
-        if !active_config_line(&current, line) {
-            lines.push_str(line);
-            lines.push('\n');
-        }
-    }
-
     let executable = std::env::current_exe()
         .map_err(|e| format!("cannot find thodu executable: {e}"))?
         .to_string_lossy()
         .into_owned();
-    let command = |mode: &str| lua_string(&format!("{} {mode}", shell_quote(&executable)));
-    for (name, key) in choices.into_iter().flat_map(|choices| {
-        [
-            ("hints", choices.hints.as_str()),
-            ("grid", choices.grid.as_str()),
-        ]
-    }) {
-        let needle = format!("\"Thodu {name}\"");
-        if !active_config_line(&current, &needle) {
-            lines.push_str(&format!(
-                "o.bind({}, {}, {})\n",
-                lua_string(key),
-                lua_string(&format!("Thodu {name}")),
-                command(name)
-            ));
+    let binding_line = |name: &str, key: &str| {
+        let command = lua_string(&format!("{} {name}", shell_quote(&executable)));
+        format!(
+            "o.bind({}, {}, {})\n",
+            lua_string(key),
+            lua_string(&format!("Thodu {name}")),
+            command
+        )
+    };
+    let mut updated = String::new();
+    let (mut has_hints, mut has_grid) = (false, false);
+    for line in current.lines() {
+        let active_binding = !line.trim_start().starts_with("--") && line.contains("o.bind(");
+        if let Some(choices) = choices.filter(|_| active_binding) {
+            if line.contains("\"Thodu hints\"") {
+                if !has_hints {
+                    updated.push_str(&binding_line("hints", &choices.hints));
+                    has_hints = true;
+                }
+                continue;
+            }
+            if line.contains("\"Thodu grid\"") {
+                if !has_grid {
+                    updated.push_str(&binding_line("grid", &choices.grid));
+                    has_grid = true;
+                }
+                continue;
+            }
+        }
+        updated.push_str(line);
+        updated.push('\n');
+    }
+    if let Some(choices) = choices {
+        if !has_hints {
+            updated.push_str(&binding_line("hints", &choices.hints));
+        }
+        if !has_grid {
+            updated.push_str(&binding_line("grid", &choices.grid));
         }
     }
-    if !lines.is_empty() {
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&bindings_file)
-            .map_err(|e| format!("{}: {e}", bindings_file.display()))?;
-        if std::fs::metadata(&bindings_file).is_ok_and(|metadata| metadata.len() > 0) {
-            file.write_all(b"\n")
-                .map_err(|e| format!("{}: {e}", bindings_file.display()))?;
+    for line in [
+        "hl.env(\"ACCESSIBILITY_ENABLED\", \"1\")",
+        "hl.env(\"QT_LINUX_ACCESSIBILITY_ALWAYS_ON\", \"1\")",
+    ] {
+        if !active_config_line(&updated, line) {
+            updated.push_str(line);
+            updated.push('\n');
         }
-        file.write_all(lines.as_bytes())
+    }
+    if updated != current {
+        std::fs::write(&bindings_file, updated)
             .map_err(|e| format!("{}: {e}", bindings_file.display()))?;
     }
     command_succeeded("THODU_HYPRCTL", "hyprctl", &["reload"])
@@ -564,9 +699,17 @@ fn enable_user_service(home: &Path, unit: &str) -> Result<(), String> {
         command_succeeded(
             "THODU_SYSTEMCTL",
             "systemctl",
-            &["--user", "restart", "thodud.service"],
+            &["--user", "stop", "thodud.service"],
+        )
+        .map_err(|e| format!("cannot stop the old thodud service: {e}"))?;
+        shutdown_existing_daemon()?;
+        command_succeeded(
+            "THODU_SYSTEMCTL",
+            "systemctl",
+            &["--user", "start", "thodud.service"],
         )
         .map_err(|e| format!("cannot start thodud in the graphical session: {e}"))?;
+        wait_for_service_active()?;
     }
     Ok(())
 }
@@ -577,7 +720,7 @@ fn do_install(home: &Path, choices: Option<&KeyBindings>) -> Result<(), String> 
     let plugin_dest = home.join(".config/omarchy/plugins/io.github.itsgg.thodu");
     std::fs::create_dir_all(&plugin_dest).map_err(|e| format!("{}: {e}", plugin_dest.display()))?;
     install_plugin_files(&plugin_dest)?;
-    enable_shell_plugin()?;
+    enable_shell_plugin(home)?;
 
     install_hyprland_config(home, choices)?;
 
@@ -619,7 +762,7 @@ fn shell_enables_plugin(home: &Path, plugin_id: &str) -> bool {
     in_bar || in_plugins
 }
 
-fn enable_shell_plugin() -> Result<(), String> {
+fn enable_shell_plugin(home: &Path) -> Result<(), String> {
     let rescan = Command::new("omarchy-shell")
         .args(["shell", "rescanPlugins"])
         .output()
@@ -634,6 +777,10 @@ fn enable_shell_plugin() -> Result<(), String> {
                 format!(": {detail}")
             }
         ));
+    }
+
+    if shell_enables_plugin(home, PLUGIN_ID) {
+        return Ok(());
     }
 
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -743,22 +890,29 @@ fn install_udev_rule(home: &Path) -> Result<(), String> {
     }
 
     let marker = home.join(".local/share/thodu/install/udev-applied");
-    if changed || !marker.is_file() {
-        if custom_directory.is_some() || std::env::var_os("THODU_UDEVADM").is_some() {
+    if changed || !marker.is_file() || !uinput_accessible() {
+        if custom_directory.is_some()
+            || std::env::var_os("THODU_UDEVADM").is_some()
+            || std::env::var_os("THODU_MODPROBE").is_some()
+        {
+            command_succeeded("THODU_UDEVADM", "udevadm", &["control", "--reload-rules"])
+                .map_err(|e| format!("could not reload the udev rules: {e}"))?;
+            command_succeeded("THODU_MODPROBE", "modprobe", &["uinput"])
+                .map_err(|e| format!("could not load the uinput module: {e}"))?;
             for args in [
-                &["control", "--reload-rules"][..],
                 &[
                     "trigger",
                     "--action=change",
                     "--subsystem-match=misc",
                     "--sysname-match=uinput",
                 ][..],
+                &["settle"][..],
             ] {
                 command_succeeded("THODU_UDEVADM", "udevadm", args)
                     .map_err(|e| format!("could not apply the udev rule: {e}"))?;
             }
         } else {
-            let script = "/usr/bin/udevadm control --reload-rules && /usr/bin/udevadm trigger --action=change --subsystem-match=misc --sysname-match=uinput";
+            let script = "/usr/bin/udevadm control --reload-rules && /usr/bin/modprobe uinput && /usr/bin/udevadm trigger --action=change --subsystem-match=misc --sysname-match=uinput && /usr/bin/udevadm settle";
             let output = Command::new("/usr/bin/pkexec")
                 .args(["/usr/bin/sh", "-c", script])
                 .output()
@@ -774,6 +928,11 @@ fn install_udev_rule(home: &Path) -> Result<(), String> {
                     }
                 ));
             }
+        }
+        if !wait_for_uinput_accessible() {
+            return Err(
+                "the udev rule was applied, but /dev/uinput is still unavailable; check the uinput module and rerun thodu install".into(),
+            );
         }
         if let Some(parent) = marker.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;

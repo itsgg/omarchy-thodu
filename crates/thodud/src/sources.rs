@@ -115,16 +115,25 @@ impl Source for Atspi {
             // REQ-SESSION-05: say what the app needs; the other sources
             // carry on.
             let proc = std::path::PathBuf::from(format!("/proc/{}", window.pid));
-            let exe = std::fs::read_link(proc.join("exe"))
+            let exe_result = std::fs::read_link(proc.join("exe"));
+            let exe = exe_result
+                .as_ref()
                 .map(|p| p.display().to_string())
                 .unwrap_or_default();
-            let libs: Vec<String> = std::fs::read_to_string(proc.join("maps"))
+            let maps_result = std::fs::read_to_string(proc.join("maps"));
+            let libs: Vec<String> = maps_result
+                .as_deref()
                 .unwrap_or_default()
                 .lines()
                 .filter_map(|l| l.split_whitespace().nth(5))
                 .filter(|p| p.contains(".so"))
                 .map(String::from)
                 .collect();
+            if (exe_result.is_err() || maps_result.is_err())
+                && unregistered::toolkit(&exe, &libs).is_empty()
+            {
+                return Ok((Vec::new(), unregistered::inspection_failed(&window.class)));
+            }
             return Ok((
                 Vec::new(),
                 unregistered::message(&window.class, &exe, &libs),

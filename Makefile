@@ -4,7 +4,7 @@
 PLUGIN_ID := io.github.itsgg.thodu
 DEST := $(HOME)/.config/omarchy/plugins/$(PLUGIN_ID)
 # The plugin alone: the Rust workspace, its build and the tests stay here.
-PLUGIN_FILES := $(shell cat plugin-files.txt)
+PLUGIN_FILES := $(shell sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$$/d' plugin-files.txt)
 
 check:
 	@tools/gate
