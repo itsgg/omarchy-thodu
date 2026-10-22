@@ -154,10 +154,12 @@ FocusScope {
 
     // A key as SPEC section 7 names it, or null for keys a session ignores.
     function keyRequest(key, modifiers, text, autoRepeat) {
-        // REQ-ACT-02: an OS key repeat is not a second deliberate Return.
-        if (autoRepeat && (key === Qt.Key_Return || key === Qt.Key_Enter))
-            return null;
+        // Caps Lock can make text uppercase without Shift. Only Shift means
+        // activation; repeats cannot complete labels or double-click.
         const shift = (modifiers & Qt.ShiftModifier) !== 0;
+        if (autoRepeat && (key === Qt.Key_Return || key === Qt.Key_Enter ||
+                           (shift && key >= Qt.Key_A && key <= Qt.Key_Z)))
+            return null;
         const ctrl = (modifiers & Qt.ControlModifier) !== 0;
         let name = "";
         if (key === Qt.Key_Escape)
@@ -176,8 +178,7 @@ FocusScope {
             name = "/";
         else if (key >= Qt.Key_A && key <= Qt.Key_Z) {
             const lower = String.fromCharCode(key).toLowerCase();
-            const generatedUppercase = text && text.length === 1 && text !== text.toLowerCase();
-            name = shift || generatedUppercase ? lower.toUpperCase() : lower;
+            name = shift ? lower.toUpperCase() : lower;
         }
         else
             return null;

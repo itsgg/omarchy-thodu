@@ -173,7 +173,9 @@ impl Session {
         let cell = self.targets[i].bounds;
         if grid::is_fine(&cell) {
             self.focused = Some(i);
-            self.label_selected = true;
+            // A fine grid cell still needs its bounds outlined. The selected
+            // label treatment is for a labelled app or bar target.
+            self.label_selected = false;
         } else {
             self.show_grid(cell);
         }
@@ -210,6 +212,7 @@ impl Session {
     fn type_label(&mut self, c: char, activate: bool, at_ms: u64) -> Option<Act> {
         if self.label_prefix.is_empty() {
             self.label_selected = false;
+            self.focused = None;
         }
         self.label_prefix.extend(c.to_lowercase());
         let prefix = self.label_prefix.clone();
@@ -222,7 +225,7 @@ impl Session {
                 self.choose_cell(i);
             }
             if activate {
-                return self.act_focused(false, false, at_ms);
+                return self.act_focused(false, false, false, at_ms);
             }
         } else if !self.labels.iter().any(|l| l.starts_with(&prefix)) {
             self.label_prefix.clear();
@@ -248,7 +251,13 @@ impl Session {
         self.label_selected = false;
     }
 
-    fn act_focused(&mut self, shift: bool, ctrl: bool, at_ms: u64) -> Option<Act> {
+    fn act_focused(
+        &mut self,
+        shift: bool,
+        ctrl: bool,
+        allow_linger: bool,
+        at_ms: u64,
+    ) -> Option<Act> {
         let target = self.focused?;
         let plain = !shift && !ctrl;
         let act = Act {
@@ -258,7 +267,7 @@ impl Session {
             count: 1,
             ctrl,
             again: false,
-            linger: plain && self.targets[target].role != Role::Entry,
+            linger: allow_linger && plain && self.targets[target].role != Role::Entry,
         };
         self.state = State::Acting;
         self.acted_at = at_ms;
@@ -315,7 +324,7 @@ impl Session {
                 }
             }
             Key::Return { shift, ctrl } => {
-                return self.act_focused(shift, ctrl, at_ms);
+                return self.act_focused(shift, ctrl, true, at_ms);
             }
         }
         None

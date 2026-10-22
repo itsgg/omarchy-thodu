@@ -290,7 +290,7 @@ fn req_search_01_filter_cases() {
     }
 }
 
-// REQ-SEARCH-01: Shift and a label focuses that target; Tab moves the focus.
+// REQ-SEARCH-01: Shift starts a label; lowercase completion focuses it.
 #[test]
 fn req_search_01_shift_types_labels_and_tab_moves() {
     let targets: Vec<Target> = (0..30)
@@ -298,23 +298,27 @@ fn req_search_01_shift_types_labels_and_tab_moves() {
         .collect();
     let mut s = Session::new(targets, false);
     let label = s.labels[29].clone();
-    for c in label.chars() {
-        s.key(Key::Char {
-            c: c.to_ascii_uppercase(),
-            shift: true,
-        });
+    let mut chars = label.chars();
+    let first = chars.next().expect("a two-letter label");
+    s.key(Key::Upper {
+        c: first.to_ascii_uppercase(),
+    });
+    for c in chars {
+        s.key(Key::Char { c, shift: false });
     }
     assert_eq!(s.focused, Some(29));
     assert!(s.search.is_empty());
+    assert_eq!(s.state, State::Showing);
+    assert!(s.label_selected);
     s.key(Key::Tab { shift: false });
     assert_eq!(s.focused, Some(0));
     s.key(Key::Tab { shift: true });
     assert_eq!(s.focused, Some(29));
 }
 
-// REQ-SEARCH-01: uppercase text starts label entry without relying on Shift.
+// REQ-SEARCH-01: a label prefix continues in search-first mode.
 #[test]
-fn req_search_01_uppercase_types_a_label_without_shift() {
+fn req_search_01_lowercase_continues_a_shifted_label_prefix() {
     let targets: Vec<Target> = (0..30)
         .map(|i| target(&format!("t{i}"), Rect::new(0, i * 40, 100, 30)))
         .collect();
@@ -332,6 +336,19 @@ fn req_search_01_uppercase_types_a_label_without_shift() {
     assert_eq!(s.search, "");
     assert_eq!(s.label_prefix, first.to_string());
     assert_eq!(s.focused, None);
+    let last = label.chars().nth(1).expect("second label letter");
+    assert!(
+        s.key(Key::Char {
+            c: last,
+            shift: false
+        })
+        .is_none()
+    );
+    assert_eq!(
+        s.focused,
+        Some(s.labels.iter().position(|l| l == &label).unwrap())
+    );
+    assert_eq!(s.state, State::Showing);
 }
 
 // REQ-ACT-01: Return clicks the focused target's center with the left button.
@@ -394,6 +411,7 @@ fn req_act_01_uppercase_completion_acts_but_lowercase_only_focuses() {
     let action = action.expect("uppercase completion clicks");
     assert_eq!(action.target, index);
     assert_eq!(action.button, Button::Left);
+    assert!(!action.linger, "uppercase activation ends after one click");
     assert_eq!(automatic.state, State::Acting);
 
     let mut focused = Session::new(targets, true);
@@ -434,6 +452,46 @@ fn req_act_01_single_letter_d_selects_and_uppercase_d_acts() {
         .key(Key::Upper { c: 'D' })
         .expect("uppercase D activates its single-letter target");
     assert_eq!(action.target, 2);
+    assert!(
+        !action.linger,
+        "uppercase D does not start a double-click wait"
+    );
+}
+
+// REQ-SESSION-01: a new label prefix clears the previous target focus.
+#[test]
+fn req_session_01_new_label_prefix_clears_previous_focus() {
+    let targets: Vec<Target> = (0..30)
+        .map(|i| target(&format!("t{i}"), Rect::new(0, i * 40, 100, 30)))
+        .collect();
+    let mut s = Session::new(targets, true);
+    assert!(
+        s.key(Key::Char {
+            c: 'd',
+            shift: false
+        })
+        .is_none()
+    );
+    assert_eq!(s.focused, s.labels.iter().position(|label| label == "d"));
+    assert!(s.label_selected);
+
+    assert!(s.key(Key::Upper { c: 'A' }).is_none());
+    assert_eq!(s.label_prefix, "a");
+    assert_eq!(s.focused, None);
+    assert!(!s.label_selected);
+}
+
+// REQ-SESSION-01: focusing a fine grid cell keeps its bounds outline.
+#[test]
+fn req_session_01_fine_grid_cell_is_not_a_label_selected_target() {
+    let mut s = Session::new(Vec::new(), false).with_area(Rect::new(0, 0, 10, 8));
+    s.open_grid();
+    let label = s.labels[0].clone();
+    for c in label.chars() {
+        assert!(s.key(Key::Char { c, shift: false }).is_none());
+    }
+    assert_eq!(s.focused, Some(0));
+    assert!(!s.label_selected);
 }
 
 // REQ-ACT-01: Return with nothing focused does nothing; Escape ends the session.
@@ -643,9 +701,10 @@ fn req_search_02_labels_only_cases() {
                 "BackSpace" => Key::Backspace,
                 k => {
                     let c = k.chars().next().expect("a key");
-                    Key::Char {
-                        c,
-                        shift: c.is_uppercase(),
+                    if c.is_uppercase() {
+                        Key::Upper { c }
+                    } else {
+                        Key::Char { c, shift: false }
                     }
                 }
             };
@@ -663,6 +722,13 @@ fn req_search_02_labels_only_cases() {
             "{name}"
         );
         assert_eq!(s.search, case["search"].as_str().expect("search"), "{name}");
+        if let Some(state) = case["state"].as_str() {
+            assert_eq!(
+                format!("{:?}", s.state).to_lowercase(),
+                state,
+                "{name} state"
+            );
+        }
     }
 }
 
@@ -812,7 +878,9 @@ fn req_grid_01_cells_tile_and_backspace_goes_back() {
     let first = s.generation;
     let label = s.labels[0].clone();
     for c in label.chars() {
-        s.key(Key::Char { c, shift: true });
+        s.key(Key::Upper {
+            c: c.to_ascii_uppercase(),
+        });
     }
     assert_eq!(s.grid.len(), 2, "a chosen cell is refined");
     assert!(s.generation > first, "new targets for the overlay");

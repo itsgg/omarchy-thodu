@@ -155,9 +155,9 @@ Item {
             verify(top.keysSent().every(k => k.session === "s1"));
         }
 
-        function test_req_search_01_uppercase_key_text_is_preserved() {
-            const request = view.keyRequest(Qt.Key_A, Qt.NoModifier, "A");
-            compare(request.key, "A");
+        function test_req_search_01_caps_lock_text_does_not_activate() {
+            const request = view.keyRequest(Qt.Key_A, Qt.NoModifier, "A", false);
+            compare(request.key, "a");
             compare(request.shift, false);
         }
 
@@ -171,6 +171,13 @@ Item {
         function test_req_act_02_return_auto_repeat_is_ignored() {
             compare(view.keyRequest(Qt.Key_Return, Qt.NoModifier, "", true), null);
             compare(view.keyRequest(Qt.Key_Return, Qt.NoModifier, "", false).key, "Return");
+        }
+
+        function test_req_act_01_shifted_letter_auto_repeat_is_ignored() {
+            compare(view.keyRequest(Qt.Key_A, Qt.ShiftModifier, "a", true), null);
+            const request = view.keyRequest(Qt.Key_A, Qt.ShiftModifier, "a", false);
+            compare(request.key, "A");
+            verify(request.shift);
         }
 
         function test_acting_hands_over_to_thodud() {
