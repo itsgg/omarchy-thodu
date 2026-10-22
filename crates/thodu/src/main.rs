@@ -8,7 +8,7 @@
 //!   thodu close SESSION
 //!   thodu bench [--sessions N] [--window ADDRESS]   time to labels drawn
 //!   thodu record-tree --out FILE [--window ADDRESS]  record the tree
-//!   thodu install [--hints-key KEY --grid-key KEY] install plugin, service and bindings
+//!   thodu install [--hints-key KEY --grid-key KEY] default: SUPER + SHIFT + F12, SUPER + CTRL + F12
 //!   thodu doctor                              check environment, rule and service
 //!
 //! ADDRESS is a Hyprland window address, or class:NAME for the first window
@@ -514,6 +514,9 @@ struct KeyBindings {
     grid: String,
 }
 
+const DEFAULT_HINTS_KEY: &str = "SUPER + SHIFT + F12";
+const DEFAULT_GRID_KEY: &str = "SUPER + CTRL + F12";
+
 fn validate_key(key: &str, option: &str) -> Result<String, String> {
     let key = key.trim();
     if key.is_empty()
@@ -558,10 +561,16 @@ fn install_key_choices(args: &[String], home: &Path) -> Result<Option<KeyBinding
         (None, None) => {
             let path = home.join(".config/hypr/bindings.lua");
             let current = std::fs::read_to_string(path).unwrap_or_default();
-            if active_config_line(&current, "\"Thodu hints\"")
-                && active_config_line(&current, "\"Thodu grid\"")
-            {
+            let has_hints = active_config_line(&current, "\"Thodu hints\"");
+            let has_grid = active_config_line(&current, "\"Thodu grid\"");
+            if has_hints && has_grid {
                 return Ok(None);
+            }
+            if !has_hints && !has_grid {
+                return Ok(Some(KeyBindings {
+                    hints: DEFAULT_HINTS_KEY.to_string(),
+                    grid: DEFAULT_GRID_KEY.to_string(),
+                }));
             }
             if !std::io::stdin().is_terminal() {
                 return Err(

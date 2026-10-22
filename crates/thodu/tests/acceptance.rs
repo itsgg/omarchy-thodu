@@ -214,14 +214,8 @@ fn plugin_asset_paths() -> Vec<PathBuf> {
     files
 }
 
-fn install_args() -> [&'static str; 5] {
-    [
-        "install",
-        "--hints-key",
-        "SUPER + SHIFT + F12",
-        "--grid-key",
-        "SUPER + CTRL + F12",
-    ]
+fn install_args() -> [&'static str; 1] {
+    ["install"]
 }
 
 fn alternate_install_args() -> [&'static str; 5] {
@@ -258,28 +252,116 @@ fn fake_running_daemon(root: &TestRoot) -> thread::JoinHandle<()> {
     })
 }
 
-// REQ-INSTALL-01: install never substitutes unchosen keybindings in a
-// non-interactive run.
+// REQ-INSTALL-01: a fresh non-interactive install uses the project defaults.
 #[test]
-fn req_install_01_noninteractive_install_requires_both_key_choices() {
-    let root = TestRoot::new("unselected-keys");
+fn req_install_01_noninteractive_install_uses_f12_defaults() {
+    let root = TestRoot::new("default-keys");
     let home = root.home();
     let udev_dir = root.udev_dir();
     let cwd = root.0.join("elsewhere");
     std::fs::create_dir_all(&cwd).expect("create unrelated working directory");
 
     let output = thodu(&home, &udev_dir, &["install"], &cwd);
-    assert_eq!(output.status.code(), Some(1));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.starts_with("ERROR "), "{stderr}");
-    assert!(stderr.contains("choose both keybindings"), "{stderr}");
     assert!(
-        !home.join(".config/hypr/bindings.lua").exists(),
-        "install must not write an unchosen binding"
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let bindings = std::fs::read_to_string(home.join(".config/hypr/bindings.lua"))
+        .expect("read default keybindings");
+    assert!(
+        bindings.contains("o.bind(\"SUPER + SHIFT + F12\", \"Thodu hints\"")
+            && bindings.contains("o.bind(\"SUPER + CTRL + F12\", \"Thodu grid\""),
+        "{bindings}"
     );
     assert!(
-        !udev_dir.join("72-thodu-uinput.rules").exists(),
-        "key choice is requested before installing system changes"
+        !bindings.contains("CTRL + SPACE") && !bindings.contains("CTRL + SHIFT + SPACE"),
+        "a fresh install uses the project defaults: {bindings}"
+    );
+    let doctor = thodu(&home, &udev_dir, &["doctor"], &cwd);
+    assert!(
+        doctor.status.success(),
+        "stdout: {}; stderr: {}",
+        String::from_utf8_lossy(&doctor.stdout),
+        String::from_utf8_lossy(&doctor.stderr)
+    );
+}
+
+// REQ-INSTALL-01: an install without key options preserves a local choice.
+#[test]
+fn req_install_01_noninteractive_install_preserves_existing_bindings() {
+    let root = TestRoot::new("preserved-keys");
+    let home = root.home();
+    let udev_dir = root.udev_dir();
+    let cwd = root.0.join("elsewhere");
+    std::fs::create_dir_all(&cwd).expect("create unrelated working directory");
+    let bindings = home.join(".config/hypr/bindings.lua");
+    std::fs::create_dir_all(bindings.parent().expect("bindings parent"))
+        .expect("create Hyprland config directory");
+    std::fs::write(
+        &bindings,
+        concat!(
+            "o.bind(\"CTRL + SPACE\", \"Thodu hints\", \"thodu hints\")\n",
+            "o.bind(\"CTRL + SHIFT + SPACE\", \"Thodu grid\", \"thodu grid\")\n"
+        ),
+    )
+    .expect("write local Thodu bindings");
+
+    let installed = thodu(&home, &udev_dir, &["install"], &cwd);
+    assert!(
+        installed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&installed.stderr)
+    );
+    let installed_bindings = std::fs::read_to_string(&bindings).expect("read bindings");
+    assert!(
+        installed_bindings.contains("o.bind(\"CTRL + SPACE\", \"Thodu hints\"")
+            && installed_bindings.contains("o.bind(\"CTRL + SHIFT + SPACE\", \"Thodu grid\""),
+        "{installed_bindings}"
+    );
+    assert!(
+        !installed_bindings.contains("SUPER + SHIFT + F12")
+            && !installed_bindings.contains("SUPER + CTRL + F12"),
+        "the no-option install must preserve both local choices: {installed_bindings}"
+    );
+}
+
+// REQ-INSTALL-01: explicit key options override the project defaults.
+#[test]
+fn req_install_01_explicit_key_options_override_defaults() {
+    let root = TestRoot::new("override-default-keys");
+    let home = root.home();
+    let udev_dir = root.udev_dir();
+    let cwd = root.0.join("elsewhere");
+    std::fs::create_dir_all(&cwd).expect("create unrelated working directory");
+    let bindings = home.join(".config/hypr/bindings.lua");
+    std::fs::create_dir_all(bindings.parent().expect("bindings parent"))
+        .expect("create Hyprland config directory");
+    std::fs::write(
+        &bindings,
+        concat!(
+            "o.bind(\"SUPER + SHIFT + F12\", \"Thodu hints\", \"thodu hints\")\n",
+            "o.bind(\"SUPER + CTRL + F12\", \"Thodu grid\", \"thodu grid\")\n"
+        ),
+    )
+    .expect("write default Thodu bindings");
+
+    let changed = thodu(&home, &udev_dir, &alternate_install_args(), &cwd);
+    assert!(
+        changed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&changed.stderr)
+    );
+    let changed_bindings = std::fs::read_to_string(&bindings).expect("read changed bindings");
+    assert!(
+        changed_bindings.contains("SUPER + SHIFT + code:201")
+            && changed_bindings.contains("SUPER + F10"),
+        "{changed_bindings}"
+    );
+    assert!(
+        !changed_bindings.contains("SUPER + SHIFT + F12")
+            && !changed_bindings.contains("SUPER + CTRL + F12"),
+        "explicit options must replace both defaults: {changed_bindings}"
     );
 }
 
