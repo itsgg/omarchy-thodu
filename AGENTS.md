@@ -37,11 +37,7 @@ Keyboard hints for everything on an Omarchy screen: Homerow for Omarchy. Read SE
 
 ## Project
 
-<<<<<<< before updating
-Thodu is an Omarchy plugin with a Rust service (SPEC section 4). The overlay sits at the repository root as the plugin (`manifest.json`, `Thodu.qml`, `components/`); `crates/thodu-core` holds the logic with no input or output, `crates/thodud` the sources, actions and IPC server, and `crates/thodu` the command line. Conformance cases live in `spec/cases/`, QML tests in `tests/qml/`, acceptance tests of record in `tests/acceptance/`.
+The layout is SPEC.md section 4.
 
 - `tests/acceptance/reqs.sh REQ-AREA-NN...`: a task's acceptance; each requirement needs a test named for it (`req_act_01_...`, in Rust or QML) and every test must pass.
 - A test that needs a real app, the accessibility bus or GG's session is not a gate test: record what it needs into `spec/cases/` and replay it (SPEC section 10).
-=======
-<!-- The setup writes this section from SPEC.md: only the commands a component needs beyond those above, and any rule the gate holds that is this project's own. No layout overview: the evidence (SEED R6) says overviews do not help agents and cost tokens; SPEC.md section 4 holds the architecture. -->
->>>>>>> after updating
