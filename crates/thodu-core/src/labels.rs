@@ -33,9 +33,9 @@ pub fn reading_order(targets: &mut [Target]) {
     targets.sort_by_key(|t| {
         (
             t.source == Source::Shell,
-            t.source != Source::Atspi,
             t.bounds.y,
             t.bounds.x,
+            t.source != Source::Atspi,
         )
     });
 }

@@ -29,7 +29,7 @@ use thodu_core::protocol::{
     self, Envelope, ErrorKind, LabeledTarget, MonitorInfo, OpenEvent, Reply, Request, Timing, View,
 };
 use thodu_core::session::{Act, Key, Session, State};
-use thodu_core::stale::is_stale;
+use thodu_core::stale::target_is_stale;
 
 /// How long the accessibility source may take (REQ-SRC-05, provisional).
 const ATSPI_BUDGET: Duration = Duration::from_millis(80);
@@ -433,24 +433,17 @@ impl Daemon {
         }) else {
             return;
         };
-        let Some((window, monitor, test, grid, source)) = sessions.get(id).map(|e| {
-            // Grid and bar targets are points on the monitor, not in the
-            // window, so the window moving does not make them stale.
-            let grid = e.session.targets[act.target].source != Source::Atspi;
-            (
-                e.window.clone(),
-                e.monitor.clone(),
-                e.test,
-                grid,
-                e.session.targets[act.target].source,
-            )
+        let Some((window, monitor, test, target, source)) = sessions.get(id).map(|e| {
+            let target = e.session.targets[act.target].clone();
+            let source = target.source;
+            (e.window.clone(), e.monitor.clone(), e.test, target, source)
         }) else {
             return;
         };
         drop(sessions);
-        if let Some(window) = window.filter(|_| !grid) {
+        if let Some(window) = window.filter(|_| !target.window.is_empty()) {
             let now = hypr::window(&window.address).ok().flatten();
-            if is_stale(&window, now.as_ref()) {
+            if target_is_stale(&target, &window, now.as_ref()) {
                 eprintln!("thodud: {id}: the window moved since collection; collecting again");
                 self.remove(id);
                 if let Err(e) = self.start(Some(window.address.clone()), "hints", true, test) {

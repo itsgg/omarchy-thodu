@@ -15,7 +15,7 @@ use thodu_core::model::{Monitor, Rect, Role, Source, Target, Window};
 use thodu_core::perf;
 use thodu_core::protocol::{Envelope, LabeledTarget, OpenEvent, Reply, Request, Timing};
 use thodu_core::session::{Button, DOUBLE_MS, Key, Session, State};
-use thodu_core::stale::is_stale;
+use thodu_core::stale::{is_stale, target_is_stale};
 use thodu_core::tree::{self, App, Snapshot};
 use thodu_core::unregistered;
 
@@ -293,6 +293,30 @@ fn req_label_01_assignment_cases() {
             case["longest"].as_u64().expect("longest") as usize
         );
     }
+}
+
+// REQ-LABEL-01: image and AT-SPI targets share the same top-left reading order.
+#[test]
+fn req_label_01_image_targets_sort_by_position_with_accessible_targets() {
+    let mut accessible_below = target("accessible", Rect::new(100, 500, 80, 30));
+    let image_above = Target {
+        source: Source::Image,
+        ..target("", Rect::new(100, 50, 80, 30))
+    };
+    let mut targets = vec![accessible_below.clone(), image_above.clone()];
+
+    labels::reading_order(&mut targets);
+
+    assert_eq!(targets[0].source, Source::Image);
+    assert_eq!(targets[0].bounds, image_above.bounds);
+    assert_eq!(targets[1].source, Source::Atspi);
+    assert_eq!(targets[1].bounds, accessible_below.bounds);
+
+    accessible_below.bounds = Rect::new(200, 50, 80, 30);
+    targets = vec![accessible_below, image_above];
+    labels::reading_order(&mut targets);
+    assert_eq!(targets[0].bounds.x, 100);
+    assert_eq!(targets[1].bounds.x, 200);
 }
 
 proptest! {
@@ -727,6 +751,35 @@ fn req_act_03_moved_windows_are_stale() {
         "another window"
     );
     assert!(is_stale(&w, None), "closed");
+}
+
+// REQ-ACT-03: image targets are window-scoped; bar and grid targets are not.
+#[test]
+fn req_act_03_image_targets_are_stale_when_their_window_moves() {
+    let collected = window();
+    let moved = Window {
+        at: (110, 200),
+        ..collected.clone()
+    };
+    let image = Target {
+        source: Source::Image,
+        ..target("", Rect::new(100, 220, 80, 30))
+    };
+    assert!(target_is_stale(&image, &collected, Some(&moved)));
+    assert!(target_is_stale(&image, &collected, None));
+
+    let shell = Target {
+        source: Source::Shell,
+        window: String::new(),
+        ..image.clone()
+    };
+    let grid = Target {
+        source: Source::Grid,
+        window: String::new(),
+        ..image
+    };
+    assert!(!target_is_stale(&shell, &collected, Some(&moved)));
+    assert!(!target_is_stale(&grid, &collected, Some(&moved)));
 }
 
 // The overlay's requests (SPEC section 7, changes/0002): a heartbeat is a
