@@ -30,7 +30,14 @@ pub fn assign(n: usize) -> Vec<String> {
 /// to bottom and then left to right, so the targets nearest the window's
 /// top-left get the shortest labels (REQ-LABEL-01).
 pub fn reading_order(targets: &mut [Target]) {
-    targets.sort_by_key(|t| (t.source != Source::Atspi, t.bounds.y, t.bounds.x));
+    targets.sort_by_key(|t| {
+        (
+            t.source == Source::Shell,
+            t.source != Source::Atspi,
+            t.bounds.y,
+            t.bounds.x,
+        )
+    });
 }
 
 /// REQ-LABEL-02: where a label of `size` sits for a target: inside the

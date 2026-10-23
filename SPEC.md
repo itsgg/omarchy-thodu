@@ -14,13 +14,13 @@ Requirement IDs are REQ-<AREA>-<NN>, with these areas: SESSION (starting and end
 
 This spec covers SEED section 9's first coherent experience: click mode with search and the grid, in the focused window, on GG's laptop. Targets come from the accessibility tree for GTK3, GTK4, Qt Widgets, Electron apps and Chromium's own controls, and from the Omarchy bar. Every click action and Escape work.
 
-Out of this milestone, and designed for so that no code assumes they never come: scroll mode, web page targets (SEED section 5, source 2), the screen-image source, drag and hover, the agent interface beyond `thodu targets`, more than one monitor. Permanently out (SEED section 9): desktops other than Omarchy.
+Out of this milestone, and designed for so that no code assumes they never come: scroll mode, web page targets (SEED section 5, source 2), full screen-image coverage for foot and Zed, drag and hover, the agent interface beyond `thodu targets`, more than one monitor. A bounded screen-image fallback for visible gaps in AT-SPI list rows is included by REQ-SRC-06. Permanently out (SEED section 9): desktops other than Omarchy.
 
 ## 3. Terms
 
 - Target: something a mouse could act on, with bounds, a role, text and a source (section 5).
 - Label: the letters drawn over a target; typing it with Shift selects the target.
-- Source: where targets come from: `atspi`, `shell`, `grid` in this milestone; `web` and `image` later.
+- Source: where targets come from: `atspi`, `shell`, a bounded `image` fallback for incomplete list rows, and `grid` in this milestone; full `image` coverage and `web` later.
 - Session: one press of the key until an action or Escape.
 - Logical coordinates: Hyprland's layout coordinates, in which a window's `at` and `size` are given; one logical unit is `scale` physical pixels on that monitor (1.25 on eDP-1).
 - Focused window: Hyprland's `activewindow`.
@@ -53,7 +53,7 @@ A target is:
 | `bounds` | `{x, y, w, h}` integers | logical coordinates, clipped to the window and the monitor |
 | `role` | string | one of button, link, entry, menu-item, tab, list-item, check, toggle, combo, slider, scroll-area, text, unknown |
 | `text` | string | name, description and value joined by one space, for search |
-| `source` | string | atspi, shell or grid |
+| `source` | string | atspi, shell, image or grid |
 | `actions` | list | of click, right, middle, double, focus |
 | `window` | string | Hyprland window address, empty for shell targets |
 
@@ -109,9 +109,17 @@ Acceptance:
 - replay: the recorded trees include hidden subtrees and a closed combo box; none of their elements become targets.
 
 ### REQ-SRC-05: Budgets per source
-While collecting, the system shall give each source a time budget (80 ms for atspi and 40 ms for shell, provisional) and leave a source that misses it out of the session, naming it in the status line.
+While collecting, the system shall give each source a time budget (80 ms for atspi, 180 ms for image, and 40 ms for shell, provisional) and leave a source that misses it out of the session, naming it in the status line. The image source shall run only after a primary source requests fallback.
 Acceptance:
-- scenario: WHEN a fake source sleeps past its budget THEN the session shows the other sources' targets and the status line names the slow source.
+- scenario: WHEN a fake source sleeps past its budget THEN the session shows the other sources' targets and the status line names the slow source, including a requested image fallback.
+
+### REQ-SRC-06: Fill accessibility gaps from the screen image
+For a focused window, the system shall run the bounded image detector only when AT-SPI has no usable targets, its tree is unavailable, a visible list row lacks a name or usable bounds, or a visible list with at least one row exposes fewer than four named rows with usable bounds. It shall add image targets for detected text lines and box-like controls not substantially covered by AT-SPI targets. It shall capture the window region in compositor layout coordinates at the monitor scale, convert detections to logical coordinates, clip them to the visible window and monitor, mark their source as `image`, and report their count and elapsed time. Image targets shall offer click only, have no invented text, and use a visibly different label style. If capture or detection fails, or exceeds the image source's 180 ms budget, it shall contribute no image targets and name the failure or timeout in status.
+Acceptance:
+- scenario: a synthetic frame yields in-window image targets with logical bounds and click actions; detections substantially covered by AT-SPI targets are discarded.
+- scenario: complete AT-SPI targets skip image capture; an incomplete visible row, unavailable tree, or AT-SPI error runs the image fallback.
+- scenario: a QML test checks that an image target's label chip uses the image-source style.
+- measured: the supplied Flea screenshot's visible file rows receive image labels within the 180 ms image-source budget, and `thodu bench --sessions 50` remains within REQ-PERF-01 on the GTK3 reference window and Slack.
 
 ### Labels
 
@@ -272,6 +280,7 @@ Unit tests and properties cover labels, search, the grid, coordinates and the st
 - 2026-10-21: change 0007, the bar's items come from a bar widget of the overlay plugin.
 - 2026-10-22: change 0008, fresh installs use the F12 defaults, preserve existing bindings, and accept explicit overrides; O4 is resolved, with GG's local Ctrl bindings retained.
 - 2026-10-22: change 0010, uppercase final hint characters activate once, lowercase completion focuses, and selected targets and feedback are visually distinct.
+- 2026-10-23: change 0011, incomplete visible accessibility list rows fall back to bounded image targets.
 
 ### Retired
 

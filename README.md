@@ -2,13 +2,14 @@
 
 Thodu is a keyboard hint picker for Omarchy. It labels clickable controls in the focused window and the Omarchy bar, so you can choose them without reaching for the pointer. Thodu means "touch" in Tamil.
 
-This is an early, Omarchy-only milestone. It currently uses accessibility trees for GTK 3, GTK 4, Qt Widgets, Chromium controls and Electron controls, plus clickable items in the Omarchy bar. It does not yet label web page content, recognize targets from screenshots, or support scrolling, dragging or hovering. A grid is available for choosing a point on the focused monitor.
+This is an early, Omarchy-only milestone. It uses accessibility trees for GTK 3, GTK 4, Qt Widgets, Chromium controls and Electron controls, plus clickable items in the Omarchy bar. When a visible list row is missing from an accessibility tree, a bounded screenshot detector can add click hints for its text and box-like controls. Those image hints have no searchable text and use an amber style. They fill some gaps; they do not recognize every icon or guarantee that every visible control is labeled. A grid remains available for choosing any point on the focused monitor. Web page content, scrolling, dragging and hovering are not supported yet.
 
 ## Install
 
 Requirements:
 
 - Omarchy with Hyprland using the Lua configuration.
+- `grim`, for the screenshot fallback when an accessibility tree is incomplete.
 - The Rust toolchain pinned in `rust-toolchain.toml` to build from source.
 - An active graphical session. Installation configures accessibility, the virtual input device rule, the Omarchy plugin, a user service and Hyprland bindings.
 
@@ -71,3 +72,5 @@ tools/gate
 `tools/gate` runs the full project gate, including Rust, QML and acceptance checks. `make install` copies only the Omarchy plugin files; `make reload` copies them and restarts the Omarchy shell. Use `thodu install` to configure the service, plugin, accessibility environment, input rule and keybindings for the installed executables.
 
 The project contract is in [SEED.md](SEED.md) and [SPEC.md](SPEC.md). Work items and their acceptance checks are in [tasks/](tasks/). The repository workflow is documented in [AGENTS.md](AGENTS.md).
+
+The screenshot fallback uses the [Woints](https://github.com/wochap/woints) classical detector, pinned to a source revision in `Cargo.toml`. Woints is MIT licensed.

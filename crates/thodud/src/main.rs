@@ -4,6 +4,7 @@
 
 mod atspi;
 mod hypr;
+mod image;
 mod keyboard;
 mod listeners;
 mod overlay;
@@ -34,6 +35,8 @@ use thodu_core::stale::is_stale;
 const ATSPI_BUDGET: Duration = Duration::from_millis(80);
 /// How long the bar source may take (REQ-SRC-05, provisional).
 const SHELL_BUDGET: Duration = Duration::from_millis(40);
+/// How long screen capture and visual detection may take (REQ-SRC-05).
+const IMAGE_BUDGET: Duration = Duration::from_millis(180);
 /// How long record-tree may walk.
 const RECORD_BUDGET: Duration = Duration::from_secs(5);
 /// How long an action waits for the overlay to say it is gone.
@@ -851,6 +854,7 @@ fn main() {
         items: Mutex::new(HashMap::new()),
         budget: SHELL_BUDGET,
     });
+    let image = Arc::new(image::ImageSource::new(IMAGE_BUDGET));
     let daemon = Arc::new(Daemon {
         socket,
         shutdown: AtomicBool::new(false),
@@ -859,7 +863,7 @@ fn main() {
         next: AtomicU64::new(1),
         atspi: Arc::clone(&atspi),
         shell: Arc::clone(&shell),
-        sources: vec![atspi, shell],
+        sources: vec![atspi, image, shell],
         listeners: Mutex::new(listeners::Listeners::new()),
         keyboard: Mutex::new(None),
     });
@@ -942,7 +946,10 @@ mod tests {
         }
 
         fn collect(&self, _: &Window, _: &Monitor) -> Found {
-            Ok((Vec::<Target>::new(), format!("0 targets from {}", self.0)))
+            Ok(sources::SourceTargets::new(
+                Vec::<Target>::new(),
+                format!("0 targets from {}", self.0),
+            ))
         }
     }
 

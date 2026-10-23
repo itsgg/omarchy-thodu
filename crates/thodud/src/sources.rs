@@ -14,12 +14,42 @@ use thodu_core::{tree, unregistered};
 
 use crate::atspi;
 
-/// A source's targets and what to say about them, or why it found none.
-pub type Found = Result<(Vec<Target>, String), String>;
+/// A source's targets, status, and whether a later fallback can fill a gap.
+pub struct SourceTargets {
+    pub targets: Vec<Target>,
+    pub status: String,
+    pub request_fallback: bool,
+}
+
+impl SourceTargets {
+    pub fn new(targets: Vec<Target>, status: impl Into<String>) -> Self {
+        Self {
+            targets,
+            status: status.into(),
+            request_fallback: false,
+        }
+    }
+
+    fn with_fallback(mut self) -> Self {
+        self.request_fallback = true;
+        self
+    }
+}
+
+/// A source's result, or why it failed.
+pub type Found = Result<SourceTargets, String>;
 
 pub trait Source: Send + Sync {
     fn name(&self) -> &'static str;
     fn budget(&self) -> Duration;
+    /// Sources marked as fallback run only when a primary source asks for one.
+    fn is_fallback(&self) -> bool {
+        false
+    }
+    /// Whether a primary-source error or timeout should trigger a fallback.
+    fn fallback_on_error(&self) -> bool {
+        false
+    }
     /// The targets, and what to say about them in the status line.
     fn collect(&self, window: &Window, monitor: &Monitor) -> Found;
 }
@@ -29,8 +59,30 @@ pub struct Collected {
     pub status: Vec<String>,
 }
 
-/// Run every source at once and wait for each until its budget is spent.
+/// Run primary sources together, then only run fallbacks requested by them.
 pub fn collect(sources: &[Arc<dyn Source>], window: &Window, monitor: &Monitor) -> Collected {
+    let (primary, fallback): (Vec<_>, Vec<_>) =
+        sources.iter().partition(|source| !source.is_fallback());
+    let mut got = collect_phase(&primary, window, monitor);
+    if got.request_fallback && !fallback.is_empty() {
+        let image = collect_phase(&fallback, window, monitor);
+        got.targets.extend(image.targets);
+        got.status.extend(image.status);
+    }
+    remove_covered_image_targets(&mut got.targets);
+    Collected {
+        targets: got.targets,
+        status: got.status,
+    }
+}
+
+struct Phase {
+    targets: Vec<Target>,
+    status: Vec<String>,
+    request_fallback: bool,
+}
+
+fn collect_phase(sources: &[&Arc<dyn Source>], window: &Window, monitor: &Monitor) -> Phase {
     let started = Instant::now();
     let (tx, rx) = mpsc::channel();
     for (i, source) in sources.iter().enumerate() {
@@ -65,21 +117,45 @@ pub fn collect(sources: &[Arc<dyn Source>], window: &Window, monitor: &Monitor) 
     }
     let mut targets = Vec::new();
     let mut status = Vec::new();
+    let mut request_fallback = false;
     for (source, result) in sources.iter().zip(results) {
         match result {
-            Some(Ok((found, said))) => {
-                targets.extend(found);
-                status.push(said);
+            Some(Ok(found)) => {
+                targets.extend(found.targets);
+                status.push(found.status);
+                request_fallback |= found.request_fallback;
             }
-            Some(Err(e)) => status.push(format!("{}: {e}", source.name())),
-            None => status.push(format!(
-                "{} missed its {} ms budget",
-                source.name(),
-                source.budget().as_millis()
-            )),
+            Some(Err(e)) => {
+                status.push(format!("{}: {e}", source.name()));
+                request_fallback |= source.fallback_on_error();
+            }
+            None => {
+                status.push(format!(
+                    "{} missed its {} ms budget",
+                    source.name(),
+                    source.budget().as_millis()
+                ));
+                request_fallback |= source.fallback_on_error();
+            }
         }
     }
-    Collected { targets, status }
+    Phase {
+        targets,
+        status,
+        request_fallback,
+    }
+}
+
+fn remove_covered_image_targets(targets: &mut Vec<Target>) {
+    let accessible: Vec<_> = targets
+        .iter()
+        .filter(|target| target.source == From::Atspi)
+        .cloned()
+        .collect();
+    targets.retain(|target| {
+        target.source != From::Image
+            || !crate::image::covered_by_accessible(target.bounds, &target.window, &accessible)
+    });
 }
 
 /// The accessibility tree of the window's process.
@@ -96,6 +172,10 @@ impl Source for Atspi {
 
     fn budget(&self) -> Duration {
         self.budget
+    }
+
+    fn fallback_on_error(&self) -> bool {
+        true
     }
 
     fn collect(&self, window: &Window, monitor: &Monitor) -> Found {
@@ -132,23 +212,35 @@ impl Source for Atspi {
             if (exe_result.is_err() || maps_result.is_err())
                 && unregistered::toolkit(&exe, &libs).is_empty()
             {
-                return Ok((Vec::new(), unregistered::inspection_failed(&window.class)));
+                return Ok(SourceTargets::new(
+                    Vec::new(),
+                    unregistered::inspection_failed(&window.class),
+                )
+                .with_fallback());
             }
-            return Ok((
+            return Ok(SourceTargets::new(
                 Vec::new(),
                 unregistered::message(&window.class, &exe, &libs),
-            ));
+            )
+            .with_fallback());
         }
-        let targets = tree::match_frame(&snapshot)
+        let frame = tree::match_frame(&snapshot);
+        let targets = frame
             .map(|frame| tree::targets(frame, window, monitor))
             .unwrap_or_default();
+        let request_fallback = targets.is_empty() || frame.is_none_or(tree::needs_image_fallback);
         let cut = if walk.truncated {
             ", cut short at the budget"
         } else {
             ""
         };
         let said = format!("{} targets from atspi in {took} ms{cut}", targets.len());
-        Ok((targets, said))
+        let result = SourceTargets::new(targets, said);
+        Ok(if request_fallback {
+            result.with_fallback()
+        } else {
+            result
+        })
     }
 }
 
@@ -200,17 +292,20 @@ impl Source for Shell {
             .cloned()
             .unwrap_or_default();
         if items.is_empty() {
-            return Ok((
+            return Ok(SourceTargets::new(
                 Vec::new(),
                 format!("no bar items reported on {}", monitor.name),
             ));
         }
         let Some(origin) = crate::hypr::layer_origin(&monitor.name, BAR_NAMESPACE) else {
-            return Ok((Vec::new(), format!("no bar on {}", monitor.name)));
+            return Ok(SourceTargets::new(
+                Vec::new(),
+                format!("no bar on {}", monitor.name),
+            ));
         };
         let targets = shell_targets(&items, origin, monitor);
         let said = format!("{} targets from the bar", targets.len());
-        Ok((targets, said))
+        Ok(SourceTargets::new(targets, said))
     }
 }
 
@@ -220,6 +315,7 @@ const BAR_NAMESPACE: &str = "omarchy-bar";
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct Fake {
         name: &'static str,
@@ -248,10 +344,78 @@ mod tests {
                 actions: Vec::new(),
                 window: String::new(),
             };
-            Ok((
+            Ok(SourceTargets::new(
                 vec![target; self.found],
                 format!("{} found {}", self.name, self.found),
             ))
+        }
+    }
+
+    struct Conditional {
+        name: &'static str,
+        is_fallback: bool,
+        fallback_on_error: bool,
+        request_fallback: bool,
+        fail: bool,
+        source: From,
+        calls: Arc<AtomicUsize>,
+    }
+
+    struct SlowFallback;
+
+    impl Source for SlowFallback {
+        fn name(&self) -> &'static str {
+            "image"
+        }
+
+        fn budget(&self) -> Duration {
+            Duration::from_millis(20)
+        }
+
+        fn is_fallback(&self) -> bool {
+            true
+        }
+
+        fn collect(&self, _: &Window, _: &Monitor) -> Found {
+            thread::sleep(Duration::from_millis(60));
+            Ok(SourceTargets::new(Vec::new(), "late image result"))
+        }
+    }
+
+    impl Source for Conditional {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        fn budget(&self) -> Duration {
+            Duration::from_millis(100)
+        }
+
+        fn is_fallback(&self) -> bool {
+            self.is_fallback
+        }
+
+        fn fallback_on_error(&self) -> bool {
+            self.fallback_on_error
+        }
+
+        fn collect(&self, _: &Window, _: &Monitor) -> Found {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            if self.fail {
+                return Err("test failure".into());
+            }
+            let target = Target {
+                id: self.name.into(),
+                bounds: Rect::new(if self.source == From::Image { 40 } else { 10 }, 10, 10, 10),
+                role: Role::Text,
+                text: String::new(),
+                source: self.source,
+                actions: vec![ActionKind::Click],
+                window: "0x1".into(),
+            };
+            let mut result = SourceTargets::new(vec![target], self.name);
+            result.request_fallback = self.request_fallback;
+            Ok(result)
         }
     }
 
@@ -387,5 +551,127 @@ mod tests {
         let got = collect(&sources, &window(), &monitor());
         assert_eq!(got.targets.len(), 4);
         assert!(started.elapsed() < Duration::from_millis(250));
+    }
+
+    // REQ-SRC-06: accessibility targets take precedence over overlapping
+    // image detections, while uncovered image targets remain available.
+    #[test]
+    fn req_src_06_image_targets_fill_only_uncovered_areas() {
+        let target = |id: &str, x, source| Target {
+            id: id.into(),
+            bounds: Rect::new(x, 10, 20, 20),
+            role: Role::Text,
+            text: String::new(),
+            source,
+            actions: vec![ActionKind::Click],
+            window: "0x1".into(),
+        };
+        let mut targets = vec![
+            target("a0", 10, From::Atspi),
+            target("i0", 12, From::Image),
+            target("i1", 60, From::Image),
+        ];
+        remove_covered_image_targets(&mut targets);
+        assert_eq!(
+            targets.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            ["a0", "i1"]
+        );
+    }
+
+    // REQ-SRC-06: ordinary windows do not pay for image capture and detection.
+    #[test]
+    fn req_src_06_image_fallback_is_skipped_for_complete_primary_sources() {
+        let primary_calls = Arc::new(AtomicUsize::new(0));
+        let image_calls = Arc::new(AtomicUsize::new(0));
+        let sources: Vec<Arc<dyn Source>> = vec![
+            Arc::new(Conditional {
+                name: "atspi",
+                is_fallback: false,
+                fallback_on_error: true,
+                request_fallback: false,
+                fail: false,
+                source: From::Atspi,
+                calls: Arc::clone(&primary_calls),
+            }),
+            Arc::new(Conditional {
+                name: "image",
+                is_fallback: true,
+                fallback_on_error: false,
+                request_fallback: false,
+                fail: false,
+                source: From::Image,
+                calls: Arc::clone(&image_calls),
+            }),
+        ];
+
+        let got = collect(&sources, &window(), &monitor());
+        assert_eq!(got.targets.len(), 1);
+        assert_eq!(primary_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(image_calls.load(Ordering::Relaxed), 0);
+        assert_eq!(got.status, ["atspi"]);
+    }
+
+    // REQ-SRC-06: incomplete trees and source errors both run the image fallback.
+    #[test]
+    fn req_src_06_requested_or_failed_primary_runs_image_fallback() {
+        for (request_fallback, fail) in [(true, false), (false, true)] {
+            let primary_calls = Arc::new(AtomicUsize::new(0));
+            let image_calls = Arc::new(AtomicUsize::new(0));
+            let sources: Vec<Arc<dyn Source>> = vec![
+                Arc::new(Conditional {
+                    name: "atspi",
+                    is_fallback: false,
+                    fallback_on_error: true,
+                    request_fallback,
+                    fail,
+                    source: From::Atspi,
+                    calls: Arc::clone(&primary_calls),
+                }),
+                Arc::new(Conditional {
+                    name: "image",
+                    is_fallback: true,
+                    fallback_on_error: false,
+                    request_fallback: false,
+                    fail: false,
+                    source: From::Image,
+                    calls: Arc::clone(&image_calls),
+                }),
+            ];
+
+            let got = collect(&sources, &window(), &monitor());
+            assert_eq!(primary_calls.load(Ordering::Relaxed), 1);
+            assert_eq!(image_calls.load(Ordering::Relaxed), 1);
+            assert!(
+                got.targets
+                    .iter()
+                    .any(|target| target.source == From::Image)
+            );
+            assert!(got.status.iter().any(|status| status == "image"));
+        }
+    }
+
+    // REQ-SRC-05: a requested fallback still observes its own budget.
+    #[test]
+    fn req_src_05_requested_fallback_past_budget_is_left_out_and_named() {
+        let sources: Vec<Arc<dyn Source>> = vec![
+            Arc::new(Conditional {
+                name: "atspi",
+                is_fallback: false,
+                fallback_on_error: true,
+                request_fallback: true,
+                fail: false,
+                source: From::Atspi,
+                calls: Arc::new(AtomicUsize::new(0)),
+            }),
+            Arc::new(SlowFallback),
+        ];
+
+        let got = collect(&sources, &window(), &monitor());
+        assert_eq!(got.status, ["atspi", "image missed its 20 ms budget"]);
+        assert!(
+            got.targets
+                .iter()
+                .all(|target| target.source != From::Image)
+        );
     }
 }

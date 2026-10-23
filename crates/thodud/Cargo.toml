@@ -18,3 +18,6 @@ evdev.workspace = true
 futures-lite.workspace = true
 futures-util.workspace = true
 wayland-protocols-wlr.workspace = true
+png.workspace = true
+woints-core.workspace = true
+woints-vision.workspace = true

@@ -80,6 +80,7 @@ pub enum Role {
 pub enum Source {
     Atspi,
     Shell,
+    Image,
     Grid,
 }
 

@@ -85,6 +85,56 @@ pub fn match_frame(snapshot: &Snapshot) -> Option<&Node> {
     }
 }
 
+/// Whether AT-SPI visibly under-reports a list, so image detection can fill it.
+pub fn needs_image_fallback(root: &Node) -> bool {
+    const MIN_NAMED_BOUNDED_ROWS: usize = 4;
+
+    fn is_container(node: &Node) -> bool {
+        matches!(
+            node.role.as_str(),
+            "list" | "list box" | "tree" | "table" | "tree table" | "grid"
+        )
+    }
+
+    fn is_row(node: &Node) -> bool {
+        role_of(&node.role) == Some(Role::ListItem)
+    }
+
+    fn walk(node: &Node, shown_parent: bool, inside_row: bool) -> (usize, usize, bool) {
+        let shown = shown_parent && node.shown();
+        let row = shown && is_row(node) && !inside_row;
+        let mut complete = 0;
+        let mut incomplete = 0;
+        if row {
+            let named = !node.name.trim().is_empty();
+            let bounded = node.extents.is_some_and(|e| e[2] > 0 && e[3] > 0);
+            if named && bounded {
+                complete += 1;
+            } else {
+                incomplete += 1;
+            }
+        }
+        let mut request = false;
+        for child in &node.children {
+            let (child_complete, child_incomplete, child_request) =
+                walk(child, shown, inside_row || row);
+            request |= child_request;
+            complete += child_complete;
+            incomplete += child_incomplete;
+        }
+        if shown && is_container(node) {
+            let visible_rows = complete + incomplete;
+            request |= incomplete > 0 || (visible_rows > 0 && complete < MIN_NAMED_BOUNDED_ROWS);
+            (0, 0, request)
+        } else {
+            (complete, incomplete, request)
+        }
+    }
+
+    let (complete, incomplete, request) = walk(root, true, false);
+    request || incomplete > 0 || (complete + incomplete > 0 && complete < MIN_NAMED_BOUNDED_ROWS)
+}
+
 /// The role a target gets for an accessibility role name, or None when the
 /// element is not something a mouse acts on.
 pub fn role_of(name: &str) -> Option<Role> {

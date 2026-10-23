@@ -201,6 +201,16 @@ Item {
             compare(view.labelText("s"), "S");
         }
 
+        // REQ-SRC-06: targets found by the image detector use a distinct chip.
+        function test_req_src_06_image_targets_use_image_label_style() {
+            const imageTarget = Object.assign({}, view.targets[0], { source: "image" });
+            view.targets = [imageTarget, view.targets[1]];
+            const chip = findChild(view, "label-a");
+            tryVerify(() => chip !== null && chip.imageDerived);
+            compare(chip.color, view.imageBackground);
+            compare(chip.border.color, view.imageBorder);
+        }
+
         function test_acting_hands_over_to_thodud() {
             top.nextState = "acting";
             keyClick(Qt.Key_Return);

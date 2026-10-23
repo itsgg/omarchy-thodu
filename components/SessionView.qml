@@ -49,6 +49,8 @@ FocusScope {
     property color border: "#cdd6f4"
     property color selectedBackground: "#313244"
     property color selectedText: "#89b4fa"
+    property color imageBackground: "#332a16"
+    property color imageBorder: "#fab387"
     property string fontFamily: "monospace"
 
     signal send(var request)
@@ -370,6 +372,7 @@ FocusScope {
             id: chip
             required property var modelData
             readonly property bool focusedOne: view.focusedId === modelData.id
+            readonly property bool imageDerived: modelData.source === "image"
             objectName: "label-" + modelData.label
             z: focusedOne ? 1 : 0
             visible: view.kept[modelData.id] === true && !view.lingering && !(view.zoomed && modelData.source === "grid")
@@ -378,15 +381,15 @@ FocusScope {
             width: modelData.placed.w
             height: modelData.placed.h
             radius: 3
-            color: focusedOne ? view.selectedBackground : view.background
+            color: focusedOne ? view.selectedBackground : imageDerived ? view.imageBackground : view.background
             border.width: focusedOne ? 2 : 1
-            border.color: focusedOne ? view.selectedText : view.border
+            border.color: focusedOne ? view.selectedText : imageDerived ? view.imageBorder : view.border
 
             Text {
                 anchors.centerIn: parent
                 text: view.labelText(chip.modelData.label)
                 textFormat: Text.StyledText
-                color: chip.focusedOne ? view.selectedText : view.foreground
+                color: chip.focusedOne ? view.selectedText : chip.imageDerived ? view.imageBorder : view.foreground
                 font.family: view.fontFamily
                 font.pixelSize: 12
                 font.bold: true
