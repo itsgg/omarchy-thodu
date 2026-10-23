@@ -10,6 +10,7 @@ typescript_turn() {
 
 typescript_full() {
     each_root package.json npm-ls npm ls --depth=0
+    each_root package.json npm-audit npm audit --audit-level=high
 }
 
 typescript_nightly() {

@@ -24,7 +24,7 @@ Keyboard hints for everything on an Omarchy screen: Homerow for Omarchy. Read SE
 ## Rules, and what holds each one
 
 1. Never edit SEED.md or SPEC.md. Propose a change to the spec in `changes/NNNN-name.md`, in the format of `changes/README.md`; the coordinator merges it. Held by `tools/protected.txt`.
-2. Never weaken a check, test, tolerance, gate step or task acceptance to make work pass. A commit that changes a protected path says so on a `Protected: <path>: <why>` line, and one that removes a test on a `Removes test: <name>: <why>` line, so review sees it. Held by the commit-msg hook, the gate's protected and tests-removed steps, and `tools/land merge`, which needs the coordinator's acceptance.
+2. Never weaken a check, test, tolerance, gate step or task acceptance to make work pass. A commit that changes a protected path says so on a `Protected: <path>: <why>` line, one that removes a test on a `Removes test: <name>: <why>` line, and one that edits an existing test on a `Modifies test: <name>: <why>` line, so review sees it. Held by the commit-msg hook, the gate's protected and tests-removed steps, and `tools/land merge`, which needs the coordinator's acceptance.
 3. Every behavior lands with tests. A test that checks a SPEC requirement names its ID (REQ-AREA-NN) in its name or a comment. Held by the gate's spec step, for tasks in review or done.
 4. Plain ASCII in prose, commits and comments: no em dashes, curly quotes or arrows, and no spaced hyphen standing in for a dash. Held by the gate's prose step and the commit-msg hook; comments by review.
 5. Commit subjects follow Conventional Commits (`feat:`, `fix:`, `test:`, `docs:`, `refactor:`, `chore:`), with no full stop; the body says what changed and why. Never add a trailer or a line crediting the change or its review to a model, a vendor, a tool, an agent or a reviewer. Held by the commit-msg hook.
@@ -37,7 +37,11 @@ Keyboard hints for everything on an Omarchy screen: Homerow for Omarchy. Read SE
 
 ## Project
 
+<<<<<<< before updating
 Thodu is an Omarchy plugin with a Rust service (SPEC section 4). The overlay sits at the repository root as the plugin (`manifest.json`, `Thodu.qml`, `components/`); `crates/thodu-core` holds the logic with no input or output, `crates/thodud` the sources, actions and IPC server, and `crates/thodu` the command line. Conformance cases live in `spec/cases/`, QML tests in `tests/qml/`, acceptance tests of record in `tests/acceptance/`.
 
 - `tests/acceptance/reqs.sh REQ-AREA-NN...`: a task's acceptance; each requirement needs a test named for it (`req_act_01_...`, in Rust or QML) and every test must pass.
 - A test that needs a real app, the accessibility bus or GG's session is not a gate test: record what it needs into `spec/cases/` and replay it (SPEC section 10).
+=======
+<!-- The setup writes this section from SPEC.md: only the commands a component needs beyond those above, and any rule the gate holds that is this project's own. No layout overview: the evidence (SEED R6) says overviews do not help agents and cost tokens; SPEC.md section 4 holds the architecture. -->
+>>>>>>> after updating

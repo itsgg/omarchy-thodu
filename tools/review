@@ -7,7 +7,10 @@
 #
 # Families are openai, google and anthropic. Reviewers and models are
 # configured in tools/review.conf. The reviewer reads an exact export of the
-# head with no git repository (tools/checks.py export), unless WORKDIR says otherwise. A reply that exits
+# head with no git repository (tools/checks.py export), unless WORKDIR says
+# otherwise. Cursor's and Claude's plan modes keep the reviewer read-only;
+# agy's plan mode is a prompt prefix and its headless mode may write inside
+# the export, which is thrown away. A reply that exits
 # non-zero or has no text is a failed attempt; three failed attempts move on
 # to the next family, and so does one reply saying the reviewer is out of usage.
 # REVIEW_COMMAND, when set, replaces the reviewer (vithai's tests use it): it

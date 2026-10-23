@@ -4,14 +4,18 @@
 #   tools/agent-loop NAME HARNESS [SESSIONS]
 #   tools/agent-loop NAME HARNESS login
 #
-# HARNESS is claude, codex or agy; the model is whatever that harness defaults
-# to unless AGENT_MODEL is set. The test harness `shell` runs AGENT_SHELL_CMD
+# HARNESS is claude, codex or agy (Google's Antigravity CLI, not Gemini CLI);
+# the model is whatever that harness defaults to unless AGENT_MODEL is set. The test harness `shell` runs AGENT_SHELL_CMD
 # in the sandbox instead (vithai's tests and tools/land use it). Each agent
 # works in its own worktree at ../<repository>-worktrees/NAME on the branch
 # agent/NAME, and its session logs go to $AGENT_STATE/agents/NAME/logs.
 #
 # The agent runs with its harness's permission prompts off, inside bubblewrap,
-# in a new PID and IPC namespace, with network access. Its home is private and
+# in a new PID and IPC namespace, with network access. The network namespace
+# is the host's, on purpose, so the harness reaches its API; that also means
+# the agent reaches localhost ports and abstract unix sockets (local model
+# servers, a database, 1Password's MCP and SDK sockets), accepted as a cost
+# of not running agents as another user. Its home is private and
 # empty apart from read-only toolchains and its own caches, so it cannot read
 # the host's credentials or home files, and cannot change anything the host
 # later runs (caches, toolchains, harness settings). /usr and /etc are bound
@@ -19,7 +23,12 @@
 # repository's .git it can write only its own worktree's metadata and the
 # agent/* branches, and new objects go to its own object store with the
 # shared one read-only behind it: never main, hooks, config or existing
-# objects. It has no credentials to push with. Before each session its harness
+# objects. Known edges: every agent can write every agent/* branch, not only
+# its own; while an agent branch exists, host-side fetch, pull, gc and branch
+# listing in the main repository fail on its ref until tools/land merge copies
+# the objects in (status, log and push work); and a ref update in the sandbox
+# may print packed-refs.lock errors and still succeed. It has no credentials
+# to push with. Before each session its harness
 # goes to $AGENT_STATE/agents/NAME/sessions.log, outside the sandbox, and
 # tools/land counts every harness there as an author of the branch.
 #
@@ -66,7 +75,7 @@ model=()
 case $harness:$login in
     claude:0) cmd=(claude -p "$prompt" --dangerously-skip-permissions --output-format stream-json --verbose "${model[@]}") ;;
     codex:0)  cmd=(codex exec --dangerously-bypass-approvals-and-sandbox --json -C "$worktree" "${model[@]/--model/-m}" "$prompt") ;;
-    agy:0)    cmd=(agy -p "$prompt" --dangerously-skip-permissions --output-format stream-json "${model[@]}") ;;
+    agy:0)    cmd=(agy -p "$prompt" --dangerously-skip-permissions --output-format stream-json --print-timeout 0 "${model[@]}") ;;
     shell:0)  cmd=(bash -c "${AGENT_SHELL_CMD:?AGENT_SHELL_CMD is required for the shell harness}") ;;
     claude:1) cmd=(claude auth login --claudeai) ;;
     codex:1)  cmd=(codex login --device-auth) ;;
@@ -202,7 +211,7 @@ for i in $(seq 1 "$sessions"); do
         echo "ERROR rebase of agent/$name onto main failed in the sandbox; see $logs/rebase.log" >&2
         exit 1
     fi
-    log="$logs/$(date +%Y%m%d-%H%M%S).jsonl"
+    log="$logs/$(date +%Y%m%d-%H%M%S-%N).jsonl"
     echo "session $i of $sessions: $log"
     # Written before the session starts, so a session that is killed still
     # counts as an author of the branch.

@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+import unicodedata
 from collections import Counter
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -49,6 +50,7 @@ CONVENTIONAL = re.compile(
 IMPERATIVE = re.compile(r"^[A-Z][a-z]+(?:\s|$)")
 DECLARED_PROTECTED = re.compile(r"(?m)^Protected:\s*(\S+?)\s*:\s*\S")
 DECLARED_REMOVED = re.compile(r"(?m)^Removes test:\s*(\S+?)\s*:\s*\S")
+DECLARED_MODIFIED = re.compile(r"(?m)^Modifies test:\s*(\S+?)\s*:\s*\S")
 
 SECRETS = (
     (r"sk-ant-[a-z0-9]+-[A-Za-z0-9_\-]{40,}", "Anthropic key"),
@@ -179,11 +181,11 @@ class Commit:
     message: str
 
 
-def commits(since: str | None) -> list[Commit]:
-    """The non-merge commits in since..HEAD (all of HEAD's history when None), oldest first."""
-    if not ref_exists("HEAD"):
+def commits(since: str | None, head: str = "HEAD") -> list[Commit]:
+    """The non-merge commits in since..head (all of head's history when None), oldest first."""
+    if not ref_exists(head):
         return []
-    spec = [f"{since}..HEAD"] if since else ["HEAD"]
+    spec = [f"{since}..{head}"] if since else [head]
     out = git("log", "--no-merges", "--reverse", "--no-renames", "--format=%x1e%H%x1f%P%x1f%B%x1f", "--name-only", *spec)
     found = []
     for record in out.split("\x1e")[1:]:
@@ -248,11 +250,31 @@ def protected_patterns(*revs: str | None) -> list[str]:
     return sorted(patterns)
 
 
+def glob_regex(pattern: str) -> re.Pattern[str]:
+    """A path glob: * and ? stay within one segment, ** crosses segments, and
+    dir/** is everything under the directory (research/*/** works). The paths
+    matched are files; hook_pre_tool also asks about "dir/" for a command
+    that names a directory."""
+    out = ""
+    i = 0
+    while i < len(pattern):
+        if pattern.startswith("**", i):
+            out += ".*"
+            i += 2
+        elif pattern[i] == "*":
+            out += "[^/]*"
+            i += 1
+        elif pattern[i] == "?":
+            out += "[^/]"
+            i += 1
+        else:
+            out += re.escape(pattern[i])
+            i += 1
+    return re.compile(f"^{out}$")
+
+
 def matches(pattern: str, path: str) -> bool:
-    if pattern.endswith("/**"):
-        prefix = pattern[:-3]
-        return path == prefix or path.startswith(prefix + "/")
-    return fnmatch.fnmatchcase(path, pattern)
+    return glob_regex(pattern).match(path) is not None
 
 
 def is_protected(path: str, patterns: list[str]) -> bool:
@@ -283,12 +305,14 @@ def undeclared(touched: list[str], declared: list[str]) -> list[str]:
     return [t for t in touched if not any(matches(d, t) or d == "*" for d in declared)]
 
 
-def committed_problems(since: str | None) -> list[str]:
-    """Each commit since `since` declares, in its own message, the protected
-    paths it changes and the tests it removes."""
-    patterns = protected_patterns("HEAD", since)
+def committed_problems(since: str | None, head: str = "HEAD") -> list[str]:
+    """Each commit in since..head declares, in its own message, the protected
+    paths it changes and the tests it removes or edits. The patterns are the
+    union of the working tree's, HEAD's, head's and since's lists, so a branch
+    can add to the list but never shorten it."""
+    patterns = protected_patterns("HEAD", head, since)
     problems = []
-    for c in commits(since):
+    for c in commits(since, head):
         if c.parent is None:
             # The first commit founds the project (SEED.md alone); there is
             # nothing before it to weaken.
@@ -299,7 +323,25 @@ def committed_problems(since: str | None) -> list[str]:
             problems.append(f"{c.sha[:7]} changes {path} without a 'Protected: {path}: <why>' line in its message")
         for name in undeclared(removed_tests(c.files, at_parent, at_commit), DECLARED_REMOVED.findall(c.message)):
             problems.append(f"{c.sha[:7]} removes test {name} without a 'Removes test: {name}: <why>' line in its message")
+        for name in undeclared(modified_tests(c.files, at_parent, at_commit), DECLARED_MODIFIED.findall(c.message)):
+            problems.append(f"{c.sha[:7]} modifies test {name} without a 'Modifies test: {name}: <why>' line in its message")
     return problems
+
+
+def check_declarations(argv: list[str]) -> None:
+    """For landing: BASE..HEAD declares every protected change and every removed
+    or edited test, judged by this checkout's checks and protected list, not
+    the branch's own. Objects of an agent branch come through the alternate
+    store tools/land exports."""
+    if len(argv) != 2:
+        raise Fail("declarations needs BASE and HEAD")
+    for rev in argv:
+        if not ref_exists(f"{rev}^{{commit}}"):
+            raise Fail(f"{rev} is not a commit this repository can read")
+    problems = committed_problems(git("rev-parse", argv[0]).strip(), git("rev-parse", argv[1]).strip())
+    if problems:
+        raise Fail("undeclared changes in " + argv[0] + ".." + argv[1] + ":\n  " + "\n  ".join(problems))
+    print(f"declarations: every change in {argv[0]}..{argv[1]} is declared")
 
 
 def check_protected() -> None:
@@ -373,14 +415,118 @@ def removed_tests(paths: list[str], old_text: Reader, new_text: Reader) -> list[
     return sorted((old - new).elements())
 
 
+def body_end(text: str, ext: str, start: int, def_end: int) -> int:
+    """Where the test that starts at `start` ends: its closing brace in brace
+    languages, the next line indented no deeper than its def in Python."""
+    if ext == ".py":
+        line_start = text.rfind("\n", 0, start) + 1
+        indent = len(text[line_start:start]) - len(text[line_start:start].lstrip())
+        pos = text.find("\n", def_end)
+        while pos != -1:
+            nxt = text.find("\n", pos + 1)
+            line = text[pos + 1 : nxt if nxt != -1 else len(text)]
+            if line.strip() and len(line) - len(line.lstrip()) <= indent and not line.lstrip().startswith((")", "]", "}")):
+                return pos
+            pos = nxt
+        return len(text)
+    brace = text.find("{", def_end)
+    if brace == -1:
+        return len(text)
+    depth = 0
+    for i in range(brace, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    return len(text)
+
+
+def folded(body: str, ext: str) -> str:
+    """A test body with what formatters change taken out: comments, whitespace,
+    trailing commas and, outside Rust, the kind of quote."""
+    comment = r"(?m)(?:^|\s)#.*$" if ext == ".py" else r"(?m)(?:^|\s)//.*$"
+    body = re.sub(comment, "", body)
+    body = re.sub(r"\s+", "", body)
+    body = re.sub(r",(?=[)\]}])", "", body)
+    if ext != ".rs":
+        body = body.replace("'", '"')
+    return body
+
+
+def decorated_start(text: str, start: int) -> int:
+    """The start of the decorators above a Python def at `start`, which belong
+    to its test; a decorator may run over several lines."""
+    lines = text[:start].split("\n")[:-1]
+    def_line_start = text.rfind("\n", 0, start) + 1
+    indent = start - def_line_start if text[def_line_start:start].strip() == "" else 0
+    best = start
+    offset = def_line_start
+    for line in reversed(lines):
+        offset -= len(line) + 1
+        stripped = line.strip()
+        if not stripped:
+            break
+        depth = len(line) - len(line.lstrip())
+        if depth == indent and stripped.startswith("@"):
+            best = offset
+        elif depth > indent or stripped.startswith((")", "]", "}")):
+            continue
+        else:
+            break
+    return best
+
+
+def test_bodies(path: str, text: str | None) -> dict[str, list[str]]:
+    """Each test's body, folded, by name; tests sharing a name (the same it()
+    title in two describe blocks) are kept in order."""
+    if text is None:
+        return {}
+    ext = os.path.splitext(path)[1]
+    pattern = DEFINITIONS[".js"] if ext in JS_EXTENSIONS else DEFINITIONS.get(ext)
+    if pattern is None:
+        return {}
+    bodies: dict[str, list[str]] = {}
+    for m in pattern.finditer(text):
+        name = m.group(m.lastindex or 0)
+        # The pattern's leading \s* may take blank lines; start at the keyword.
+        keyword = m.start() + len(m.group(0)) - len(m.group(0).lstrip())
+        start = decorated_start(text, keyword) if ext == ".py" else keyword
+        end = body_end(text, ext, keyword, m.end())
+        bodies.setdefault(name, []).append(folded(text[start:end], ext))
+    return bodies
+
+
+def modified_tests(paths: list[str], old_text: Reader, new_text: Reader) -> list[str]:
+    """Tests that exist before and after a change with a different body: an
+    assertion edited, a tolerance loosened, a case special-cased. Adding a
+    test is free; a change to one that already passed needs saying why."""
+    changed: set[str] = set()
+    for p in paths:
+        if is_test_file(p):
+            before = test_bodies(p, old_text(p))
+            after = test_bodies(p, new_text(p))
+            # Same count under a name: compare in order. A different count is
+            # a removal (removed_tests) or an addition (free).
+            changed.update(
+                name for name, bodies in before.items()
+                if len(after.get(name, [])) == len(bodies) and after[name] != bodies
+            )
+    return sorted(changed)
+
+
 def check_tests_removed() -> None:
     since = base()
-    problems = [p for p in committed_problems(since) if " removes test " in p]
+    problems = [p for p in committed_problems(since) if " removes test " in p or " modifies test " in p]
     if not os.environ.get("GATE_IN_PRE_COMMIT") and ref_exists("HEAD"):
-        for name in removed_tests(uncommitted_changes(), head_text, worktree_text):
+        changes = uncommitted_changes()
+        for name in removed_tests(changes, head_text, worktree_text):
             problems.append(f"test {name} removed in uncommitted work; restore it, or commit with a 'Removes test: {name}: <why>' line")
+        for name in modified_tests(changes, head_text, worktree_text):
+            problems.append(f"test {name} changed in uncommitted work; restore it, or commit with a 'Modifies test: {name}: <why>' line")
     if problems:
-        raise Fail("tests disappeared. Deleting or renaming a test to pass is never the fix.\n  " + "\n  ".join(problems))
+        raise Fail("tests disappeared or changed. Deleting, renaming or editing a test to pass is never the fix.\n  " + "\n  ".join(problems))
     print("tests-removed: none undeclared")
 
 
@@ -445,6 +591,8 @@ def check_commit_msg(argv: list[str]) -> None:
         gone = removed_tests(staged, head_text, index_text)
         for name in undeclared(gone, DECLARED_REMOVED.findall(message)):
             found.append(f"a removed test {name} without a 'Removes test: {name}: <why>' line")
+        for name in undeclared(modified_tests(staged, head_text, index_text), DECLARED_MODIFIED.findall(message)):
+            found.append(f"an edited test {name} without a 'Modifies test: {name}: <why>' line")
     if found:
         raise Fail("commit message: " + "\n  commit message: ".join(found))
 
@@ -544,22 +692,40 @@ def prose_lines(text: str) -> Iterator[tuple[int, str]]:
             yield number, re.sub(r"`[^`]*`", "", line)
 
 
+def odd_character(line: str) -> str | None:
+    """The first non-ASCII character that is not a letter or an accent: a
+    dash, a curly quote, an arrow, an emoji. A name keeps its spelling."""
+    for ch in line:
+        if not ch.isascii() and unicodedata.category(ch) not in NAME_CATEGORIES:
+            return ch
+    return None
+
+
+# Letters and accents; not Lm, the modifier letters, which hold look-alike
+# apostrophes and quotes (U+02BC).
+NAME_CATEGORIES = {"Lu", "Ll", "Lt", "Lo", "Mn", "Mc"}
+
+
 def check_prose() -> None:
+    excluded = gate_conf().get("PROSE_EXCLUDE", "").split()
     found = []
     for rel in tracked_and_new():
         if not rel.endswith(".md") or rel.startswith(("node_modules/", ".venv/")):
+            continue
+        if any(matches(g, rel) for g in excluded):
             continue
         text = read_text(ROOT / rel)
         if text is None:
             continue
         for number, line in prose_lines(text):
-            if not line.isascii():
-                found.append(f"{rel}:{number}: a non-ASCII character")
+            odd = odd_character(line)
+            if odd is not None:
+                found.append(f"{rel}:{number}: {unicodedata.name(odd, 'a non-ASCII character').lower()}")
             elif re.search(r"\S - \S", line):
                 found.append(f"{rel}:{number}: a spaced hyphen used as a dash")
     if found:
         raise Fail("prose is plain ASCII with no dash stand-ins:\n  " + "\n  ".join(found[:40]))
-    print("prose: plain")
+    print(f"prose: plain{', ' + str(len(excluded)) + ' pattern(s) excluded' if excluded else ''}")
 
 
 def check_secrets(argv: list[str]) -> None:
@@ -690,7 +856,8 @@ def check_spec() -> None:
         if not text:
             continue
         for ref in set(REQ.findall(text)):
-            referenced[ref] += 1
+            if is_test_file(rel):
+                referenced[ref] += 1
             if ref in retired:
                 problems.append(f"{rel} cites {ref}, which SPEC.md retired")
             elif ref not in live:
@@ -701,7 +868,7 @@ def check_spec() -> None:
                 if ref not in live:
                     problems.append(f"{rel} cites {ref}, which SPEC.md does not define")
                 elif not referenced[ref]:
-                    problems.append(f"{rel} is {task.status} but no test cites {ref}")
+                    problems.append(f"{rel} is {task.status} but no test file cites {ref}")
     if problems:
         raise Fail("spec traceability:\n  " + "\n  ".join(problems))
     covered = sum(1 for i in live if referenced[i])
@@ -827,8 +994,9 @@ def fingerprint() -> str:
 def hook_stop() -> int:
     """Stop hook: run the turn gate when the tree changed since it last passed.
 
-    Exit 2 sends Claude back to work with the failure; after three tries in a
-    row on one session it lets the turn end, and the commit hook still holds."""
+    A block decision sends Claude back to work with the failure; after three
+    tries in a row on one session it lets the turn end, and the commit hook
+    still holds."""
     try:
         payload = json.loads(sys.stdin.read() or "{}")
     except json.JSONDecodeError:
@@ -853,18 +1021,21 @@ def hook_stop() -> int:
         return 0
     tries_file.write_text(str(tries + 1))
     tail = "\n".join(result.stdout.strip().splitlines()[-30:])
-    print(f"tools/gate --turn failed. Fix the cause, or set your task to blocked:\n{tail}", file=sys.stderr)
-    return 2
+    # A block on stdout, not exit 2: Claude Code lets an exit-2 Stop hook
+    # through as a non-blocking error when its stderr mentions a missing file,
+    # and a failing test often does.
+    print(json.dumps({"decision": "block", "reason": f"tools/gate --turn failed. Fix the cause, or set your task to blocked:\n{tail}"}))
+    return 0
 
 
 WRITES = re.compile(r"(?:>|\btee\b|\bsed\s+-[a-zA-Z]*i|\bperl\s+-[a-zA-Z]*i|\bmv\b|\bcp\b|\brm\b|\btruncate\b|\bchmod\b|\bln\b|\bdd\b|\binstall\b)")
 
 
-def ask(reason: str) -> int:
+def ask(reason: str, decision: str = "ask") -> int:
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "permissionDecision": "ask",
+            "permissionDecision": decision,
             "permissionDecisionReason": reason
             + " Agents do not change it; if your task needs it, set the task to blocked and say why.",
         }
@@ -912,14 +1083,18 @@ def hook_pre_tool() -> int:
     if not isinstance(args, dict):
         return 0
     cwd = Path(str(payload.get("cwd") or ROOT))
+    # With permission prompts off (a build agent in its sandbox) nobody can
+    # answer an ask, and only a deny is documented to hold in that mode.
+    decision = "deny" if payload.get("permission_mode") == "bypassPermissions" else "ask"
+    answer = partial(ask, decision=decision)
     patterns = protected_patterns("HEAD" if ref_exists("HEAD") else None)
     if tool == "Bash":
         command = str(args.get("command") or "")
         if WRITES.search(command):
             for token in re.findall(r"[\w./@+-]+", command):
                 rel = relative(token, cwd)
-                if rel and rel != "." and is_protected(rel, patterns):
-                    return ask(f"This command may write {rel}, which is protected (tools/protected.txt).")
+                if rel and rel != "." and (is_protected(rel, patterns) or is_protected(rel + "/", patterns)):
+                    return answer(f"This command may write {rel}, which is protected (tools/protected.txt).")
         return 0
     target = args.get("file_path") or args.get("notebook_path")
     if not isinstance(target, str):
@@ -928,13 +1103,13 @@ def hook_pre_tool() -> int:
     if rel is None:
         return 0
     if is_protected(rel, patterns):
-        return ask(f"{rel} is protected (tools/protected.txt).")
+        return answer(f"{rel} is protected (tools/protected.txt).")
     if TASK_FILE.match(rel):
         current = read_text(ROOT / rel)
         if current is not None:
             after = edited(current, tool, args)
             if after is None or acceptance_block(after) != acceptance_block(current):
-                return ask(f"This changes the Acceptance of {rel}, which is protected.")
+                return answer(f"This changes the Acceptance of {rel}, which is protected.")
     return 0
 
 
@@ -1069,6 +1244,7 @@ CHECKS = {
     "tasks": check_tasks,
     "manifest": lambda argv: check_manifest(),
     "declared": declared,
+    "declarations": check_declarations,
     "roots": roots,
     "review-prompt": review_prompt,
     "export": export,

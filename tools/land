@@ -4,14 +4,15 @@
 #   tools/land check BRANCH [--author-family F[,F...]] [--no-review]
 #       Runs the full gate on BRANCH (for agent/NAME in a fresh clone made
 #       inside the agent's sandbox, so nothing in the agent's worktree or
-#       index counts; in a scratch worktree otherwise) and checks the gate
-#       left the tree as it found it, then has one model family outside
+#       index counts; in a scratch worktree otherwise), checks the gate
+#       left the tree as it found it, checks with main's own tools that every
+#       protected change and test edit on BRANCH is declared, then has one model family outside
 #       every author's review an exact export of BRANCH's tree. Verify each finding; fix the real
 #       ones with tests on BRANCH; then check again with --no-review, which
 #       needs a reviewed ancestor and lists what the review did not see.
 #   tools/land merge BRANCH [--accept-protected]
 #       Fast-forwards main to BRANCH once its last check passed. Declared
-#       protected changes and removed tests need --accept-protected; one that
+#       protected changes and removed or edited tests need --accept-protected; one that
 #       loosens or removes a check waits for GG.
 #   tools/land push
 #       Pushes main, as its own command.
@@ -99,6 +100,9 @@ $verify || { echo 'ERROR the gate moved HEAD or changed the tree'; exit 1; }; ex
         (cd "$workdir" && eval "$verify") || die "the gate moved HEAD or changed the tree in $workdir"
         summary="$workdir/.gate/summary"
     fi
+    # The branch's gate ran the branch's own checks; main's checks and
+    # protected list judge the declarations, so a branch cannot edit them away.
+    python3 -I tools/checks.py declarations main "$tip" || die "undeclared protected changes or test edits on $branch"
     rec=$(record "$branch")
     if [ "$review" = 1 ]; then
         [ -n "$authors" ] || die "say who wrote $branch: --author-family openai|google|anthropic[,...]"
@@ -127,7 +131,7 @@ merge)
     [ -f "$rec" ] || die "run tools/land check $branch first"
     tip=$(git rev-parse --verify "$branch^{commit}")
     [ "$(sed -n 's/^tip=//p' "$rec")" = "$tip" ] || die "$branch moved since its check; run tools/land check $branch again"
-    declared=$(git log --format=%B "main..$tip" | grep -E '^(Protected|Removes test):' || true)
+    declared=$(git log --format=%B "main..$tip" | grep -E '^(Protected|Removes test|Modifies test):' || true)
     if [ -n "$declared" ] && [ "$accept" = 0 ]; then
         echo "$branch declares changes to protected paths or tests:"
         printf '%s\n' "$declared" | sed 's/^/  /'

@@ -8,6 +8,7 @@ go_turn() {
 }
 
 go_full() {
+    each_root go.mod go-mod-tidy go mod tidy -diff
     each_root go.mod go-test-race go test -race -shuffle=on ./...
     if command -v govulncheck >/dev/null; then
         each_root go.mod govulncheck govulncheck ./...
