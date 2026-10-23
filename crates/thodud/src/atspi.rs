@@ -23,7 +23,9 @@ use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 const ACCESSIBLE: &str = "org.a11y.atspi.Accessible";
 const COMPONENT: &str = "org.a11y.atspi.Component";
 const ACTION: &str = "org.a11y.atspi.Action";
+const CACHE: &str = "org.a11y.atspi.Cache";
 const NULL_PATH: &str = "/org/a11y/atspi/null";
+const CACHE_PATH: &str = "/org/a11y/atspi/cache";
 const COORD_WINDOW: u32 = 1;
 const MAX_NODES: usize = 4000;
 const MAX_DEPTH: usize = 48;
@@ -45,6 +47,27 @@ const STATES: [(u32, &str); 11] = [
 ];
 
 pub type Ref = (String, OwnedObjectPath);
+type CacheRecord = (
+    Ref,
+    Ref,
+    Ref,
+    i32,
+    i32,
+    Vec<String>,
+    String,
+    u32,
+    String,
+    Vec<u32>,
+);
+
+struct CachedNode {
+    reference: Ref,
+    parent: Ref,
+    index: i32,
+    interfaces: Vec<String>,
+    child_count: i32,
+    node: Node,
+}
 
 /// What the walk needs from the bus, so a fake can stand in for it.
 pub trait Tree {
@@ -59,6 +82,10 @@ pub trait Tree {
     fn children(&self, at: &Ref) -> Vec<Ref>;
     /// The call that wakes a dormant Chromium tree.
     fn attributes(&self, at: &Ref);
+    /// Bulk tree data from org.a11y.atspi.Cache, when the application has it.
+    fn cache_frames(&self, _app: &Ref, _walk: &mut Walk) -> Option<Vec<Node>> {
+        None
+    }
 }
 
 pub struct Bus {
@@ -67,6 +94,60 @@ pub struct Bus {
 
 fn is_null(r: &Ref) -> bool {
     r.1.as_str() == NULL_PATH
+}
+
+/// The numeric roles in the AT-SPI Cache interface, aligned with its public
+/// AtspiRole enum. GTK4 uses TABLE_ROW for its localized "row" role name.
+fn cache_role_name(role: u32) -> &'static str {
+    match role {
+        2 => "alert",
+        7 => "check box",
+        8 => "check menu item",
+        11 => "combo box",
+        16 => "dialog",
+        23 => "frame",
+        32 => "list item",
+        33 => "menu",
+        35 => "menu item",
+        37 => "page tab",
+        40 => "password text",
+        41 => "popup menu",
+        43 => "button",
+        44 => "radio button",
+        45 => "radio menu item",
+        51 => "slider",
+        52 => "spin button",
+        56 => "table cell",
+        61 => "text",
+        62 => "toggle button",
+        64 => "tooltip",
+        69 => "window",
+        79 => "entry",
+        82 => "document frame",
+        88 => "link",
+        90 => "row",
+        91 => "tree item",
+        95 => "document web",
+        98 => "list box",
+        130 => "switch",
+        _ => "unknown",
+    }
+}
+
+fn state_names(words: &[u32]) -> Vec<String> {
+    STATES
+        .iter()
+        .filter(|(bit, _)| {
+            words
+                .get(*bit as usize / 32)
+                .is_some_and(|w| w & (1 << (bit % 32)) != 0)
+        })
+        .map(|(_, name)| (*name).to_string())
+        .collect()
+}
+
+fn is_document(role: &str) -> bool {
+    matches!(role, "document web" | "document frame")
 }
 
 /// After waking a dormant tree, an empty child list is ready to read too.
@@ -135,15 +216,7 @@ impl Bus {
             .call(at, ACCESSIBLE, "GetState", &())
             .await
             .unwrap_or_default();
-        STATES
-            .iter()
-            .filter(|(bit, _)| {
-                words
-                    .get(*bit as usize / 32)
-                    .is_some_and(|w| w & (1 << (bit % 32)) != 0)
-            })
-            .map(|(_, name)| (*name).to_string())
-            .collect()
+        state_names(&words)
     }
 
     async fn one(&self, at: &Ref) -> (Node, Vec<Ref>) {
@@ -213,6 +286,121 @@ impl Tree for Bus {
         let _: Option<std::collections::HashMap<String, String>> =
             futures_lite::future::block_on(self.call(at, ACCESSIBLE, "GetAttributes", &()));
     }
+
+    fn cache_frames(&self, app: &Ref, walk: &mut Walk) -> Option<Vec<Node>> {
+        // GTK4's cache returns the entire tree, including its parent links,
+        // roles, names and states, in one D-Bus call. Query geometry only for
+        // targets, frame roots, document scaling and covered layers.
+        let entries = futures_lite::future::block_on(async {
+            let cache = (app.0.clone(), OwnedObjectPath::try_from(CACHE_PATH).ok()?);
+            let records: Vec<CacheRecord> = self.call(&cache, CACHE, "GetItems", &()).await?;
+            if records.is_empty() || records.len() > MAX_NODES {
+                return None;
+            }
+            let mut nodes = Vec::with_capacity(records.len());
+            for (
+                reference,
+                _owner,
+                parent,
+                index,
+                child_count,
+                interfaces,
+                name,
+                role_id,
+                description,
+                state_words,
+            ) in records
+            {
+                nodes.push(CachedNode {
+                    reference,
+                    parent,
+                    index,
+                    interfaces,
+                    child_count,
+                    node: Node {
+                        role: cache_role_name(role_id).into(),
+                        states: state_names(&state_words),
+                        name,
+                        description,
+                        extents: None,
+                        action: String::new(),
+                        children: Vec::new(),
+                    },
+                });
+            }
+            let row_paths: HashSet<&str> = nodes
+                .iter()
+                .filter(|entry| entry.node.role == "row")
+                .map(|entry| entry.reference.1.as_str())
+                .collect();
+            let queries: Vec<(usize, bool, bool)> = nodes
+                .iter()
+                .enumerate()
+                .filter_map(|(i, entry)| {
+                    let role = entry.node.role.as_str();
+                    let shown = entry.node.states.iter().any(|state| state == "showing")
+                        && entry.node.states.iter().any(|state| state == "visible");
+                    let frame_root =
+                        entry.parent.0 == app.0 && entry.parent.1.as_str() == app.1.as_str();
+                    let action = tree::role_of(role).is_none()
+                        && shown
+                        && entry.interfaces.iter().any(|name| name == ACTION)
+                        && entry.child_count == 0;
+                    let row_cell = matches!(role, "grid cell" | "table cell")
+                        && row_paths.contains(entry.parent.1.as_str());
+                    let geometry = (tree::role_of(role).is_some() && shown && !row_cell)
+                        || frame_root
+                        || (shown && is_document(role))
+                        || (shown
+                            && matches!(
+                                role,
+                                "window" | "dialog" | "alert" | "tooltip" | "popup menu"
+                            ))
+                        || action;
+                    (geometry || action).then_some((i, action, geometry))
+                })
+                .collect();
+            let resolved = join_all(queries.iter().map(|&(i, action_needed, geometry_needed)| {
+                let entry = &nodes[i];
+                async move {
+                    let action = async {
+                        if action_needed {
+                            self.call::<_, String>(&entry.reference, ACTION, "GetName", &(0i32,))
+                                .await
+                        } else {
+                            None
+                        }
+                    };
+                    let extents = async {
+                        if geometry_needed {
+                            self.call::<_, (i32, i32, i32, i32)>(
+                                &entry.reference,
+                                COMPONENT,
+                                "GetExtents",
+                                &(COORD_WINDOW,),
+                            )
+                            .await
+                        } else {
+                            None
+                        }
+                    };
+                    let (action, extents) = futures_util::join!(action, extents);
+                    (i, action, extents)
+                }
+            }))
+            .await;
+            for (i, action, extents) in resolved {
+                if let Some(action) = action {
+                    nodes[i].node.action = action;
+                }
+                if let Some((x, y, w, h)) = extents {
+                    nodes[i].node.extents = Some([x, y, w, h]);
+                }
+            }
+            Some(nodes)
+        })?;
+        build_cached_frames(app, &entries, walk)
+    }
 }
 
 /// A walk's limits and what it cost.
@@ -230,6 +418,66 @@ impl Walk {
             truncated: false,
         }
     }
+}
+
+fn build_cached_frames(app: &Ref, entries: &[CachedNode], walk: &mut Walk) -> Option<Vec<Node>> {
+    if entries.len() > MAX_NODES {
+        walk.truncated = true;
+        return None;
+    }
+    let by_path: std::collections::HashMap<&str, usize> = entries
+        .iter()
+        .enumerate()
+        .map(|(i, entry)| (entry.reference.1.as_str(), i))
+        .collect();
+    let mut children: Vec<Vec<(i32, usize)>> = vec![Vec::new(); entries.len()];
+    let mut roots = Vec::new();
+    for (i, entry) in entries.iter().enumerate() {
+        if entry.reference.0 == app.0 && entry.reference.1.as_str() == app.1.as_str() {
+            continue;
+        }
+        if entry.parent.0 == app.0 && entry.parent.1.as_str() == app.1.as_str() {
+            roots.push((entry.index, i));
+        } else if let Some(parent) = by_path.get(entry.parent.1.as_str()) {
+            children[*parent].push((entry.index, i));
+        }
+    }
+    if roots.is_empty() {
+        return None;
+    }
+    roots.sort_by_key(|(index, i)| (*index, *i));
+    for siblings in &mut children {
+        siblings.sort_by_key(|(index, i)| (*index, *i));
+    }
+    fn build(
+        i: usize,
+        depth: usize,
+        entries: &[CachedNode],
+        children: &[Vec<(i32, usize)>],
+        truncated: &mut bool,
+    ) -> Node {
+        let mut node = entries[i].node.clone();
+        if depth >= MAX_DEPTH {
+            *truncated |= !children[i].is_empty();
+            return node;
+        }
+        node.children = children[i]
+            .iter()
+            .map(|(_, child)| build(*child, depth + 1, entries, children, truncated))
+            .collect();
+        node
+    }
+    let frames = roots
+        .iter()
+        .map(|(_, i)| build(*i, 0, entries, &children, &mut walk.truncated))
+        .collect();
+    walk.nodes = walk.nodes.saturating_add(entries.len());
+    Some(frames)
+}
+
+fn uses_gtk4(pid: u32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/maps"))
+        .is_ok_and(|maps| maps.lines().any(|line| line.contains("libgtk-4.so")))
 }
 
 /// Read `roots` and every shown subtree below them, a level at a time.
@@ -307,8 +555,20 @@ pub fn snapshot(
 ) -> Snapshot {
     let mut apps = Vec::new();
     let mut frame_refs = Vec::new();
+    let mut cached_apps = Vec::new();
+    let gtk4 = uses_gtk4(window.pid);
     for app in bus.apps() {
         if bus.pid(&app) != Some(window.pid) {
+            continue;
+        }
+        if gtk4 && let Some(frames) = bus.cache_frames(&app, walk) {
+            apps.push(App {
+                name: String::new(),
+                pid: window.pid,
+                frames,
+            });
+            frame_refs.push(Vec::new());
+            cached_apps.push(true);
             continue;
         }
         let refs: Vec<Ref> = bus
@@ -323,6 +583,7 @@ pub fn snapshot(
             frames,
         });
         frame_refs.push(refs);
+        cached_apps.push(false);
     }
     let shallow = Snapshot {
         window: window.clone(),
@@ -337,6 +598,9 @@ pub fn snapshot(
         for (f, frame) in app.frames.iter().enumerate() {
             if *frame != matched {
                 continue;
+            }
+            if cached_apps[a] {
+                return snap;
             }
             let at = frame_refs[a][f].clone();
             if wake(bus, &at, window.pid, woken) {
@@ -499,6 +763,40 @@ mod tests {
             height: 1080,
             scale: 1.0,
         }
+    }
+
+    // REQ-SRC-02: cached GTK4 parent references reconstruct the frame's rows
+    // and preserve their nested controls in the same order as the tree.
+    #[test]
+    fn req_src_02_cache_entries_reconstruct_gtk4_rows() {
+        let app = r("/app");
+        let entry = |path: &str, parent: &str, index, role: &str| CachedNode {
+            reference: r(path),
+            parent: r(parent),
+            index,
+            interfaces: Vec::new(),
+            child_count: 0,
+            node: Node {
+                role: role.into(),
+                ..Node::default()
+            },
+        };
+        let entries = vec![
+            entry("/button", "/cell", 0, "button"),
+            entry("/row", "/frame", 1, "row"),
+            entry("/app", "/app", -1, "application"),
+            entry("/cell", "/row", 0, "table cell"),
+            entry("/frame", "/app", 0, "frame"),
+        ];
+        let mut walk = Walk::new(Duration::from_millis(100));
+        let frames = build_cached_frames(&app, &entries, &mut walk).expect("the cached frame");
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].role, "frame");
+        assert_eq!(frames[0].children[0].role, "row");
+        assert_eq!(frames[0].children[0].children[0].role, "table cell");
+        assert_eq!(frames[0].children[0].children[0].children[0].role, "button");
+        assert_eq!(cache_role_name(90), "row");
+        assert_eq!(cache_role_name(56), "table cell");
     }
 
     // REQ-SRC-03: a frame whose only child is the null object is woken

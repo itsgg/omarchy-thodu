@@ -224,7 +224,7 @@ fn walk(node: &Node, at: &mut Walk<'_>, div: f64, parent: Option<[i32; 4]>, insi
         // GTK4 list views expose one actionable row and a grid cell for each
         // column. The cells share the row action, so label the row once while
         // still descending to retain any independent controls inside a cell.
-        let role = if inside_row && node.role == "grid cell" {
+        let role = if inside_row && matches!(node.role.as_str(), "grid cell" | "table cell") {
             None
         } else {
             role_of(&node.role).or_else(|| (node.action == "click").then_some(Role::Button))
