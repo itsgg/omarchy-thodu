@@ -222,11 +222,11 @@ FocusScope {
         if (view.inGrid())
             return "";
         if (view.labelPrefix.length > 0)
-            return "lowercase continues | uppercase final activates";
+            return "lowercase continues | uppercase final activates | Tab cycles hints";
         if (view.labelsOnly)
-            return view.searching ? "lowercase searches | uppercase final activates" :
-                "lowercase selects | uppercase final activates | / searches";
-        return "type to search | Shift+hint activates";
+            return view.searching ? "lowercase searches | uppercase final activates | Tab cycles hints" :
+                "lowercase selects | uppercase final activates | / searches | Tab cycles hints";
+        return "type to search | Shift+hint activates | Tab cycles hints";
     }
 
     Keys.onPressed: event => {
@@ -371,6 +371,7 @@ FocusScope {
             required property var modelData
             readonly property bool focusedOne: view.focusedId === modelData.id
             objectName: "label-" + modelData.label
+            z: focusedOne ? 1 : 0
             visible: view.kept[modelData.id] === true && !view.lingering && !(view.zoomed && modelData.source === "grid")
             x: modelData.placed.x - view.area.x
             y: modelData.placed.y - view.area.y

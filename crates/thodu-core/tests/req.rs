@@ -1052,6 +1052,50 @@ fn req_src_02_reference_windows_yield_the_marked_controls() {
     );
 }
 
+// REQ-SRC-02: GTK4 file rows represent the selectable item; their grid-cell
+// children must not become separate targets for the same row action.
+#[test]
+fn req_src_02_gtk4_file_rows_are_targets() {
+    let targets = replayed("nautilus-reference");
+    let mut found = summary(&targets);
+    let mut marked_targets = expected("nautilus-reference");
+    let order = |targets: &mut Vec<(Rect, Role, String)>| {
+        targets.sort_by_key(|(bounds, _, text)| {
+            (bounds.y, bounds.x, bounds.w, bounds.h, text.clone())
+        });
+    };
+    order(&mut found);
+    order(&mut marked_targets);
+    assert_eq!(
+        found, marked_targets,
+        "GTK4 rows and their independent buttons are targets, but cells are not"
+    );
+    let marks = jsonl("atspi/nautilus-reference.marked.jsonl");
+    assert_eq!(
+        targets.len(),
+        marks.len(),
+        "all marked rows and nested buttons have targets"
+    );
+    assert_eq!(
+        targets
+            .iter()
+            .filter(|target| target.role == Role::ListItem)
+            .count(),
+        7,
+        "one list-item target per visible row"
+    );
+    for mark in marks {
+        let x = mark["at"][0].as_i64().expect("x") as i32;
+        let y = mark["at"][1].as_i64().expect("y") as i32;
+        assert!(
+            targets
+                .iter()
+                .any(|target| target.bounds.contains_point(x, y)),
+            "the marked file row at ({x}, {y}) has a target"
+        );
+    }
+}
+
 // REQ-CLI-01: the replayed trees printed as `thodu targets --json` prints
 // them match their .targets.jsonl files.
 #[test]

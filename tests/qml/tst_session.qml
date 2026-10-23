@@ -325,25 +325,32 @@ Item {
             verify(findChild(view, "label-a").visible);
         }
 
-        function test_req_session_01_label_focus_uses_chip_and_status_wraps() {
+        function test_req_session_01_overlapping_focused_hint_is_raised_and_status_wraps() {
             const longStatus = "atspi missed its 80 ms budget; 22 targets from the bar; " +
                 "additional source details that should wrap inside the compact status toast";
+            view.targets = view.targets.map(target => Object.assign({}, target, {
+                placed: { x: 113, y: 86, w: 17, h: 18 }
+            }));
             view.apply({
                 v: 1, ok: true, session: "s1", status: longStatus,
-                view: { state: "showing", visible: ["a0"], focused: "a0", search: "", label_prefix: "", label_selected: true, labels_only: true }
+                view: { state: "showing", visible: ["a0", "a1"], focused: "a0", search: "", label_prefix: "", label_selected: true, labels_only: true }
             });
             const ring = findChild(view, "focus-ring");
             const chip = findChild(view, "label-a");
+            const overlap = findChild(view, "label-s");
             const toast = findChild(view, "status-line");
             const message = findChild(view, "status-text");
             const cue = findChild(view, "hint-text");
             verify(ring !== null);
             verify(!ring.visible, "a label-focused target uses its chip without the large outline");
             verify(chip.visible);
+            verify(overlap.visible, "both labels share the same screen position");
+            verify(chip.z > overlap.z, "the focused label is drawn above overlapping labels");
             compare(chip.color, view.selectedBackground);
             verify(toast !== null);
             verify(message !== null && message.implicitHeight > 18, "long status wraps into more than one line");
             verify(cue.text.indexOf("lowercase selects") !== -1);
+            verify(cue.text.indexOf("Tab cycles hints") !== -1);
             verify(toast.width <= 640, "the status toast stays within its maximum width");
             verify(toast.height > 38, "the wrapped status and activation cue fit in the toast");
             view.apply({
@@ -352,6 +359,7 @@ Item {
             });
             verify(ring.visible, "text-search focus keeps the target outline");
             verify(cue.text.indexOf("lowercase searches") !== -1);
+            verify(cue.text.indexOf("Tab cycles hints") !== -1);
             view.apply({
                 v: 1, ok: true, session: "s1", status: longStatus,
                 view: { state: "showing", visible: ["a0"], focused: "a0", search: "", label_prefix: "", label_selected: false, labels_only: false }

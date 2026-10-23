@@ -98,7 +98,7 @@ pub fn role_of(name: &str) -> Option<Role> {
         "menu item" | "check menu item" | "radio menu item" | "menu" | "menu item checkbox"
         | "menu item radio" => Role::MenuItem,
         "page tab" | "tab" => Role::Tab,
-        "list item" | "tree item" | "table cell" | "table row" | "option" | "grid cell" => {
+        "list item" | "tree item" | "table cell" | "table row" | "row" | "option" | "grid cell" => {
             Role::ListItem
         }
         "combo box" => Role::Combo,
@@ -157,7 +157,7 @@ pub fn targets(frame: &Node, window: &Window, monitor: &Monitor) -> Vec<Target> 
         layers: &mut layers,
         order: &mut order,
     };
-    walk(frame, &mut at, 1.0, None);
+    walk(frame, &mut at, 1.0, None, false);
     let mut seen: Vec<Rect> = Vec::new();
     found
         .into_iter()
@@ -194,7 +194,7 @@ fn scaled(extents: [i32; 4], parent: [i32; 4], scale: f64) -> bool {
     scale > 1.01 && near(extents[2], parent[2]) && near(extents[3], parent[3])
 }
 
-fn walk(node: &Node, at: &mut Walk<'_>, div: f64, parent: Option<[i32; 4]>) {
+fn walk(node: &Node, at: &mut Walk<'_>, div: f64, parent: Option<[i32; 4]>, inside_row: bool) {
     if !node.shown() || node.has("defunct") {
         return;
     }
@@ -221,7 +221,14 @@ fn walk(node: &Node, at: &mut Walk<'_>, div: f64, parent: Option<[i32; 4]>) {
         if is_layer(&node.role) && *at.order > 1 {
             at.layers.push((bounds, *at.order));
         }
-        let role = role_of(&node.role).or_else(|| (node.action == "click").then_some(Role::Button));
+        // GTK4 list views expose one actionable row and a grid cell for each
+        // column. The cells share the row action, so label the row once while
+        // still descending to retain any independent controls inside a cell.
+        let role = if inside_row && node.role == "grid cell" {
+            None
+        } else {
+            role_of(&node.role).or_else(|| (node.action == "click").then_some(Role::Button))
+        };
         if let Some(role) = role {
             let text = [node.name.trim(), node.description.trim()]
                 .iter()
@@ -245,7 +252,7 @@ fn walk(node: &Node, at: &mut Walk<'_>, div: f64, parent: Option<[i32; 4]>) {
     }
     let parent = node.extents.or(parent);
     for child in &node.children {
-        walk(child, at, div, parent);
+        walk(child, at, div, parent, inside_row || node.role == "row");
     }
 }
 

@@ -1,6 +1,6 @@
 # 0011: Reach GTK rows and reveal overlapping hints
 
-Status: open
+Status: claimed
 Depends on: 0005, 0010
 Spec: REQ-SRC-02, REQ-SESSION-01
 Goal: Make GTK list-view rows, including Nautilus file rows, keyboard targets and make a focused hint chip visible above overlapping chips, with a cue that explains how to cycle focus.
@@ -14,3 +14,4 @@ Acceptance:
 ## Log
 
 - 2026-10-23: created after reproducing missing Nautilus file-row hints and overlapping labels on GG's screen.
+- 2026-10-23: claimed by codex-hints-coverage; the GTK4 replay and overlap test fail before their fixes and pass after them.

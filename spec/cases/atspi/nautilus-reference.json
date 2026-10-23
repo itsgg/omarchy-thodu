@@ -1,0 +1,2851 @@
+{
+  "window": {
+    "address": "0x1",
+    "class": "Nautilus",
+    "title": "Nautilus GTK4 list",
+    "pid": 1,
+    "at": [
+      12,
+      500
+    ],
+    "size": [
+      749,
+      448
+    ],
+    "workspace": 1,
+    "monitor": 0
+  },
+  "monitor": {
+    "name": "TEST",
+    "x": 0,
+    "y": 0,
+    "width": 1920,
+    "height": 1200,
+    "scale": 1.25
+  },
+  "apps": [
+    {
+      "name": "Nautilus",
+      "pid": 1,
+      "frames": [
+        {
+          "role": "frame",
+          "states": [
+            "active",
+            "showing",
+            "visible"
+          ],
+          "name": "",
+          "description": "",
+          "extents": [
+            0,
+            0,
+            749,
+            448
+          ],
+          "action": "",
+          "children": [
+            {
+              "role": "list",
+              "states": [
+                "focusable",
+                "focused",
+                "sensitive",
+                "showing",
+                "visible"
+              ],
+              "name": "",
+              "description": "",
+              "extents": [
+                156,
+                82,
+                569,
+                366
+              ],
+              "action": "list.unselect-all",
+              "children": [
+                {
+                  "role": "row",
+                  "states": [
+                    "focusable",
+                    "sensitive",
+                    "showing",
+                    "visible"
+                  ],
+                  "name": "File row 1",
+                  "description": "",
+                  "extents": [
+                    180,
+                    82,
+                    521,
+                    44
+                  ],
+                  "action": "listitem.scroll-to",
+                  "children": [
+                    {
+                      "role": "grid cell",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ],
+                      "name": "Column",
+                      "description": "",
+                      "extents": [
+                        180,
+                        82,
+                        259,
+                        44
+                      ],
+                      "action": "listitem.scroll-to",
+                      "children": [
+                        {
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ],
+                          "name": "",
+                          "description": "",
+                          "extents": [
+                            180,
+                            82,
+                            259,
+                            44
+                          ],
+                          "action": "",
+                          "children": [
+                            {
+                              "role": "generic",
+                              "states": [
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ],
+                              "name": "",
+                              "description": "",
+                              "extents": [
+                                180,
+                                82,
+                                247,
+                                32
+                              ],
+                              "action": "",
+                              "children": [
+                                {
+                                  "role": "button",
+                                  "states": [
+                                    "sensitive",
+                                    "showing",
+                                    "visible"
+                                  ],
+                                  "name": "",
+                                  "description": "",
+                                  "extents": [
+                                    180,
+                                    82,
+                                    0,
+                                    32
+                                  ],
+                                  "action": "listitem.toggle-expand",
+                                  "children": []
+                                },
+                                {
+                                  "role": "generic",
+                                  "states": [
+                                    "sensitive",
+                                    "showing",
+                                    "visible"
+                                  ],
+                                  "name": "",
+                                  "description": "",
+                                  "extents": [
+                                    180,
+                                    82,
+                                    247,
+                                    32
+                                  ],
+                                  "action": "",
+                                  "children": [
+                                    {
+                                      "role": "generic",
+                                      "states": [
+                                        "sensitive",
+                                        "showing",
+                                        "visible"
+                                      ],
+                                      "name": "",
+                                      "description": "",
+                                      "extents": [
+                                        180,
+                                        82,
+                                        32,
+                                        32
+                                      ],
+                                      "action": "",
+                                      "children": [
+                                        {
+                                          "role": "generic",
+                                          "states": [
+                                            "sensitive",
+                                            "showing",
+                                            "visible"
+                                          ],
+                                          "name": "",
+                                          "description": "",
+                                          "extents": [
+                                            180,
+                                            82,
+                                            32,
+                                            32
+                                          ],
+                                          "action": "",
+                                          "children": []
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "role": "generic",
+                                      "states": [
+                                        "sensitive",
+                                        "showing",
+                                        "visible"
+                                      ],
+                                      "name": "",
+                                      "description": "",
+                                      "extents": [
+                                        218,
+                                        89,
+                                        209,
+                                        18
+                                      ],
+                                      "action": "",
+                                      "children": [
+                                        {
+                                          "role": "generic",
+                                          "states": [
+                                            "sensitive",
+                                            "showing",
+                                            "visible"
+                                          ],
+                                          "name": "",
+                                          "description": "",
+                                          "extents": [
+                                            218,
+                                            89,
+                                            209,
+                                            18
+                                          ],
+                                          "action": "",
+                                          "children": [
+                                            {
+                                              "role": "label",
+                                              "states": [
+                                                "sensitive",
+                                                "showing",
+                                                "visible"
+                                              ],
+                                              "name": "",
+                                              "description": "",
+                                              "extents": [
+                                                218,
+                                                89,
+                                                37,
+                                                18
+                                              ],
+                                              "action": "clipboard.copy",
+                                              "children": []
+                                            },
+                                            {
+                                              "role": "generic",
+                                              "states": [
+                                                "sensitive",
+                                                "showing",
+                                                "visible"
+                                              ],
+                                              "name": "",
+                                              "description": "",
+                                              "extents": [
+                                                261,
+                                                89,
+                                                0,
+                                                18
+                                              ],
+                                              "action": "",
+                                              "children": []
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "role": "grid cell",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ],
+                      "name": "Column",
+                      "description": "",
+                      "extents": [
+                        439,
+                        82,
+                        83,
+                        44
+                      ],
+                      "action": "listitem.scroll-to",
+                      "children": [
+                        {
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ],
+                          "name": "",
+                          "description": "",
+                          "extents": [
+                            439,
+                            82,
+                            82,
+                            44
+                          ],
+                          "action": "",
+                          "children": [
+                            {
+                              "role": "label",
+                              "states": [
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ],
+                              "name": "",
+                              "description": "",
+                              "extents": [
+                                439,
+                                89,
+                                70,
+                                18
+                              ],
+                              "action": "clipboard.copy",
+                              "children": []
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "role": "grid cell",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ],
+                      "name": "Column",
+                      "description": "",
+                      "extents": [
+                        522,
+                        82,
+                        132,
+                        44
+                      ],
+                      "action": "listitem.scroll-to",
+                      "children": [
+                        {
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ],
+                          "name": "",
+                          "description": "",
+                          "extents": [
+                            522,
+                            82,
+                            131,
+                            44
+                          ],
+                          "action": "",
+                          "children": [
+                            {
+                              "role": "label",
+                              "states": [
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ],
+                              "name": "",
+                              "description": "",
+                              "extents": [
+                                522,
+                                89,
+                                119,
+                                18
+                              ],
+                              "action": "clipboard.copy",
+                              "children": []
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "role": "grid cell",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ],
+                      "name": "Column",
+                      "description": "",
+                      "extents": [
+                        654,
+                        82,
+                        47,
+                        44
+                      ],
+                      "action": "listitem.scroll-to",
+                      "children": [
+                        {
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ],
+                          "name": "",
+                          "description": "",
+                          "extents": [
+                            654,
+                            82,
+                            46,
+                            44
+                          ],
+                          "action": "",
+                          "children": [
+                            {
+                              "role": "button",
+                              "states": [
+                                "focusable",
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ],
+                              "name": "",
+                              "description": "",
+                              "extents": [
+                                654,
+                                81,
+                                34,
+                                34
+                              ],
+                              "action": "click",
+                              "children": []
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "role": "row",
+                  "states": [
+                    "focusable",
+                    "sensitive",
+                    "showing",
+                    "visible"
+                  ],
+                  "name": "File row 2",
+                  "description": "",
+                  "extents": [
+                    180,
+                    134,
+                    521,
+                    44
+                  ],
+                  "action": "listitem.scroll-to",
+                  "children": [
+                    {
+                      "role": "grid cell",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ],
+                      "name": "Column",
+                      "description": "",
+                      "extents": [
+                        180,
+                        134,
+                        259,
+                        44
+                      ],
+                      "action": "listitem.scroll-to",
+                      "children": [
+                        {
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ],
+                          "name": "",
+                          "description": "",
+                          "extents": [
+                            180,
+                            134,
+                            259,
+                            44
+                          ],
+                          "action": "",
+                          "children": [
+                            {
+                              "role": "generic",
+                              "states": [
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ],
+                              "name": "",
+                              "description": "",
+                              "extents": [
+                                180,
+                                134,
+                                247,
+                                32
+                              ],
+                              "action": "",
+                              "children": [
+                                {
+                                  "role": "button",
+                                  "states": [
+                                    "sensitive",
+                                    "showing",
+                                    "visible"
+                                  ],
+                                  "name": "",
+                                  "description": "",
+                                  "extents": [
+                                    180,
+                                    134,
+                                    0,
+                                    32
+                                  ],
+                                  "action": "listitem.toggle-expand",
+                                  "children": []
+                                },
+                                {
+                                  "role": "generic",
+                                  "states": [
+                                    "sensitive",
+                                    "showing",
+                                    "visible"
+                                  ],
+                                  "name": "",
+                                  "description": "",
+                                  "extents": [
+                                    180,
+                                    134,
+                                    247,
+                                    32
+                                  ],
+                                  "action": "",
+                                  "children": [
+                                    {
+                                      "role": "generic",
+                                      "states": [
+                                        "sensitive",
+                                        "showing",
+                                        "visible"
+                                      ],
+                                      "name": "",
+                                      "description": "",
+                                      "extents": [
+                                        180,
+                                        134,
+                                        32,
+                                        32
+                                      ],
+                                      "action": "",
+                                      "children": [
+                                        {
+                                          "role": "generic",
+                                          "states": [
+                                            "sensitive",
+                                            "showing",
+                                            "visible"
+                                          ],
+                                          "name": "",
+                                          "description": "",
+                                          "extents": [
+                                            180,
+                                            134,
+                                            32,
+                                            32
+                                          ],
+                                          "action": "",
+                                          "children": []
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "role": "generic",
+                                      "states": [
+                                        "sensitive",
+                                        "showing",
+                                        "visible"
+                                      ],
+                                      "name": "",
+                                      "description": "",
+                                      "extents": [
+                                        218,
+                                        141,
+                                        209,
+                                        18
+                                      ],
+                                      "action": "",
+                                      "children": [
+                                        {
+                                          "role": "generic",
+                                          "states": [
+                                            "sensitive",
+                                            "showing",
+                                            "visible"
+                                          ],
+                                          "name": "",
+                                          "description": "",
+                                          "extents": [
+                                            218,
+                                            141,
+                                            209,
+                                            18
+                                          ],
+                                          "action": "",
+                                          "children": [
+                                            {
+                                              "role": "label",
+                                              "states": [
+                                                "sensitive",
+                                                "showing",
+                                                "visible"
+                                              ],
+                                              "name": "",
+                                              "description": "",
+                                              "extents": [
+                                                218,
+                                                141,
+                                                79,
+                                                18
+                                              ],
+                                              "action": "clipboard.copy",
+                                              "children": []
+                                            },
+                                            {
+                                              "role": "generic",
+                                              "states": [
+                                                "sensitive",
+                                                "showing",
+                                                "visible"
+                                              ],
+                                              "name": "",
+                                              "description": "",
+                                              "extents": [
+                                                303,
+                                                141,
+                                                0,
+                                                18
+                                              ],
+                                              "action": "",
+                                              "children": []
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "role": "grid cell",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ],
+                      "name": "Column",
+                      "description": "",
+                      "extents": [
+                        439,
+                        134,
+                        83,
+                        44
+                      ],
+                      "action": "listitem.scroll-to",
+                      "children": [
+                        {
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ],
+                          "name": "",
+                          "description": "",
+                          "extents": [
+                            439,
+                            134,
+                            82,
+                            44
+                          ],
+                          "action": "",
+                          "children": [
+                            {
+                              "role": "label",
+                              "states": [
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ],
+                              "name": "",
+                              "description": "",
+                              "extents": [
+                                439,
+                                141,
+                                70,
+                                18
+                              ],
+                              "action": "clipboard.copy",
+                              "children": []
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "role": "grid cell",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ],
+                      "name": "Column",
+                      "description": "",
+                      "extents": [
+                        522,
+                        134,
+                        132,
+                        44
+                      ],
+                      "action": "listitem.scroll-to",
+                      "children": [
+                        {
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ],
+                          "name": "",
+                          "description": "",
+                          "extents": [
+                            522,
+                            134,
+                            131,
+                            44
+                          ],
+                          "action": "",
+                          "children": [
+                            {
+                              "role": "label",
+                              "states": [
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ],
+                              "name": "",
+                              "description": "",
+                              "extents": [
+                                522,
+                                141,
+                                119,
+                                18
+                              ],
+                              "action": "clipboard.copy",
+                              "children": []
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "role": "grid cell",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ],
+                      "name": "Column",
+                      "description": "",
+                      "extents": [
+                        654,
+                        134,
+                        47,
+                        44
+                      ],
+                      "action": "listitem.scroll-to",
+                      "children": [
+                        {
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ],
+                          "name": "",
+                          "description": "",
+                          "extents": [
+                            654,
+                            134,
+                            46,
+                            44
+                          ],
+                          "action": "",
+                          "children": [
+                            {
+                              "role": "button",
+                              "states": [
+                                "focusable",
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ],
+                              "name": "",
+                              "description": "",
+                              "extents": [
+                                654,
+                                133,
+                                34,
+                                34
+                              ],
+                              "action": "click",
+                              "children": []
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "role": "row",
+                  "states": [
+                    "focusable",
+                    "sensitive",
+                    "showing",
+                    "visible"
+                  ],
+                  "name": "File row 3",
+                  "description": "",
+                  "extents": [
+                    180,
+                    186,
+                    521,
+                    44
+                  ],
+                  "action": "listitem.scroll-to",
+                  "children": [
+                    {
+                      "role": "grid cell",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ],
+                      "name": "Column",
+                      "description": "",
+                      "extents": [
+                        180,
+                        186,
+                        259,
+                        44
+                      ],
+                      "action": "listitem.scroll-to",
+                      "children": [
+                        {
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ],
+                          "name": "",
+                          "description": "",
+                          "extents": [
+                            180,
+                            186,
+                            259,
+                            44
+                          ],
+                          "action": "",
+                          "children": [
+                            {
+                              "role": "generic",
+                              "states": [
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ],
+                              "name": "",
+                              "description": "",
+                              "extents": [
+                                180,
+                                186,
+                                247,
+                                32
+                              ],
+                              "action": "",
+                              "children": [
+                                {
+                                  "role": "button",
+                                  "states": [
+                                    "sensitive",
+                                    "showing",
+                                    "visible"
+                                  ],
+                                  "name": "",
+                                  "description": "",
+                                  "extents": [
+                                    180,
+                                    186,
+                                    0,
+                                    32
+                                  ],
+                                  "action": "listitem.toggle-expand",
+                                  "children": []
+                                },
+                                {
+                                  "role": "generic",
+                                  "states": [
+                                    "sensitive",
+                                    "showing",
+                                    "visible"
+                                  ],
+                                  "name": "",
+                                  "description": "",
+                                  "extents": [
+                                    180,
+                                    186,
+                                    247,
+                                    32
+                                  ],
+                                  "action": "",
+                                  "children": [
+                                    {
+                                      "role": "generic",
+                                      "states": [
+                                        "sensitive",
+                                        "showing",
+                                        "visible"
+                                      ],
+                                      "name": "",
+                                      "description": "",
+                                      "extents": [
+                                        180,
+                                        186,
+                                        32,
+                                        32
+                                      ],
+                                      "action": "",
+                                      "children": [
+                                        {
+                                          "role": "generic",
+                                          "states": [
+                                            "sensitive",
+                                            "showing",
+                                            "visible"
+                                          ],
+                                          "name": "",
+                                          "description": "",
+                                          "extents": [
+                                            180,
+                                            186,
+                                            32,
+                                            32
+                                          ],
+                                          "action": "",
+                                          "children": []
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "role": "generic",
+                                      "states": [
+                                        "sensitive",
+                                        "showing",
+                                        "visible"
+                                      ],
+                                      "name": "",
+                                      "description": "",
+                                      "extents": [
+                                        218,
+                                        193,
+                                        209,
+                                        18
+                                      ],
+                                      "action": "",
+                                      "children": [
+                                        {
+                                          "role": "generic",
+                                          "states": [
+                                            "sensitive",
+                                            "showing",
+                                            "visible"
+                                          ],
+                                          "name": "",
+                                          "description": "",
+                                          "extents": [
+                                            218,
+                                            193,
+                                            209,
+                                            18
+                                          ],
+                                          "action": "",
+                                          "children": [
+                                            {
+                                              "role": "label",
+                                              "states": [
+                                                "sensitive",
+                                                "showing",
+                                                "visible"
+                                              ],
+                                              "name": "",
+                                              "description": "",
+                                              "extents": [
+                                                218,
+                                                193,
+                                                78,
+                                                18
+                                              ],
+                                              "action": "clipboard.copy",
+                                              "children": []
+                                            },
+                                            {
+                                              "role": "generic",
+                                              "states": [
+                                                "sensitive",
+                                                "showing",
+                                                "visible"
+                                              ],
+                                              "name": "",
+                                              "description": "",
+                                              "extents": [
+                                                302,
+                                                193,
+                                                0,
+                                                18
+                                              ],
+                                              "action": "",
+                                              "children": []
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "role": "grid cell",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ],
+                      "name": "Column",
+                      "description": "",
+                      "extents": [
+                        439,
+                        186,
+                        83,
+                        44
+                      ],
+                      "action": "listitem.scroll-to",
+                      "children": [
+                        {
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ],
+                          "name": "",
+                          "description": "",
+                          "extents": [
+                            439,
+                            186,
+                            82,
+                            44
+                          ],
+                          "action": "",
+                          "children": [
+                            {
+                              "role": "label",
+                              "states": [
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ],
+                              "name": "",
+                              "description": "",
+                              "extents": [
+                                439,
+                                193,
+                                70,
+                                18
+                              ],
+                              "action": "clipboard.copy",
+                              "children": []
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "role": "grid cell",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ],
+                      "name": "Column",
+                      "description": "",
+                      "extents": [
+                        522,
+                        186,
+                        132,
+                        44
+                      ],
+                      "action": "listitem.scroll-to",
+                      "children": [
+                        {
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ],
+                          "name": "",
+                          "description": "",
+                          "extents": [
+                            522,
+                            186,
+                            131,
+                            44
+                          ],
+                          "action": "",
+                          "children": [
+                            {
+                              "role": "label",
+                              "states": [
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ],
+                              "name": "",
+                              "description": "",
+                              "extents": [
+                                522,
+                                193,
+                                119,
+                                18
+                              ],
+                              "action": "clipboard.copy",
+                              "children": []
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "role": "grid cell",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ],
+                      "name": "Column",
+                      "description": "",
+                      "extents": [
+                        654,
+                        186,
+                        47,
+                        44
+                      ],
+                      "action": "listitem.scroll-to",
+                      "children": [
+                        {
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ],
+                          "name": "",
+                          "description": "",
+                          "extents": [
+                            654,
+                            186,
+                            46,
+                            44
+                          ],
+                          "action": "",
+                          "children": [
+                            {
+                              "role": "button",
+                              "states": [
+                                "focusable",
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ],
+                              "name": "",
+                              "description": "",
+                              "extents": [
+                                654,
+                                185,
+                                34,
+                                34
+                              ],
+                              "action": "click",
+                              "children": []
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "role": "row",
+                  "states": [
+                    "focusable",
+                    "sensitive",
+                    "showing",
+                    "visible"
+                  ],
+                  "name": "File row 4",
+                  "description": "",
+                  "extents": [
+                    180,
+                    238,
+                    521,
+                    44
+                  ],
+                  "action": "listitem.scroll-to",
+                  "children": [
+                    {
+                      "role": "grid cell",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ],
+                      "name": "Column",
+                      "description": "",
+                      "extents": [
+                        180,
+                        238,
+                        259,
+                        44
+                      ],
+                      "action": "listitem.scroll-to",
+                      "children": [
+                        {
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ],
+                          "name": "",
+                          "description": "",
+                          "extents": [
+                            180,
+                            238,
+                            259,
+                            44
+                          ],
+                          "action": "",
+                          "children": [
+                            {
+                              "role": "generic",
+                              "states": [
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ],
+                              "name": "",
+                              "description": "",
+                              "extents": [
+                                180,
+                                238,
+                                247,
+                                32
+                              ],
+                              "action": "",
+                              "children": [
+                                {
+                                  "role": "button",
+                                  "states": [
+                                    "sensitive",
+                                    "showing",
+                                    "visible"
+                                  ],
+                                  "name": "",
+                                  "description": "",
+                                  "extents": [
+                                    180,
+                                    238,
+                                    0,
+                                    32
+                                  ],
+                                  "action": "listitem.toggle-expand",
+                                  "children": []
+                                },
+                                {
+                                  "role": "generic",
+                                  "states": [
+                                    "sensitive",
+                                    "showing",
+                                    "visible"
+                                  ],
+                                  "name": "",
+                                  "description": "",
+                                  "extents": [
+                                    180,
+                                    238,
+                                    247,
+                                    32
+                                  ],
+                                  "action": "",
+                                  "children": [
+                                    {
+                                      "role": "generic",
+                                      "states": [
+                                        "sensitive",
+                                        "showing",
+                                        "visible"
+                                      ],
+                                      "name": "",
+                                      "description": "",
+                                      "extents": [
+                                        180,
+                                        238,
+                                        32,
+                                        32
+                                      ],
+                                      "action": "",
+                                      "children": [
+                                        {
+                                          "role": "generic",
+                                          "states": [
+                                            "sensitive",
+                                            "showing",
+                                            "visible"
+                                          ],
+                                          "name": "",
+                                          "description": "",
+                                          "extents": [
+                                            180,
+                                            238,
+                                            32,
+                                            32
+                                          ],
+                                          "action": "",
+                                          "children": []
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "role": "generic",
+                                      "states": [
+                                        "sensitive",
+                                        "showing",
+                                        "visible"
+                                      ],
+                                      "name": "",
+                                      "description": "",
+                                      "extents": [
+                                        218,
+                                        245,
+                                        209,
+                                        18
+                                      ],
+                                      "action": "",
+                                      "children": [
+                                        {
+                                          "role": "generic",
+                                          "states": [
+                                            "sensitive",
+                                            "showing",
+                                            "visible"
+                                          ],
+                                          "name": "",
+                                          "description": "",
+                                          "extents": [
+                                            218,
+                                            245,
+                                            209,
+                                            18
+                                          ],
+                                          "action": "",
+                                          "children": [
+                                            {
+                                              "role": "label",
+                                              "states": [
+                                                "sensitive",
+                                                "showing",
+                                                "visible"
+                                              ],
+                                              "name": "",
+                                              "description": "",
+                                              "extents": [
+                                                218,
+                                                245,
+                                                60,
+                                                18
+                                              ],
+                                              "action": "clipboard.copy",
+                                              "children": []
+                                            },
+                                            {
+                                              "role": "generic",
+                                              "states": [
+                                                "sensitive",
+                                                "showing",
+                                                "visible"
+                                              ],
+                                              "name": "",
+                                              "description": "",
+                                              "extents": [
+                                                284,
+                                                245,
+                                                16,
+                                                18
+                                              ],
+                                              "action": "",
+                                              "children": [
+                                                {
+                                                  "role": "image",
+                                                  "states": [
+                                                    "sensitive",
+                                                    "showing",
+                                                    "visible"
+                                                  ],
+                                                  "name": "",
+                                                  "description": "",
+                                                  "extents": [
+                                                    284,
+                                                    245,
+                                                    16,
+                                                    18
+                                                  ],
+                                                  "action": "",
+                                                  "children": []
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "role": "grid cell",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ],
+                      "name": "Column",
+                      "description": "",
+                      "extents": [
+                        439,
+                        238,
+                        83,
+                        44
+                      ],
+                      "action": "listitem.scroll-to",
+                      "children": [
+                        {
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ],
+                          "name": "",
+                          "description": "",
+                          "extents": [
+                            439,
+                            238,
+                            82,
+                            44
+                          ],
+                          "action": "",
+                          "children": [
+                            {
+                              "role": "label",
+                              "states": [
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ],
+                              "name": "",
+                              "description": "",
+                              "extents": [
+                                439,
+                                245,
+                                70,
+                                18
+                              ],
+                              "action": "clipboard.copy",
+                              "children": []
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "role": "grid cell",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ],
+                      "name": "Column",
+                      "description": "",
+                      "extents": [
+                        522,
+                        238,
+                        132,
+                        44
+                      ],
+                      "action": "listitem.scroll-to",
+                      "children": [
+                        {
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ],
+                          "name": "",
+                          "description": "",
+                          "extents": [
+                            522,
+                            238,
+                            131,
+                            44
+                          ],
+                          "action": "",
+                          "children": [
+                            {
+                              "role": "label",
+                              "states": [
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ],
+                              "name": "",
+                              "description": "",
+                              "extents": [
+                                522,
+                                245,
+                                119,
+                                18
+                              ],
+                              "action": "clipboard.copy",
+                              "children": []
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "role": "grid cell",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ],
+                      "name": "Column",
+                      "description": "",
+                      "extents": [
+                        654,
+                        238,
+                        47,
+                        44
+                      ],
+                      "action": "listitem.scroll-to",
+                      "children": [
+                        {
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ],
+                          "name": "",
+                          "description": "",
+                          "extents": [
+                            654,
+                            238,
+                            46,
+                            44
+                          ],
+                          "action": "",
+                          "children": [
+                            {
+                              "role": "button",
+                              "states": [
+                                "focusable",
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ],
+                              "name": "",
+                              "description": "",
+                              "extents": [
+                                654,
+                                237,
+                                34,
+                                34
+                              ],
+                              "action": "click",
+                              "children": []
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "role": "row",
+                  "states": [
+                    "focusable",
+                    "sensitive",
+                    "showing",
+                    "visible"
+                  ],
+                  "name": "File row 5",
+                  "description": "",
+                  "extents": [
+                    180,
+                    290,
+                    521,
+                    44
+                  ],
+                  "action": "listitem.scroll-to",
+                  "children": [
+                    {
+                      "role": "grid cell",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ],
+                      "name": "Column",
+                      "description": "",
+                      "extents": [
+                        180,
+                        290,
+                        259,
+                        44
+                      ],
+                      "action": "listitem.scroll-to",
+                      "children": [
+                        {
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ],
+                          "name": "",
+                          "description": "",
+                          "extents": [
+                            180,
+                            290,
+                            259,
+                            44
+                          ],
+                          "action": "",
+                          "children": [
+                            {
+                              "role": "generic",
+                              "states": [
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ],
+                              "name": "",
+                              "description": "",
+                              "extents": [
+                                180,
+                                290,
+                                247,
+                                32
+                              ],
+                              "action": "",
+                              "children": [
+                                {
+                                  "role": "button",
+                                  "states": [
+                                    "sensitive",
+                                    "showing",
+                                    "visible"
+                                  ],
+                                  "name": "",
+                                  "description": "",
+                                  "extents": [
+                                    180,
+                                    290,
+                                    0,
+                                    32
+                                  ],
+                                  "action": "listitem.toggle-expand",
+                                  "children": []
+                                },
+                                {
+                                  "role": "generic",
+                                  "states": [
+                                    "sensitive",
+                                    "showing",
+                                    "visible"
+                                  ],
+                                  "name": "",
+                                  "description": "",
+                                  "extents": [
+                                    180,
+                                    290,
+                                    247,
+                                    32
+                                  ],
+                                  "action": "",
+                                  "children": [
+                                    {
+                                      "role": "generic",
+                                      "states": [
+                                        "sensitive",
+                                        "showing",
+                                        "visible"
+                                      ],
+                                      "name": "",
+                                      "description": "",
+                                      "extents": [
+                                        180,
+                                        290,
+                                        32,
+                                        32
+                                      ],
+                                      "action": "",
+                                      "children": [
+                                        {
+                                          "role": "generic",
+                                          "states": [
+                                            "sensitive",
+                                            "showing",
+                                            "visible"
+                                          ],
+                                          "name": "",
+                                          "description": "",
+                                          "extents": [
+                                            180,
+                                            290,
+                                            32,
+                                            32
+                                          ],
+                                          "action": "",
+                                          "children": []
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "role": "generic",
+                                      "states": [
+                                        "sensitive",
+                                        "showing",
+                                        "visible"
+                                      ],
+                                      "name": "",
+                                      "description": "",
+                                      "extents": [
+                                        218,
+                                        297,
+                                        209,
+                                        18
+                                      ],
+                                      "action": "",
+                                      "children": [
+                                        {
+                                          "role": "generic",
+                                          "states": [
+                                            "sensitive",
+                                            "showing",
+                                            "visible"
+                                          ],
+                                          "name": "",
+                                          "description": "",
+                                          "extents": [
+                                            218,
+                                            297,
+                                            209,
+                                            18
+                                          ],
+                                          "action": "",
+                                          "children": [
+                                            {
+                                              "role": "label",
+                                              "states": [
+                                                "sensitive",
+                                                "showing",
+                                                "visible"
+                                              ],
+                                              "name": "",
+                                              "description": "",
+                                              "extents": [
+                                                218,
+                                                297,
+                                                40,
+                                                18
+                                              ],
+                                              "action": "clipboard.copy",
+                                              "children": []
+                                            },
+                                            {
+                                              "role": "generic",
+                                              "states": [
+                                                "sensitive",
+                                                "showing",
+                                                "visible"
+                                              ],
+                                              "name": "",
+                                              "description": "",
+                                              "extents": [
+                                                264,
+                                                297,
+                                                0,
+                                                18
+                                              ],
+                                              "action": "",
+                                              "children": []
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "role": "grid cell",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ],
+                      "name": "Column",
+                      "description": "",
+                      "extents": [
+                        439,
+                        290,
+                        83,
+                        44
+                      ],
+                      "action": "listitem.scroll-to",
+                      "children": [
+                        {
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ],
+                          "name": "",
+                          "description": "",
+                          "extents": [
+                            439,
+                            290,
+                            82,
+                            44
+                          ],
+                          "action": "",
+                          "children": [
+                            {
+                              "role": "label",
+                              "states": [
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ],
+                              "name": "",
+                              "description": "",
+                              "extents": [
+                                439,
+                                297,
+                                70,
+                                18
+                              ],
+                              "action": "clipboard.copy",
+                              "children": []
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "role": "grid cell",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ],
+                      "name": "Column",
+                      "description": "",
+                      "extents": [
+                        522,
+                        290,
+                        132,
+                        44
+                      ],
+                      "action": "listitem.scroll-to",
+                      "children": [
+                        {
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ],
+                          "name": "",
+                          "description": "",
+                          "extents": [
+                            522,
+                            290,
+                            131,
+                            44
+                          ],
+                          "action": "",
+                          "children": [
+                            {
+                              "role": "label",
+                              "states": [
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ],
+                              "name": "",
+                              "description": "",
+                              "extents": [
+                                522,
+                                297,
+                                119,
+                                18
+                              ],
+                              "action": "clipboard.copy",
+                              "children": []
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "role": "grid cell",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ],
+                      "name": "Column",
+                      "description": "",
+                      "extents": [
+                        654,
+                        290,
+                        47,
+                        44
+                      ],
+                      "action": "listitem.scroll-to",
+                      "children": [
+                        {
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ],
+                          "name": "",
+                          "description": "",
+                          "extents": [
+                            654,
+                            290,
+                            46,
+                            44
+                          ],
+                          "action": "",
+                          "children": [
+                            {
+                              "role": "button",
+                              "states": [
+                                "focusable",
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ],
+                              "name": "",
+                              "description": "",
+                              "extents": [
+                                654,
+                                289,
+                                34,
+                                34
+                              ],
+                              "action": "click",
+                              "children": []
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "role": "row",
+                  "states": [
+                    "focusable",
+                    "sensitive",
+                    "showing",
+                    "visible"
+                  ],
+                  "name": "File row 6",
+                  "description": "",
+                  "extents": [
+                    180,
+                    342,
+                    521,
+                    44
+                  ],
+                  "action": "listitem.scroll-to",
+                  "children": [
+                    {
+                      "role": "grid cell",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ],
+                      "name": "Column",
+                      "description": "",
+                      "extents": [
+                        180,
+                        342,
+                        259,
+                        44
+                      ],
+                      "action": "listitem.scroll-to",
+                      "children": [
+                        {
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ],
+                          "name": "",
+                          "description": "",
+                          "extents": [
+                            180,
+                            342,
+                            259,
+                            44
+                          ],
+                          "action": "",
+                          "children": [
+                            {
+                              "role": "generic",
+                              "states": [
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ],
+                              "name": "",
+                              "description": "",
+                              "extents": [
+                                180,
+                                342,
+                                247,
+                                32
+                              ],
+                              "action": "",
+                              "children": [
+                                {
+                                  "role": "button",
+                                  "states": [
+                                    "sensitive",
+                                    "showing",
+                                    "visible"
+                                  ],
+                                  "name": "",
+                                  "description": "",
+                                  "extents": [
+                                    180,
+                                    342,
+                                    0,
+                                    32
+                                  ],
+                                  "action": "listitem.toggle-expand",
+                                  "children": []
+                                },
+                                {
+                                  "role": "generic",
+                                  "states": [
+                                    "sensitive",
+                                    "showing",
+                                    "visible"
+                                  ],
+                                  "name": "",
+                                  "description": "",
+                                  "extents": [
+                                    180,
+                                    342,
+                                    247,
+                                    32
+                                  ],
+                                  "action": "",
+                                  "children": [
+                                    {
+                                      "role": "generic",
+                                      "states": [
+                                        "sensitive",
+                                        "showing",
+                                        "visible"
+                                      ],
+                                      "name": "",
+                                      "description": "",
+                                      "extents": [
+                                        180,
+                                        342,
+                                        32,
+                                        32
+                                      ],
+                                      "action": "",
+                                      "children": [
+                                        {
+                                          "role": "generic",
+                                          "states": [
+                                            "sensitive",
+                                            "showing",
+                                            "visible"
+                                          ],
+                                          "name": "",
+                                          "description": "",
+                                          "extents": [
+                                            180,
+                                            342,
+                                            32,
+                                            32
+                                          ],
+                                          "action": "",
+                                          "children": []
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "role": "generic",
+                                      "states": [
+                                        "sensitive",
+                                        "showing",
+                                        "visible"
+                                      ],
+                                      "name": "",
+                                      "description": "",
+                                      "extents": [
+                                        218,
+                                        349,
+                                        209,
+                                        18
+                                      ],
+                                      "action": "",
+                                      "children": [
+                                        {
+                                          "role": "generic",
+                                          "states": [
+                                            "sensitive",
+                                            "showing",
+                                            "visible"
+                                          ],
+                                          "name": "",
+                                          "description": "",
+                                          "extents": [
+                                            218,
+                                            349,
+                                            209,
+                                            18
+                                          ],
+                                          "action": "",
+                                          "children": [
+                                            {
+                                              "role": "label",
+                                              "states": [
+                                                "sensitive",
+                                                "showing",
+                                                "visible"
+                                              ],
+                                              "name": "",
+                                              "description": "",
+                                              "extents": [
+                                                218,
+                                                349,
+                                                49,
+                                                18
+                                              ],
+                                              "action": "clipboard.copy",
+                                              "children": []
+                                            },
+                                            {
+                                              "role": "generic",
+                                              "states": [
+                                                "sensitive",
+                                                "showing",
+                                                "visible"
+                                              ],
+                                              "name": "",
+                                              "description": "",
+                                              "extents": [
+                                                273,
+                                                349,
+                                                0,
+                                                18
+                                              ],
+                                              "action": "",
+                                              "children": []
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "role": "grid cell",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ],
+                      "name": "Column",
+                      "description": "",
+                      "extents": [
+                        439,
+                        342,
+                        83,
+                        44
+                      ],
+                      "action": "listitem.scroll-to",
+                      "children": [
+                        {
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ],
+                          "name": "",
+                          "description": "",
+                          "extents": [
+                            439,
+                            342,
+                            82,
+                            44
+                          ],
+                          "action": "",
+                          "children": [
+                            {
+                              "role": "label",
+                              "states": [
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ],
+                              "name": "",
+                              "description": "",
+                              "extents": [
+                                439,
+                                349,
+                                70,
+                                18
+                              ],
+                              "action": "clipboard.copy",
+                              "children": []
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "role": "grid cell",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ],
+                      "name": "Column",
+                      "description": "",
+                      "extents": [
+                        522,
+                        342,
+                        132,
+                        44
+                      ],
+                      "action": "listitem.scroll-to",
+                      "children": [
+                        {
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ],
+                          "name": "",
+                          "description": "",
+                          "extents": [
+                            522,
+                            342,
+                            131,
+                            44
+                          ],
+                          "action": "",
+                          "children": [
+                            {
+                              "role": "label",
+                              "states": [
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ],
+                              "name": "",
+                              "description": "",
+                              "extents": [
+                                522,
+                                349,
+                                119,
+                                18
+                              ],
+                              "action": "clipboard.copy",
+                              "children": []
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "role": "grid cell",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ],
+                      "name": "Column",
+                      "description": "",
+                      "extents": [
+                        654,
+                        342,
+                        47,
+                        44
+                      ],
+                      "action": "listitem.scroll-to",
+                      "children": [
+                        {
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ],
+                          "name": "",
+                          "description": "",
+                          "extents": [
+                            654,
+                            342,
+                            46,
+                            44
+                          ],
+                          "action": "",
+                          "children": [
+                            {
+                              "role": "button",
+                              "states": [
+                                "focusable",
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ],
+                              "name": "",
+                              "description": "",
+                              "extents": [
+                                654,
+                                341,
+                                34,
+                                34
+                              ],
+                              "action": "click",
+                              "children": []
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "role": "row",
+                  "states": [
+                    "focusable",
+                    "sensitive",
+                    "showing",
+                    "visible"
+                  ],
+                  "name": "File row 7",
+                  "description": "",
+                  "extents": [
+                    180,
+                    394,
+                    521,
+                    44
+                  ],
+                  "action": "listitem.scroll-to",
+                  "children": [
+                    {
+                      "role": "grid cell",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ],
+                      "name": "Column",
+                      "description": "",
+                      "extents": [
+                        180,
+                        394,
+                        259,
+                        44
+                      ],
+                      "action": "listitem.scroll-to",
+                      "children": [
+                        {
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ],
+                          "name": "",
+                          "description": "",
+                          "extents": [
+                            180,
+                            394,
+                            259,
+                            44
+                          ],
+                          "action": "",
+                          "children": [
+                            {
+                              "role": "generic",
+                              "states": [
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ],
+                              "name": "",
+                              "description": "",
+                              "extents": [
+                                180,
+                                394,
+                                247,
+                                32
+                              ],
+                              "action": "",
+                              "children": [
+                                {
+                                  "role": "button",
+                                  "states": [
+                                    "sensitive",
+                                    "showing",
+                                    "visible"
+                                  ],
+                                  "name": "",
+                                  "description": "",
+                                  "extents": [
+                                    180,
+                                    394,
+                                    0,
+                                    32
+                                  ],
+                                  "action": "listitem.toggle-expand",
+                                  "children": []
+                                },
+                                {
+                                  "role": "generic",
+                                  "states": [
+                                    "sensitive",
+                                    "showing",
+                                    "visible"
+                                  ],
+                                  "name": "",
+                                  "description": "",
+                                  "extents": [
+                                    180,
+                                    394,
+                                    247,
+                                    32
+                                  ],
+                                  "action": "",
+                                  "children": [
+                                    {
+                                      "role": "generic",
+                                      "states": [
+                                        "sensitive",
+                                        "showing",
+                                        "visible"
+                                      ],
+                                      "name": "",
+                                      "description": "",
+                                      "extents": [
+                                        180,
+                                        394,
+                                        32,
+                                        32
+                                      ],
+                                      "action": "",
+                                      "children": [
+                                        {
+                                          "role": "generic",
+                                          "states": [
+                                            "sensitive",
+                                            "showing",
+                                            "visible"
+                                          ],
+                                          "name": "",
+                                          "description": "",
+                                          "extents": [
+                                            180,
+                                            394,
+                                            32,
+                                            32
+                                          ],
+                                          "action": "",
+                                          "children": []
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "role": "generic",
+                                      "states": [
+                                        "sensitive",
+                                        "showing",
+                                        "visible"
+                                      ],
+                                      "name": "",
+                                      "description": "",
+                                      "extents": [
+                                        218,
+                                        401,
+                                        209,
+                                        18
+                                      ],
+                                      "action": "",
+                                      "children": [
+                                        {
+                                          "role": "generic",
+                                          "states": [
+                                            "sensitive",
+                                            "showing",
+                                            "visible"
+                                          ],
+                                          "name": "",
+                                          "description": "",
+                                          "extents": [
+                                            218,
+                                            401,
+                                            209,
+                                            18
+                                          ],
+                                          "action": "",
+                                          "children": [
+                                            {
+                                              "role": "label",
+                                              "states": [
+                                                "sensitive",
+                                                "showing",
+                                                "visible"
+                                              ],
+                                              "name": "",
+                                              "description": "",
+                                              "extents": [
+                                                218,
+                                                401,
+                                                42,
+                                                18
+                                              ],
+                                              "action": "clipboard.copy",
+                                              "children": []
+                                            },
+                                            {
+                                              "role": "generic",
+                                              "states": [
+                                                "sensitive",
+                                                "showing",
+                                                "visible"
+                                              ],
+                                              "name": "",
+                                              "description": "",
+                                              "extents": [
+                                                266,
+                                                401,
+                                                0,
+                                                18
+                                              ],
+                                              "action": "",
+                                              "children": []
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "role": "grid cell",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ],
+                      "name": "Column",
+                      "description": "",
+                      "extents": [
+                        439,
+                        394,
+                        83,
+                        44
+                      ],
+                      "action": "listitem.scroll-to",
+                      "children": [
+                        {
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ],
+                          "name": "",
+                          "description": "",
+                          "extents": [
+                            439,
+                            394,
+                            82,
+                            44
+                          ],
+                          "action": "",
+                          "children": [
+                            {
+                              "role": "label",
+                              "states": [
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ],
+                              "name": "",
+                              "description": "",
+                              "extents": [
+                                439,
+                                401,
+                                70,
+                                18
+                              ],
+                              "action": "clipboard.copy",
+                              "children": []
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "role": "grid cell",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ],
+                      "name": "Column",
+                      "description": "",
+                      "extents": [
+                        522,
+                        394,
+                        132,
+                        44
+                      ],
+                      "action": "listitem.scroll-to",
+                      "children": [
+                        {
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ],
+                          "name": "",
+                          "description": "",
+                          "extents": [
+                            522,
+                            394,
+                            131,
+                            44
+                          ],
+                          "action": "",
+                          "children": [
+                            {
+                              "role": "label",
+                              "states": [
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ],
+                              "name": "",
+                              "description": "",
+                              "extents": [
+                                522,
+                                401,
+                                119,
+                                18
+                              ],
+                              "action": "clipboard.copy",
+                              "children": []
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "role": "grid cell",
+                      "states": [
+                        "sensitive",
+                        "showing",
+                        "visible"
+                      ],
+                      "name": "Column",
+                      "description": "",
+                      "extents": [
+                        654,
+                        394,
+                        47,
+                        44
+                      ],
+                      "action": "listitem.scroll-to",
+                      "children": [
+                        {
+                          "role": "generic",
+                          "states": [
+                            "sensitive",
+                            "showing",
+                            "visible"
+                          ],
+                          "name": "",
+                          "description": "",
+                          "extents": [
+                            654,
+                            394,
+                            46,
+                            44
+                          ],
+                          "action": "",
+                          "children": [
+                            {
+                              "role": "button",
+                              "states": [
+                                "focusable",
+                                "sensitive",
+                                "showing",
+                                "visible"
+                              ],
+                              "name": "",
+                              "description": "",
+                              "extents": [
+                                654,
+                                393,
+                                34,
+                                34
+                              ],
+                              "action": "click",
+                              "children": []
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
