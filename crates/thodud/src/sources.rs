@@ -270,16 +270,16 @@ impl Atspi {
         let mut targets = Vec::new();
         let mut fallback = false;
         let mut unavailable = Vec::new();
-        for (window, snapshot) in windows.iter().zip(snapshots.iter()) {
+        let frame_indices = tree::match_frame_indices(&snapshots);
+        for ((window, snapshot), frame_index) in
+            windows.iter().zip(snapshots.iter()).zip(frame_indices)
+        {
             if !snapshot.apps.iter().any(|app| app.pid == window.pid) {
                 unavailable.push(unregistered_status(window));
                 fallback = true;
                 continue;
             }
-            let focused = windows
-                .first()
-                .is_some_and(|first| first.address == window.address);
-            let frame = tree::match_frame_for_window(snapshot, focused);
+            let frame = frame_index.map(|(app, frame)| &snapshot.apps[app].frames[frame]);
             let found = frame
                 .map(|frame| tree::targets(frame, window, monitor))
                 .unwrap_or_default();

@@ -80,6 +80,7 @@ pub fn window_from(v: &Value) -> Option<Window> {
             .get("focusHistoryID")
             .and_then(Value::as_i64)
             .unwrap_or(i64::MAX),
+        focused: false,
     })
 }
 

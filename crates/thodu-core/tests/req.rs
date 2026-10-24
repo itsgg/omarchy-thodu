@@ -213,11 +213,96 @@ fn req_src_07_same_process_windows_use_their_own_frame_or_skip_ambiguity() {
 
     let mut ambiguous = snapshot.clone();
     ambiguous.apps[0].frames[0].extents = Some([0, 0, 300, 200]);
+    ambiguous.apps[0].frames.push(frame(
+        "other background window",
+        &["showing", "visible"],
+        300,
+        200,
+    ));
     assert_eq!(tree::match_frame_for_window(&ambiguous, false), None);
 
     let mut mismatched = snapshot.clone();
     mismatched.apps[0].frames.truncate(1);
     assert_eq!(tree::match_frame_for_window(&mismatched, false), None);
+}
+
+// REQ-SRC-01: an explicitly selected background window cannot use its
+// process's ACTIVE sibling frame when its own extents do not match.
+#[test]
+fn req_src_01_nonfocused_named_window_does_not_use_active_sibling_frame() {
+    let frame = |name: &str, states: &[&str], width: i32, height: i32| Node {
+        role: "frame".into(),
+        name: name.into(),
+        states: states.iter().map(|state| (*state).into()).collect(),
+        extents: Some([0, 0, width, height]),
+        ..Node::default()
+    };
+    let snapshot = Snapshot {
+        window: Window {
+            address: "0x2".into(),
+            pid: 44,
+            size: (300, 200),
+            focused: false,
+            ..Window::default()
+        },
+        monitor: monitor(),
+        apps: vec![App {
+            name: "Chromium".into(),
+            pid: 44,
+            frames: vec![
+                frame(
+                    "focused sibling",
+                    &["showing", "visible", "active"],
+                    300,
+                    200,
+                ),
+                frame("different extents", &["showing", "visible"], 301, 200),
+            ],
+        }],
+    };
+
+    assert_eq!(tree::match_frame_indices(&[snapshot]), [None]);
+}
+
+// REQ-SRC-07: even a unique size match cannot assign one same-process frame
+// to two background windows.
+#[test]
+fn req_src_07_same_process_frame_claimed_by_two_windows_is_omitted() {
+    let frame = |name: &str, states: &[&str], width: i32, height: i32| Node {
+        role: "frame".into(),
+        name: name.into(),
+        states: states.iter().map(|state| (*state).into()).collect(),
+        extents: Some([0, 0, width, height]),
+        ..Node::default()
+    };
+    let apps = vec![App {
+        name: "Chromium".into(),
+        pid: 44,
+        frames: vec![
+            frame("focused", &["showing", "visible", "active"], 300, 200),
+            frame("one background frame", &["showing", "visible"], 300, 200),
+            frame("other size", &["showing", "visible"], 301, 200),
+        ],
+    }];
+    let snapshot = |address: &str, focused: bool| Snapshot {
+        window: Window {
+            address: address.into(),
+            pid: 44,
+            size: (300, 200),
+            focused,
+            ..Window::default()
+        },
+        monitor: monitor(),
+        apps: apps.clone(),
+    };
+
+    let matches = tree::match_frame_indices(&[
+        snapshot("0x1", true),
+        snapshot("0x2", false),
+        snapshot("0x3", false),
+    ]);
+
+    assert_eq!(matches, [Some((0, 0)), None, None]);
 }
 
 // REQ-SRC-07: IPC calls without a scope request every visible window.

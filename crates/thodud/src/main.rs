@@ -179,13 +179,26 @@ impl Daemon {
             ));
         }
         let active = self.window(address)?;
+        let focused_address = if address.is_some() {
+            hypr::active_window()
+                .map_err(internal)?
+                .map(|window| window.address)
+        } else {
+            Some(active.address.clone())
+        };
         let monitor = hypr::monitor_of(&active).map_err(internal)?;
         let visible = if address.is_some() || scope == "focused" {
             Vec::new()
         } else {
             hypr::visible_windows(active.monitor).map_err(internal)?
         };
-        let windows = scoped_windows(&active, visible, address.is_some(), scope);
+        let windows = scoped_windows(
+            &active,
+            visible,
+            address.is_some(),
+            scope,
+            focused_address.as_deref(),
+        );
         Ok((active, monitor, windows))
     }
 
@@ -785,7 +798,13 @@ fn visible_target_owner_changed(
         && current_owner != Some(target.window.as_str())
 }
 
-fn scoped_windows(active: &Window, visible: Vec<Window>, named: bool, scope: &str) -> Vec<Window> {
+fn scoped_windows(
+    active: &Window,
+    visible: Vec<Window>,
+    named: bool,
+    scope: &str,
+    focused_address: Option<&str>,
+) -> Vec<Window> {
     let mut windows = if named || scope == "focused" {
         vec![active.clone()]
     } else {
@@ -799,6 +818,9 @@ fn scoped_windows(active: &Window, visible: Vec<Window>, named: bool, scope: &st
         windows.insert(0, focused);
     } else {
         windows.insert(0, active.clone());
+    }
+    for window in &mut windows {
+        window.focused = focused_address == Some(window.address.as_str());
     }
     windows
 }
@@ -1175,15 +1197,33 @@ mod tests {
         other.address = "0x2".into();
         let visible = vec![other.clone(), active.clone()];
 
-        let all = scoped_windows(&active, visible.clone(), false, "visible");
+        let all = scoped_windows(
+            &active,
+            visible.clone(),
+            false,
+            "visible",
+            Some(&active.address),
+        );
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].address, active.address);
+        assert!(all[0].focused);
         assert_eq!(all[1].address, other.address);
+        assert!(!all[1].focused);
         assert_eq!(
-            scoped_windows(&active, visible.clone(), false, "focused").len(),
+            scoped_windows(
+                &active,
+                visible.clone(),
+                false,
+                "focused",
+                Some(&active.address)
+            )
+            .len(),
             1
         );
-        assert_eq!(scoped_windows(&active, visible, true, "visible").len(), 1);
+        let named = scoped_windows(&other, visible, true, "visible", Some(&active.address));
+        assert_eq!(named.len(), 1);
+        assert_eq!(named[0].address, other.address);
+        assert!(!named[0].focused);
     }
 
     // REQ-ACT-02: the focus handoff reply waits until the first click has

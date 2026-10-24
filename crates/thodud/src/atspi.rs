@@ -608,20 +608,18 @@ pub fn snapshot_many(
         frame_refs.push(refs);
         cached_apps.push(false);
     }
-    let mut selected = Vec::new();
-    for (i, window) in windows.iter().enumerate() {
-        let shallow = Snapshot {
+    let shallow: Vec<_> = windows
+        .iter()
+        .map(|window| Snapshot {
             window: window.clone(),
             monitor: monitor.clone(),
             apps: apps.clone(),
-        };
-        let focused = i == 0;
-        if let Some(frame) = tree::match_frame_index(&shallow, focused)
-            && !selected.contains(&frame)
-        {
-            selected.push(frame);
-        }
-    }
+        })
+        .collect();
+    let selected: Vec<_> = tree::match_frame_indices(&shallow)
+        .into_iter()
+        .flatten()
+        .collect();
     for (a, f) in selected {
         if cached_apps[a] {
             continue;
@@ -956,6 +954,7 @@ mod tests {
         let mut first = window();
         first.pid = 11;
         first.size = (100, 100);
+        first.focused = true;
         let second = Window {
             address: "0x2".into(),
             class: "other-app".into(),
@@ -987,7 +986,8 @@ mod tests {
             .into_iter()
             .enumerate()
         {
-            let frame = tree::match_frame_for_window(&snapshots[i], i == 0).expect("own frame");
+            let frame =
+                tree::match_frame_for_window(&snapshots[i], window.focused).expect("own frame");
             let targets = tree::targets(frame, window, &monitor);
             assert_eq!(targets.len(), 1);
             assert_eq!(targets[0].text, expected);

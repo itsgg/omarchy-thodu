@@ -8,7 +8,7 @@ Goal: Collect AT-SPI and bounded image targets across every window visible on th
 Acceptance:
 - run: `tests/acceptance/reqs.sh REQ-SRC-01 REQ-SRC-06 REQ-SRC-07`
 - A Hyprland client fixture includes mapped windows on the active workspace, pinned windows, and windows on a shown special workspace, while excluding inactive workspaces, hidden or unmapped clients, and other monitors.
-- Frames from each visible process are matched to their own window; an ambiguous same-process background frame is omitted rather than assigned to the focused sibling.
+- Frames from each visible process are matched to their own window; non-focused windows ignore ACTIVE siblings, and an ambiguous or multiply claimed frame is omitted.
 - Synthetic monitor-image detections become targets for the topmost visible window at each click point and are not duplicated by accessible targets.
 - A floating window owns an overlap with a tiled window, even when the tiled window has a more recent focus history; moving a window over a label before activation refreshes the session instead of clicking the new occluder.
 - A large scrollable or panel-like content region with no accessible rows requests the image fallback.

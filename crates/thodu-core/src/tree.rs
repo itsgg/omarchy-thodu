@@ -6,6 +6,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use std::collections::HashMap;
+
 use crate::model::{ActionKind, Monitor, Rect, Role, Source, Target, Window};
 
 /// One accessible element, with its extents relative to its window.
@@ -86,7 +88,7 @@ pub fn match_frame_index(snapshot: &Snapshot, focused: bool) -> Option<(usize, u
                 .enumerate()
                 .map(move |(f, frame)| (a, f, frame))
         })
-        .filter(|(_, _, frame)| frame.shown())
+        .filter(|(_, _, frame)| frame.shown() && (focused || !frame.has("active")))
         .collect();
     if focused && let Some((app, frame, _)) = frames.iter().find(|(_, _, node)| node.has("active"))
     {
@@ -104,6 +106,24 @@ pub fn match_frame_index(snapshot: &Snapshot, focused: bool) -> Option<(usize, u
     } else {
         None
     }
+}
+
+/// Match frames to several windows without assigning one AT-SPI frame to
+/// multiple Hyprland windows. A candidate claimed by more than one window is
+/// ambiguous and omitted for all of them.
+pub fn match_frame_indices(snapshots: &[Snapshot]) -> Vec<Option<(usize, usize)>> {
+    let candidates: Vec<_> = snapshots
+        .iter()
+        .map(|snapshot| match_frame_index(snapshot, snapshot.window.focused))
+        .collect();
+    let mut claims = HashMap::new();
+    for candidate in candidates.iter().flatten() {
+        *claims.entry(*candidate).or_insert(0usize) += 1;
+    }
+    candidates
+        .into_iter()
+        .map(|candidate| candidate.filter(|frame| claims.get(frame) == Some(&1)))
+        .collect()
 }
 
 /// Whether AT-SPI visibly under-reports a list, so image detection can fill it.

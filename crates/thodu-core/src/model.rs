@@ -164,6 +164,10 @@ pub struct Window {
     pub fullscreen: i64,
     #[serde(skip)]
     pub focus_history_id: i64,
+    /// Whether Hyprland's active-window query selected this window for the
+    /// current collection request.
+    #[serde(skip)]
+    pub focused: bool,
 }
 
 impl Window {

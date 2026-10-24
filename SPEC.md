@@ -91,9 +91,10 @@ Acceptance:
 ### Sources
 
 ### REQ-SRC-01: Match by process, never by name
-When collecting from the accessibility tree, the system shall inspect the focused window's process and match its ACTIVE frame for that focused window. For other visible windows, it shall match a unique shown frame whose extents match that window's size; it shall never match by application name and shall omit a same-process window when its frame is ambiguous.
+When collecting from the accessibility tree, the system shall inspect the focused window's process and match its shown ACTIVE frame for that focused window. For a non-focused window, including an explicitly selected window that is not focused, it shall ignore ACTIVE frames and match only a unique shown frame from that process whose extents match that window's size. A collection shall assign an AT-SPI frame to at most one Hyprland window; if more than one window claims the same frame, it shall omit those windows. It shall never match by application name.
 Acceptance:
 - cases: `spec/cases/atspi/match.jsonl`, pairs of a Hyprland window and a registry snapshot with the expected frame, including two frames from one Chromium process and an app whose name differs from its class.
+- scenario: a non-focused window cannot use an ACTIVE sibling frame, even when its extents happen to match; a frame claimed by multiple windows is omitted for all claimants.
 
 ### REQ-SRC-02: The toolkits of this milestone
 The system shall produce targets from GTK3, GTK4, Qt Widgets and Electron windows and from Chromium's own controls, converting window-relative extents (GTK4) and screen extents alike to logical coordinates.
@@ -297,6 +298,7 @@ Unit tests and properties cover labels, search, the grid, coordinates and the st
 - 2026-10-22: change 0010, uppercase final hint characters activate once, lowercase completion focuses, and selected targets and feedback are visually distinct.
 - 2026-10-23: change 0011, incomplete visible accessibility list rows fall back to bounded image targets.
 - 2026-10-23: change 0012, hints and target queries cover every visible window on the focused window's monitor, with per-window frame matching and image fallback.
+- 2026-10-24: change 0013, ACTIVE frames belong only to the focused window and a frame cannot be reused across windows.
 
 ### Retired
 
