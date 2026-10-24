@@ -1,7 +1,7 @@
 # 0019: Deliver scroll through the compositor pointer
 
-Status: proposed
-Why: GG reported that H/J/K/L left the selected application unchanged even though the daemon resumed the scroll session without an input error. That test did not identify whether the uinput wheel event reached the compositor or the application. The current implementation sends pointer motion through Hyprland's virtual-pointer protocol and wheel events through a separate uinput device, leaving two event paths to diagnose. Hyprland implements `zwlr_virtual_pointer_v1.axis_discrete` and forwards it through the pointer seat; Thodu already depends on that protocol for pointer motion and clicks. Use the existing protocol for motion and wheel axes in order, retaining the post-motion stale-target check.
+Status: rejected
+Why: GG reported that H/J/K/L left the selected application unchanged, but that result did not identify a fault in the uinput wheel path. Hyprland's focus grab also captures pointer focus and prevents the scroll hole from reaching the app. Keep the existing REQ-ACT-04 uinput contract and fix the focus policy before considering a transport change.
 
 ## Added
 

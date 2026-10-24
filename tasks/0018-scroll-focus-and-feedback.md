@@ -1,6 +1,6 @@
 # 0018: Keep scroll focus and distinguish the active area
 
-Status: review
+Status: open
 Depends on: none
 Spec: REQ-SESSION-07, REQ-ACT-04, REQ-ACT-06
 Goal: Keep scroll keys inside Thodu, deliver wheel input to the selected application, and make the selected area easy to distinguish from a click target.
@@ -16,3 +16,4 @@ Acceptance:
 - 2026-10-24: created after live feedback reported scroll keys reaching the underlying terminal; acceptance covers retained keyboard capture and scroll-area feedback.
 - 2026-10-24: requested a render after the scroll input mask changes, so the frame-swapped handshake reaches thodud before wheel input. Kept the scroll focus outline on the theme accent. Rebuilt and installed both executables and the plugin. The acceptance suite passed; live Hyprland held H/J/K/L with an empty target input recorder, kept the session open, and Escape closed it.
 - 2026-10-24: GG reported that J/K did not move the selected app. Research found Hyprland handles discrete scroll on the existing virtual-pointer protocol, so scroll now sends motion and a discrete axis through that ordered path. Added an offline direction mapping test. The prior live test did not verify application scrolling; no new live input test was run while GG was working.
+- 2026-10-24: restored the spec-required uinput wheel path and made the focus grab inactive while pointer input passes through to a scroll area; layer-shell retains exclusive keyboard focus. Added a QML policy regression. The live app-scroll scenario remains unverified while GG is using the desktop, so this task stays open.

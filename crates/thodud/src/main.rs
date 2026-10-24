@@ -10,6 +10,7 @@ mod listeners;
 mod overlay;
 mod pointer;
 mod sources;
+mod wheel;
 
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
@@ -133,6 +134,8 @@ struct Daemon {
     listeners: Mutex<listeners::Listeners<UnixStream>>,
     /// The uinput keyboard for Control-clicks, made on first use.
     keyboard: Mutex<Option<keyboard::Keyboard>>,
+    /// The uinput wheel for scroll mode, made on first use.
+    wheel: Mutex<Option<wheel::Wheel>>,
 }
 
 /// The settings, read at each session so an edit takes effect at once; a
@@ -927,7 +930,7 @@ impl Daemon {
     }
 
     /// Send one wheel action after the overlay has made its pointer region
-    /// transparent. Tests inject the compositor action through `perform`.
+    /// transparent. Tests inject the wheel input through `perform`.
     fn scroll_with<F>(&self, id: &str, action: ScrollAction, perform: F) -> Res<Reply>
     where
         F: FnOnce(
@@ -1064,21 +1067,26 @@ impl Daemon {
         }
 
         let point = target.bounds.center();
-        let mut stale = false;
-        let result = pointer::scroll_to(monitor, point, action, || {
+        pointer::move_to(monitor, point).map_err(ScrollFailure::Input)?;
+        let result = (|| {
+            let mut wheel = self
+                .wheel
+                .lock()
+                .map_err(|_| ScrollFailure::Input("wheel lock failed".into()))?;
+            if wheel.is_none() {
+                *wheel = Some(wheel::Wheel::open().map_err(ScrollFailure::Input)?);
+            }
             if !target.window.is_empty()
                 && window.is_some_and(|window| scroll_target_is_stale(target, window))
             {
-                stale = true;
-                Err("scroll target moved, closed or became covered".into())
-            } else {
-                Ok(())
+                return Err(ScrollFailure::Stale);
             }
-        });
-        if stale {
-            return Err(ScrollFailure::Stale);
-        }
-        let result = result.map_err(ScrollFailure::Input);
+            wheel
+                .as_mut()
+                .ok_or_else(|| ScrollFailure::Input("no wheel device".into()))?
+                .emit(action)
+                .map_err(ScrollFailure::Input)
+        })();
         if result.is_ok() {
             thread::sleep(Duration::from_millis(30));
         }
@@ -1269,6 +1277,7 @@ fn status_persistent(status: &str, collecting: bool, no_targets: bool) -> bool {
         "scroll target moved",
         "scroll cancelled",
         "needs /dev/uinput",
+        "wheel lock failed",
         "using the defaults",
     ]
     .iter()
@@ -1651,6 +1660,7 @@ fn main() {
         sources: vec![atspi, image, shell],
         listeners: Mutex::new(listeners::Listeners::new()),
         keyboard: Mutex::new(None),
+        wheel: Mutex::new(None),
     });
     if let Err(e) = listener.set_nonblocking(true) {
         eprintln!("ERROR cannot make the service listener nonblocking: {e}");
@@ -1719,6 +1729,7 @@ mod tests {
             sources: Vec::new(),
             listeners: Mutex::new(crate::listeners::Listeners::new()),
             keyboard: Mutex::new(None),
+            wheel: Mutex::new(None),
         })
     }
 

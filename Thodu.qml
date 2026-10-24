@@ -29,6 +29,18 @@ Item {
     // Avoid a visibility binding loop through PanelWindow.screen.
     readonly property var sessionScreen: root.screenNamed(view.monitorName)
 
+    FocusPolicy {
+        id: focusPolicy
+        opened: root.opened
+        testing: root.test
+        panelVisible: panel.visible
+        pointerPassThrough: view.scrollPassThrough
+        lingering: view.lingering
+        focusReleasePending: root.focusReleasePending
+        keyboardFocusNone: WlrKeyboardFocus.None
+        keyboardFocusMode: root.keyboardFocusMode
+    }
+
     Component.onCompleted: {
         listener.start(root.socketPath);
         client.connectTo(root.socketPath);
@@ -139,12 +151,12 @@ Item {
         }
     }
 
-    // Hyprland may move keyboard focus to the window under a passed-through
-    // pointer. Keep keyboard input with the overlay for the whole session.
+    // The Hyprland focus grab captures pointer and keyboard. Release it while
+    // the mask passes pointer input to the app; layer-shell keeps keyboard focus.
     HyprlandFocusGrab {
         id: keyboardGrab
         windows: [panel]
-        active: root.opened && !root.test && panel.visible
+        active: focusPolicy.grabActive
     }
 
     PanelWindow {
@@ -164,7 +176,7 @@ Item {
         exclusionMode: ExclusionMode.Ignore
         WlrLayershell.namespace: "thodu"
         WlrLayershell.layer: WlrLayer.Overlay
-        WlrLayershell.keyboardFocus: root.opened && !root.test ? root.keyboardFocusMode : WlrKeyboardFocus.None
+        WlrLayershell.keyboardFocus: focusPolicy.layerKeyboardFocus
 
         Region {
             id: passThrough

@@ -88,6 +88,13 @@ Item {
         onFinished: (why, acting) => top.ended = { why: why, acting: acting }
     }
 
+    FocusPolicy {
+        id: focusPolicy
+        opened: true
+        panelVisible: true
+        pointerPassThrough: view.scrollPassThrough
+    }
+
     SignalSpy {
         id: scrollFrameSpy
         target: view
@@ -108,6 +115,8 @@ Item {
             top.fallbackReply = null;
             top.sawScrollPassThrough = false;
             top.scrollReplyStatus = "";
+            focusPolicy.testing = false;
+            focusPolicy.keyboardFocusMode = 23;
             view.statusTimeoutMs = 2000;
             view.scrollRepeatMs = 80;
             top.shownView = { state: "showing", visible: ["a0", "a1"], focused: null, search: "", label_prefix: "", collecting: false };
@@ -578,6 +587,17 @@ Item {
             verify(view.scrollPassThrough, "the scroll target receives pointer input");
             compare(scrollFrameSpy.count, 1,
                     "scroll pass-through requests a frame before sending scroll-ready");
+        }
+
+        function test_req_act_06_pointer_grab_yields_to_scroll_surface() {
+            view.scrollPassThrough = false;
+            verify(focusPolicy.grabActive, "normal overlay input retains its focus grab");
+            view.scrollPassThrough = true;
+            verify(!focusPolicy.grabActive, "the pointer grab is released over the app scroll target");
+            compare(focusPolicy.layerKeyboardFocus, focusPolicy.keyboardFocusMode,
+                    "layer-shell keeps keyboard focus while pointer input passes through");
+            view.scrollPassThrough = false;
+            verify(focusPolicy.grabActive, "the focus grab returns when pass-through ends");
         }
 
         function test_req_session_07_scroll_outline_has_a_distinct_accent() {
