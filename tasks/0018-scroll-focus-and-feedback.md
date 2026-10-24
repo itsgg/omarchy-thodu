@@ -1,6 +1,6 @@
 # 0018: Keep scroll focus and distinguish the active area
 
-Status: open
+Status: review
 Depends on: none
 Spec: REQ-SESSION-07, REQ-ACT-04, REQ-ACT-06
 Goal: Keep scroll keys inside Thodu, deliver wheel input to the selected application, and make the selected area easy to distinguish from a click target.
@@ -17,3 +17,4 @@ Acceptance:
 - 2026-10-24: requested a render after the scroll input mask changes, so the frame-swapped handshake reaches thodud before wheel input. Kept the scroll focus outline on the theme accent. Rebuilt and installed both executables and the plugin. The acceptance suite passed; live Hyprland held H/J/K/L with an empty target input recorder, kept the session open, and Escape closed it.
 - 2026-10-24: GG reported that J/K did not move the selected app. Research found Hyprland handles discrete scroll on the existing virtual-pointer protocol, so scroll now sends motion and a discrete axis through that ordered path. Added an offline direction mapping test. The prior live test did not verify application scrolling; no new live input test was run while GG was working.
 - 2026-10-24: restored the spec-required uinput wheel path and made the focus grab inactive while pointer input passes through to a scroll area; layer-shell retains exclusive keyboard focus. Added a QML policy regression. The live app-scroll scenario remains unverified while GG is using the desktop, so this task stays open.
+- 2026-10-24: Added a scoped Hyprland pointer-focus override around wheel input. It records and restores the owning window's prior `stay_focused` value, including after a daemon restart, and preserves a value already set by a window rule. The full gate passed earlier; fresh acceptance passed. Installed this branch and restored the Ctrl hints, grid, and scroll bindings. Live Chromium test: labels 1 and 2 selected different visible windows; held J scrolled only the selected window and neither page received keypresses. Live Qt test: held J moved a QScrollArea from 0 to 240, held K returned it to 0, the app received no keys, and Escape removed the overlay.

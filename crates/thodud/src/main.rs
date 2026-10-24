@@ -3,6 +3,7 @@
 //! $XDG_RUNTIME_DIR/thodu.sock.
 
 mod atspi;
+mod focus;
 mod hypr;
 mod image;
 mod keyboard;
@@ -67,6 +68,12 @@ type CollectionScope = (Option<Window>, Monitor, Vec<Window>, Vec<Window>);
 enum ScrollFailure {
     Stale,
     Input(String),
+}
+
+impl From<String> for ScrollFailure {
+    fn from(message: String) -> Self {
+        ScrollFailure::Input(message)
+    }
 }
 
 struct Entry {
@@ -1067,6 +1074,32 @@ impl Daemon {
         }
 
         let point = target.bounds.center();
+        if target.window.is_empty() {
+            return self.send_wheel(target, window, monitor, point, action);
+        }
+        // The exclusive overlay keeps the keyboard; Hyprland gives the
+        // pointer to the owning window only while it is forced (focus.rs).
+        focus::with_forced_pointer_focus(
+            &focus::record_path(),
+            &target.window,
+            |address| focus::get_stay_focused(address, hypr::request),
+            |address, on| focus::set_stay_focused(address, on, hypr::request),
+            || self.send_wheel(target, window, monitor, point, action),
+        )
+    }
+
+    /// Move the pointer to `point` so Hyprland recomputes its focus, then
+    /// send the wheel there.
+    fn send_wheel(
+        &self,
+        target: &Target,
+        window: Option<&Window>,
+        monitor: &Monitor,
+        point: (i32, i32),
+        action: ScrollAction,
+    ) -> Result<(), ScrollFailure> {
+        // Hyprland skips the focus check when the pointer has not moved.
+        pointer::move_to(monitor, (point.0 + 1, point.1)).map_err(ScrollFailure::Input)?;
         pointer::move_to(monitor, point).map_err(ScrollFailure::Input)?;
         let result = (|| {
             let mut wheel = self
@@ -1626,6 +1659,9 @@ fn main() {
             return;
         }
     }
+    focus::clear_leftover(&focus::record_path(), |address, on| {
+        focus::set_stay_focused(address, on, hypr::request)
+    });
     let _ = std::fs::remove_file(&socket);
     let listener = match UnixListener::bind(&socket) {
         Ok(l) => l,
