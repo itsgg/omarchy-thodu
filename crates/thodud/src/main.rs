@@ -64,6 +64,7 @@ struct Entry {
     window: Option<WindowScope>,
     monitor: Monitor,
     status: String,
+    collecting: bool,
     test: bool,
     hidden: bool,
     created: Instant,
@@ -209,6 +210,15 @@ impl Daemon {
         Ok((got.targets, got.status.join("; ")))
     }
 
+    fn collect_primary(
+        &self,
+        windows: &[Window],
+        monitor: &Monitor,
+    ) -> (Vec<Target>, String, bool) {
+        let got = sources::collect_primary_visible(&self.sources, windows, monitor);
+        (got.targets, got.status.join("; "), got.fallback_requested)
+    }
+
     /// Every frame of a window's process, for record-tree.
     fn record(&self, window: Option<String>) -> Res<Reply> {
         let window = self.window(window.as_deref())?;
@@ -229,7 +239,7 @@ impl Daemon {
     }
 
     fn start(
-        &self,
+        self: &Arc<Self>,
         window: Option<String>,
         scope: &str,
         mode: &str,
@@ -251,19 +261,30 @@ impl Daemon {
             (Some(active), monitor, windows)
         };
         let began = Instant::now();
-        let (targets, status) = match window.as_ref() {
-            Some(_) if !grid => self.collect(&windows, &monitor)?,
-            _ => (Vec::new(), "the grid".to_string()),
+        let (targets, status, collecting) = match window.as_ref() {
+            Some(_) if !grid => {
+                let (targets, status, collecting) = self.collect_primary(&windows, &monitor);
+                (targets, status, collecting)
+            }
+            _ => (Vec::new(), "the grid".to_string(), false),
         };
         let collect_ms = began.elapsed().as_millis() as u64;
         let (settings, problem) = settings();
-        let status = match problem {
+        let mut status = match problem {
             Some(p) => format!("{status}; {p}"),
             None => status,
         };
-        let session = Session::begin(targets, monitor.logical(), settings.labels_only, grid);
+        if collecting {
+            status.push_str("; collecting visual targets");
+        }
+        let session = if collecting {
+            Session::new(targets, settings.labels_only).with_area(monitor.logical())
+        } else {
+            Session::begin(targets, monitor.logical(), settings.labels_only, grid)
+        };
         let status = with_grid_note(status, &session, grid);
         let id = format!("s{}", self.next.fetch_add(1, Ordering::Relaxed));
+        let fallback_monitor = monitor.clone();
         {
             let mut sessions = self.sessions.lock().map_err(|_| internal("session lock"))?;
             sessions.retain(|_, e| e.created.elapsed() < SESSION_LIFE);
@@ -281,6 +302,7 @@ impl Daemon {
                     }),
                     monitor,
                     status: status.clone(),
+                    collecting,
                     test,
                     hidden: false,
                     created: Instant::now(),
@@ -305,6 +327,17 @@ impl Daemon {
                 .map_err(|_| internal("session lock"))?
                 .remove(&id);
             return Err(internal(e));
+        }
+        if collecting {
+            let daemon = Arc::clone(self);
+            let sources = self.sources.clone();
+            let windows = windows.clone();
+            let monitor = fallback_monitor;
+            let fallback_id = id.clone();
+            thread::spawn(move || {
+                let fallback = sources::collect_fallback_visible(&sources, &windows, &monitor);
+                daemon.finish_fallback(&fallback_id, fallback, &windows);
+            });
         }
         Ok(Reply {
             session: Some(id),
@@ -343,6 +376,16 @@ impl Daemon {
         Ok(Reply::ok())
     }
 
+    fn finish_fallback(&self, id: &str, fallback: sources::Collected, windows: &[Window]) {
+        let Ok(mut sessions) = self.sessions.lock() else {
+            return;
+        };
+        let Some(entry) = sessions.get_mut(id) else {
+            return;
+        };
+        merge_fallback(entry, fallback, windows);
+    }
+
     fn view(entry: &Entry) -> View {
         let s = &entry.session;
         let id = |i: usize| s.targets[i].id.clone();
@@ -356,6 +399,7 @@ impl Daemon {
             searching: s.searching,
             label_prefix: s.label_prefix.clone(),
             generation: s.generation,
+            collecting: entry.collecting,
             linger: s.state == State::Acting && s.act.as_ref().is_some_and(|a| a.linger),
         }
     }
@@ -416,6 +460,14 @@ impl Daemon {
         let entry = sessions
             .get_mut(id)
             .ok_or_else(|| fail(ErrorKind::BadRequest, format!("no session {id}")))?;
+        if entry.collecting && key != Key::Escape {
+            return Ok(Reply {
+                session: Some(id.to_string()),
+                view: Some(Self::view(entry)),
+                status: Some(entry.status.clone()),
+                ..Reply::ok()
+            });
+        }
         let generation = entry.session.generation;
         let at = entry.created.elapsed().as_millis() as u64;
         let act = entry.session.key_at(key, at);
@@ -476,7 +528,7 @@ impl Daemon {
     /// moved, and click. A moved window gets a fresh session instead. A
     /// lingering click leaves the pointer where it is until a second Return
     /// or the end of the wait; any other goes back at once.
-    fn act(&self, id: &str, act: &Act) {
+    fn act(self: &Arc<Self>, id: &str, act: &Act) {
         let Ok(sessions) = self.sessions.lock() else {
             return;
         };
@@ -776,6 +828,31 @@ fn with_grid_note(status: String, session: &Session, asked: bool) -> String {
     }
 }
 
+fn merge_fallback(entry: &mut Entry, fallback: sources::Collected, windows: &[Window]) -> bool {
+    if !entry.collecting || entry.session.state != State::Showing {
+        return false;
+    }
+    let generation = entry.session.generation.wrapping_add(1);
+    let mut targets = entry.session.targets.clone();
+    targets.extend(fallback.targets);
+    sources::finish_visible_targets(&mut targets, windows);
+    let mut session =
+        Session::new(targets, entry.session.labels_only).with_area(entry.monitor.logical());
+    session.generation = generation;
+    if session.targets.is_empty() {
+        session.open_grid();
+    }
+    let primary_status = entry
+        .status
+        .strip_suffix("; collecting visual targets")
+        .unwrap_or(&entry.status);
+    entry.status = format!("{primary_status}; {}", fallback.status.join("; "));
+    entry.status = with_grid_note(entry.status.clone(), &session, false);
+    entry.session = session;
+    entry.collecting = false;
+    true
+}
+
 fn window_for_target<'a>(scope: Option<&'a WindowScope>, target: &Target) -> Option<&'a Window> {
     scope?.windows.get(&target.window)
 }
@@ -1020,9 +1097,9 @@ mod tests {
     use thodu_core::session::{Key, Session};
 
     use super::{
-        Daemon, Entry, WORKSPACE_CHANGE_WAIT, WindowScope, grid_window, parse_key, restart_address,
-        scoped_windows, visible_target_owner_changed, wait_for_workspace_change, window_for_target,
-        with_grid_note,
+        Daemon, Entry, WORKSPACE_CHANGE_WAIT, WindowScope, grid_window, merge_fallback, parse_key,
+        restart_address, scoped_windows, visible_target_owner_changed, wait_for_workspace_change,
+        window_for_target, with_grid_note,
     };
     use crate::sources::{self, Found, Source};
 
@@ -1092,6 +1169,76 @@ mod tests {
         );
         let asked = Session::begin(Vec::new(), monitor.logical(), false, true);
         assert_eq!(with_grid_note("the grid".into(), &asked, true), "the grid");
+    }
+
+    // REQ-SRC-06 and REQ-SESSION-01: image targets join the drawn primary
+    // session as one generation, then input can safely resume.
+    #[test]
+    fn req_src_06_req_session_01_fallback_updates_visible_targets_after_primary_draw() {
+        let mut first = on(0);
+        first.size = (100, 100);
+        let mut second = first.clone();
+        second.address = "0x2".into();
+        second.at = (100, 0);
+        let monitor = Monitor {
+            name: "M".into(),
+            x: 0,
+            y: 0,
+            width: 200,
+            height: 100,
+            scale: 1.0,
+        };
+        let primary = Target {
+            id: "a0".into(),
+            bounds: Rect::new(10, 10, 20, 20),
+            role: Role::Button,
+            text: "Open".into(),
+            source: TargetSource::Atspi,
+            actions: vec![ActionKind::Click],
+            window: first.address.clone(),
+        };
+        let image = Target {
+            id: "0x2:i0".into(),
+            bounds: Rect::new(110, 10, 20, 20),
+            role: Role::Text,
+            text: String::new(),
+            source: TargetSource::Image,
+            actions: vec![ActionKind::Click],
+            window: second.address.clone(),
+        };
+        let mut entry = Entry {
+            session: Session::new(vec![primary], false).with_area(monitor.logical()),
+            window: None,
+            monitor,
+            status: "primary targets; collecting visual targets".into(),
+            collecting: true,
+            test: true,
+            hidden: false,
+            created: Instant::now(),
+            timing: Timing::default(),
+            pending: 0,
+            clicked: false,
+            workspace_changed: false,
+            closing: false,
+            restore: None,
+        };
+
+        assert!(merge_fallback(
+            &mut entry,
+            sources::Collected {
+                targets: vec![image],
+                status: vec!["1 visual candidate from image".into()],
+                fallback_requested: false,
+            },
+            &[first, second],
+        ));
+
+        assert!(!entry.collecting);
+        assert_eq!(entry.session.generation, 1);
+        assert_eq!(entry.session.targets.len(), 2);
+        assert_eq!(entry.session.targets[1].source, TargetSource::Image);
+        assert!(entry.status.contains("1 visual candidate from image"));
+        assert!(!entry.status.contains("collecting visual targets"));
     }
 
     fn on(monitor: i64) -> Window {
@@ -1269,6 +1416,7 @@ mod tests {
                         scale: 1.0,
                     },
                     status: String::new(),
+                    collecting: false,
                     test: false,
                     hidden: false,
                     created: Instant::now(),

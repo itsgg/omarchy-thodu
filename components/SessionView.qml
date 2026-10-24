@@ -29,6 +29,7 @@ FocusScope {
     property string labelPrefix: ""
     property string status: ""
     property bool active: false
+    property bool collecting: false
     // The targets' version: the grid replaces them as cells are chosen.
     property int generation: 0
     property bool fetching: false
@@ -77,6 +78,7 @@ FocusScope {
         view.searching = false;
         view.labelPrefix = "";
         view.status = "";
+        view.collecting = false;
         view.generation = 0;
         view.fetching = false;
         view.lingering = false;
@@ -134,6 +136,7 @@ FocusScope {
         const shown = reply.view;
         if (!shown)
             return;
+        view.collecting = shown.collecting === true;
         const kept = {};
         for (const id of shown.visible)
             kept[id] = true;
@@ -223,6 +226,8 @@ FocusScope {
     function hintCue() {
         if (view.inGrid())
             return "";
+        if (view.collecting)
+            return "visual targets loading | Esc cancels";
         if (view.labelPrefix.length > 0)
             return "lowercase continues | uppercase final activates | Tab cycles hints";
         if (view.labelsOnly)
@@ -234,6 +239,8 @@ FocusScope {
     Keys.onPressed: event => {
         event.accepted = true;
         if (!view.active)
+            return;
+        if (view.collecting && event.key !== Qt.Key_Escape)
             return;
         const request = view.keyRequest(event.key, event.modifiers, event.text, event.isAutoRepeat);
         if (!request)

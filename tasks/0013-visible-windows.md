@@ -6,13 +6,14 @@ Spec: REQ-SRC-01, REQ-SRC-06, REQ-SRC-07
 Goal: Collect AT-SPI and bounded image targets across every window visible on the focused monitor's active workspace, so a Thodu session can reach controls in each visible application and does not miss visual controls merely because they belong to a non-focused window.
 
 Acceptance:
-- run: `tests/acceptance/reqs.sh REQ-SRC-01 REQ-SRC-06 REQ-SRC-07`
+- run: `tests/acceptance/reqs.sh REQ-SRC-01 REQ-SRC-06 REQ-SRC-07 REQ-SESSION-01 REQ-CLI-01`
 - A Hyprland client fixture includes mapped windows on the active workspace, pinned windows, and windows on a shown special workspace, while excluding inactive workspaces, hidden or unmapped clients, and other monitors.
 - Frames from each visible process are matched to their own window; non-focused windows ignore ACTIVE siblings, and an ambiguous or multiply claimed frame is omitted.
 - Synthetic monitor-image detections become targets for the topmost visible window at each click point and are not duplicated by accessible targets.
 - A floating window owns an overlap with a tiled window, even when the tiled window has a more recent focus history; moving a window over a label before activation refreshes the session instead of clicking the new occluder.
 - A large scrollable or panel-like content region with no accessible rows requests the image fallback.
 - On a live desktop with two visible app windows, default hints contain targets for both window addresses; an explicit `--window` remains scoped to that window.
+- When image fallback is requested for hints, primary targets draw first; the overlay accepts Escape while holding label keys, then updates to the fallback generation.
 
 ## Log
 
@@ -21,3 +22,5 @@ Acceptance:
 - 2026-10-24: default collection now covers mapped, non-hidden windows on the focused monitor's active workspace, shown special workspace, and pinned clients. AT-SPI frames are matched by process and per-window extents; image detections are assigned to the frontmost visible window, and overlapping or newly covered targets are suppressed. `thodu targets --json` now includes window addresses and actions.
 - 2026-10-24: `tests/acceptance/reqs.sh REQ-SRC-01 REQ-SRC-06 REQ-SRC-07`, `python3 -I tools/checks.py tests-removed`, `git diff --check`, and `cargo build --workspace --release --locked` passed. The release build has no warnings.
 - 2026-10-24: live check on eDP-1 at 1920x1200 with visible Foot and Zenity windows: default `thodu targets` and `thodu hints --test` each returned target addresses for both windows; `--scope focused` and explicit `--window` returned only their selected window. The image fallback returned 479 visual candidates in 159 ms. `thodu doctor` reports every install item present.
+- 2026-10-24: Claude's review found background windows could claim the focused sibling's ACTIVE frame and that explicit background-window requests were treated as focused. Matching now uses Hyprland focus state, excludes ACTIVE siblings for background windows, and omits multiply claimed frames; REQ-SRC-01 and REQ-SRC-07 regression tests cover both cases.
+- 2026-10-24: moved image-target conversion coverage onto the production mapper, restored the click-only image acceptance, and added multi-window session/JSON tests. A live default benchmark before the fix measured 276 ms to first draw and 129 ms collection when Chromium was not on the accessibility bus; hints now draw primary targets before collecting visual targets and update the session when those arrive.

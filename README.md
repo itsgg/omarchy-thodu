@@ -4,6 +4,8 @@ Thodu is a keyboard hint picker for Omarchy. It labels clickable controls in eve
 
 This is an early, Omarchy-only milestone. It uses accessibility trees for GTK 3, GTK 4, Qt Widgets, Chromium controls and Electron controls, plus clickable items in the Omarchy bar. When a visible list row or a large content panel is missing from an accessibility tree, a bounded monitor screenshot detector can add click hints for text and box-like controls. Those image hints have no searchable text and use an amber style. They can miss icons and controls without useful accessibility data or visible text. A grid remains available for choosing any point on the focused monitor. Web page content, scrolling, dragging and hovering are not supported yet.
 
+When image hints are needed in an interactive session, primary hints appear first and visual hints arrive in a second update. Thodu holds label keys until that update so labels cannot shift during selection; `Escape` still closes the session.
+
 ## Install
 
 Requirements:

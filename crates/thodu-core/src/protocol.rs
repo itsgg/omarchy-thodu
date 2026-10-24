@@ -216,6 +216,9 @@ pub struct View {
     #[serde(default)]
     pub searching: bool,
     pub label_prefix: String,
+    /// A visual fallback is still adding targets to the session.
+    #[serde(default)]
+    pub collecting: bool,
     /// Bumped when the targets change, as the grid's do; the overlay then
     /// fetches them.
     #[serde(default)]

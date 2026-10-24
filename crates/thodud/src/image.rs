@@ -90,14 +90,7 @@ impl ImageSource {
             rect: VisionRect::<Global>::new(visible.x, visible.y, visible.w, visible.h),
             scale: monitor.scale as f32,
         };
-        let params = DetectParams {
-            // Bound CPU work on common 1920-pixel outputs while mapping
-            // candidates back to full-resolution coordinates.
-            downscale_width: 960,
-            max_elements: 500,
-            deadline: Some(started + self.budget),
-            ..DetectParams::default()
-        };
+        let params = detect_params(started, self.budget);
         let mut detector = self
             .detector
             .lock()
@@ -129,6 +122,17 @@ impl ImageSource {
     }
 }
 
+fn detect_params(started: Instant, budget: Duration) -> DetectParams {
+    DetectParams {
+        // Keep file-row text legible on common 1920-pixel outputs while
+        // bounding the detector's work and mapping boxes to source pixels.
+        downscale_width: 1280,
+        max_elements: 500,
+        deadline: Some(started + budget),
+        ..DetectParams::default()
+    }
+}
+
 /// A visual region emitted by the detector, in the captured frame's pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DetectionKind {
@@ -142,52 +146,6 @@ struct DetectionBox {
     bounds: Rect,
     kind: DetectionKind,
     confidence: f32,
-}
-
-/// Convert frame-pixel candidates to logical target bounds. `visible` is both
-/// the frame origin and the area to which candidates are clipped.
-#[cfg(test)]
-fn targets_from_detections(
-    window: &Window,
-    visible: Rect,
-    scale: f64,
-    detections: &[DetectionBox],
-    accessible: &[Target],
-) -> Vec<Target> {
-    if !scale.is_finite() || scale <= 0.0 {
-        return Vec::new();
-    }
-    detections
-        .iter()
-        .filter(|d| d.confidence >= 0.4)
-        .filter_map(|d| {
-            let logical = |v: i32| (f64::from(v) / scale).round() as i32;
-            let x = visible.x + logical(d.bounds.x);
-            let y = visible.y + logical(d.bounds.y);
-            let right = visible.x + logical(d.bounds.right());
-            let bottom = visible.y + logical(d.bounds.bottom());
-            let bounds = Rect::new(x, y, right - x, bottom - y).intersect(&visible)?;
-            if bounds.is_empty() || covered_by_accessible(bounds, &window.address, accessible) {
-                return None;
-            }
-            let role = match d.kind {
-                DetectionKind::TextLine => Role::Text,
-                DetectionKind::Link => Role::Link,
-                DetectionKind::Box => Role::Unknown,
-            };
-            Some((bounds, role))
-        })
-        .enumerate()
-        .map(|(i, (bounds, role))| Target {
-            id: format!("i{i}"),
-            bounds,
-            role,
-            text: String::new(),
-            source: From::Image,
-            actions: vec![ActionKind::Click],
-            window: window.address.clone(),
-        })
-        .collect()
 }
 
 /// Convert monitor-image candidates and attach each one to the frontmost
@@ -304,9 +262,8 @@ fn decode_png(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        DetectionBox, DetectionKind, targets_from_detections, targets_from_monitor_detections,
-    };
+    use super::{DetectionBox, DetectionKind, targets_from_monitor_detections};
+    use std::time::{Duration, Instant};
     use thodu_core::model::{ActionKind, Rect, Role, Source, Target, Window};
 
     fn window() -> Window {
@@ -327,9 +284,11 @@ mod tests {
     // visible window, and omitted where a trusted AT-SPI target covers them.
     #[test]
     fn req_src_06_image_targets_are_clipped_and_deduplicated() {
+        let mut file_window = window();
+        file_window.size = (80, 120);
         let accessible = Target {
             id: "a0".into(),
-            bounds: Rect::new(160, 70, 50, 30),
+            bounds: Rect::new(150, 70, 30, 20),
             role: Role::ListItem,
             text: "Already accessible".into(),
             source: Source::Atspi,
@@ -338,25 +297,25 @@ mod tests {
         };
         let detections = [
             DetectionBox {
-                bounds: Rect::new(60, 25, 50, 20),
+                bounds: Rect::new(188, 88, 24, 12),
                 kind: DetectionKind::TextLine,
                 confidence: 0.8,
             },
             DetectionBox {
-                bounds: Rect::new(-10, 10, 40, 20),
+                bounds: Rect::new(100, 75, 150, 25),
                 kind: DetectionKind::TextLine,
                 confidence: 0.8,
             },
         ];
-        let found = targets_from_detections(
-            &window(),
-            Rect::new(110, 60, 180, 100),
+        let found = targets_from_monitor_detections(
+            &[file_window],
+            Rect::new(0, 0, 400, 300),
             1.25,
             &detections,
             &[accessible],
         );
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].bounds, Rect::new(110, 68, 24, 16));
+        assert_eq!(found[0].bounds, Rect::new(100, 60, 80, 20));
         assert_eq!(found[0].source, Source::Image);
         assert_eq!(found[0].role, Role::Text);
         assert!(found[0].text.is_empty());
@@ -368,10 +327,10 @@ mod tests {
     // strokes into a spatial target without a model or OCR process.
     #[test]
     fn req_src_06_classical_detector_finds_text_lines() {
-        let (width, height) = (300, 60);
+        let (width, height) = (1920, 120);
         let mut rgba = vec![255; width * height * 4];
-        for (x, w) in [(20, 40), (63, 60), (126, 30)] {
-            for y in 20..32 {
+        for (x, w) in [(120, 40), (163, 60), (226, 30)] {
+            for y in 70..82 {
                 for px in x..x + w {
                     let i = (y * width + px) * 4;
                     rgba[i..i + 3].copy_from_slice(&[0, 0, 0]);
@@ -389,16 +348,16 @@ mod tests {
         let found = woints_vision::Detector::detect(
             &mut detector,
             &frame,
-            &woints_vision::DetectParams::default(),
+            &super::detect_params(Instant::now(), Duration::from_secs(1)),
         );
         assert!(
             found
                 .iter()
                 .any(|d| d.class == woints_vision::DetectionClass::TextLine)
         );
-        let targets = targets_from_detections(
-            &window(),
-            Rect::new(100, 50, 200, 60),
+        let targets = targets_from_monitor_detections(
+            &[window()],
+            Rect::new(0, 0, 1920, 120),
             1.0,
             &found
                 .iter()

@@ -1046,7 +1046,7 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) if e.is_empty() => {
             eprintln!(
-                "usage: thodu hints|grid|targets|key|close|bench|record-tree|install [--hints-key KEY --grid-key KEY --scope visible|focused --window ADDRESS]|doctor ..."
+                "usage: thodu hints [--scope visible|focused] [--window ADDRESS] [--test] [--no-overlay] | grid [--window ADDRESS] [--test] [--no-overlay] | targets [--scope visible|focused] [--json] [--window ADDRESS] | key SESSION KEY | close SESSION | bench [--sessions N] [--window ADDRESS] | record-tree [--out FILE] [--window ADDRESS] | install [--hints-key KEY --grid-key KEY] | doctor"
             );
             ExitCode::from(2)
         }

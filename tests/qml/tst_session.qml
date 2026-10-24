@@ -20,7 +20,7 @@ Item {
     property bool nextLinger: false
     // Targets the fake sends with the next key reply, as the grid does.
     property var nextTargets: null
-    property var shownView: ({ state: "showing", visible: ["a0", "a1"], focused: null, search: "", label_prefix: "" })
+    property var shownView: ({ state: "showing", visible: ["a0", "a1"], focused: null, search: "", label_prefix: "", collecting: false })
 
     readonly property var fullReply: ({
             v: 1,
@@ -31,7 +31,7 @@ Item {
                 { id: "a0", bounds: { x: 120, y: 80, w: 60, h: 30 }, role: "button", text: "Open", source: "atspi", label: "a", placed: { x: 113, y: 86, w: 17, h: 18 } },
                 { id: "a1", bounds: { x: 220, y: 80, w: 60, h: 30 }, role: "button", text: "Save", source: "atspi", label: "s", placed: { x: 213, y: 86, w: 17, h: 18 } }
             ],
-            view: { state: "showing", visible: ["a0", "a1"], focused: null, search: "", label_prefix: "" },
+            view: { state: "showing", visible: ["a0", "a1"], focused: null, search: "", label_prefix: "", collecting: false },
             status: "2 targets from atspi in 3 ms"
         })
 
@@ -87,7 +87,7 @@ Item {
             top.nextState = "showing";
             top.nextLinger = false;
             top.nextTargets = null;
-            top.shownView = { state: "showing", visible: ["a0", "a1"], focused: null, search: "", label_prefix: "" };
+            top.shownView = { state: "showing", visible: ["a0", "a1"], focused: null, search: "", label_prefix: "", collecting: false };
             view.begin("s1");
             view.forceActiveFocus();
             tryVerify(() => view.loaded, 1000, "the session loaded");
@@ -105,6 +105,33 @@ Item {
             compare(top.keysSent()[0].key, "Escape");
             verify(!view.active, "the view no longer takes keys");
             verify(!view.activeFocus, "the view gave the keyboard back");
+        }
+
+        // REQ-SESSION-01: while the first labels are drawn, visual targets can
+        // finish asynchronously without letting a pending label change under
+        // a key. Escape stays available; keys resume after the new generation.
+        function test_req_session_01_visual_collection_holds_keys_until_ready() {
+            const pending = Object.assign({}, top.fullReply, {
+                status: "collecting visual targets",
+                view: Object.assign({}, top.fullReply.view, { collecting: true })
+            });
+            view.apply(pending);
+            verify(view.collecting);
+            compare(view.hintCue(), "visual targets loading | Esc cancels");
+            keyClick(Qt.Key_A);
+            compare(top.keysSent().length, 0, "labels stay stable while targets load");
+
+            const moreTargets = top.fullReply.targets.concat([
+                { id: "i0", bounds: { x: 320, y: 80, w: 60, h: 30 }, role: "text", text: "", source: "image", actions: ["click"], window: "0x2", label: "d", placed: { x: 313, y: 86, w: 17, h: 18 } }
+            ]);
+            view.apply(Object.assign({}, top.fullReply, {
+                targets: moreTargets,
+                view: Object.assign({}, top.fullReply.view, { generation: 1, collecting: false })
+            }));
+            verify(!view.collecting);
+            compare(view.targets.length, 3);
+            keyClick(Qt.Key_A);
+            compare(top.keysSent().length, 1, "keys resume after the fallback result arrives");
         }
 
         // Escape gives the keyboard back at once, before and without any

@@ -65,6 +65,7 @@ pub trait Source: Send + Sync {
 pub struct Collected {
     pub targets: Vec<Target>,
     pub status: Vec<String>,
+    pub fallback_requested: bool,
 }
 
 /// Run primary sources together, then only run fallbacks requested by them.
@@ -79,20 +80,59 @@ pub fn collect_visible(
     windows: &[Window],
     monitor: &Monitor,
 ) -> Collected {
+    let mut got = collect_primary_visible(sources, windows, monitor);
+    if got.fallback_requested {
+        let fallback = collect_fallback_visible(sources, windows, monitor);
+        got.targets.extend(fallback.targets);
+        got.status.extend(fallback.status);
+    }
+    finish_visible_targets(&mut got.targets, windows);
+    got.fallback_requested = false;
+    got
+}
+
+/// Collect primary sources only, so an overlay can draw them while a slower
+/// image fallback runs in the background.
+pub fn collect_primary_visible(
+    sources: &[Arc<dyn Source>],
+    windows: &[Window],
+    monitor: &Monitor,
+) -> Collected {
     let (primary, fallback): (Vec<_>, Vec<_>) =
         sources.iter().partition(|source| !source.is_fallback());
-    let mut got = collect_phase(&primary, windows, monitor);
-    if got.request_fallback && !fallback.is_empty() {
-        let image = collect_phase(&fallback, windows, monitor);
-        got.targets.extend(image.targets);
-        got.status.extend(image.status);
-    }
-    keep_targets_on_topmost_windows(&mut got.targets, windows);
-    remove_covered_image_targets(&mut got.targets);
+    let got = collect_phase(&primary, windows, monitor);
+    let fallback_requested = got.request_fallback && !fallback.is_empty();
+    let mut targets = got.targets;
+    finish_visible_targets(&mut targets, windows);
     Collected {
-        targets: got.targets,
+        targets,
         status: got.status,
+        fallback_requested,
     }
+}
+
+/// Run only fallback sources. The caller can merge these targets into a
+/// session after its first draw, or combine them synchronously for a query.
+pub fn collect_fallback_visible(
+    sources: &[Arc<dyn Source>],
+    windows: &[Window],
+    monitor: &Monitor,
+) -> Collected {
+    let (_, fallback): (Vec<_>, Vec<_>) = sources.iter().partition(|source| !source.is_fallback());
+    let got = collect_phase(&fallback, windows, monitor);
+    let mut targets = got.targets;
+    finish_visible_targets(&mut targets, windows);
+    Collected {
+        targets,
+        status: got.status,
+        fallback_requested: false,
+    }
+}
+
+/// Apply the ownership and deduplication rules after source results merge.
+pub fn finish_visible_targets(targets: &mut Vec<Target>, windows: &[Window]) {
+    keep_targets_on_topmost_windows(targets, windows);
+    remove_covered_image_targets(targets);
 }
 
 struct Phase {
@@ -393,6 +433,8 @@ const BAR_NAMESPACE: &str = "omarchy-bar";
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use thodu_core::protocol::LabeledTarget;
+    use thodu_core::session::Session;
 
     struct Fake {
         name: &'static str,
@@ -603,6 +645,19 @@ mod tests {
         }
     }
 
+    fn targets_from_two_windows() -> Vec<Target> {
+        let first = window();
+        let mut second = window();
+        second.address = "0x2".into();
+        second.at = (100, 0);
+        let monitor = Monitor {
+            width: 200,
+            ..monitor()
+        };
+        let sources: Vec<Arc<dyn Source>> = vec![Arc::new(EveryWindow)];
+        collect_visible(&sources, &[first, second], &monitor).targets
+    }
+
     // REQ-SRC-07: one collection request carries targets from all windows
     // and preserves their distinct compositor addresses.
     #[test]
@@ -622,6 +677,44 @@ mod tests {
         assert_eq!(got.targets.len(), 2);
         assert_eq!(got.targets[0].window, first.address);
         assert_eq!(got.targets[1].window, second.address);
+    }
+
+    // REQ-SESSION-01: the default session labels targets from every visible
+    // window while retaining each target's compositor address.
+    #[test]
+    fn req_session_01_one_session_labels_targets_from_every_visible_window() {
+        let session = Session::new(targets_from_two_windows(), false);
+
+        assert_eq!(session.targets.len(), 2);
+        assert_eq!(
+            session
+                .targets
+                .iter()
+                .map(|target| target.window.as_str())
+                .collect::<Vec<_>>(),
+            ["0x1", "0x2"]
+        );
+        assert_ne!(session.labels[0], session.labels[1]);
+    }
+
+    // REQ-CLI-01: JSON output keeps the addresses of visible-window targets
+    // on separate records, without labels.
+    #[test]
+    fn req_cli_01_visible_window_json_keeps_distinct_addresses() {
+        let lines: Vec<serde_json::Value> = targets_from_two_windows()
+            .into_iter()
+            .map(|target| LabeledTarget::unlabeled(target).json_line())
+            .map(|line| serde_json::from_str(&line).expect("JSON target"))
+            .collect();
+
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| line["window"].as_str().expect("window address"))
+                .collect::<Vec<_>>(),
+            ["0x1", "0x2"]
+        );
+        assert!(lines.iter().all(|line| line.get("label").is_none()));
     }
 
     // REQ-SRC-05: a source that sleeps past its budget is left out and
@@ -829,6 +922,44 @@ mod tests {
             );
             assert!(got.status.iter().any(|status| status == "image"));
         }
+    }
+
+    // REQ-SRC-06: a hints session can draw primary results before it starts
+    // the requested visual fallback.
+    #[test]
+    fn req_src_06_primary_collection_defers_the_requested_fallback() {
+        let primary_calls = Arc::new(AtomicUsize::new(0));
+        let fallback_calls = Arc::new(AtomicUsize::new(0));
+        let sources: Vec<Arc<dyn Source>> = vec![
+            Arc::new(Conditional {
+                name: "atspi",
+                is_fallback: false,
+                fallback_on_error: true,
+                request_fallback: true,
+                fail: false,
+                source: From::Atspi,
+                calls: Arc::clone(&primary_calls),
+            }),
+            Arc::new(Conditional {
+                name: "image",
+                is_fallback: true,
+                fallback_on_error: false,
+                request_fallback: false,
+                fail: false,
+                source: From::Image,
+                calls: Arc::clone(&fallback_calls),
+            }),
+        ];
+
+        let primary = collect_primary_visible(&sources, &[window()], &monitor());
+        assert!(primary.fallback_requested);
+        assert_eq!(primary.targets.len(), 1);
+        assert_eq!(primary_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(fallback_calls.load(Ordering::Relaxed), 0);
+
+        let fallback = collect_fallback_visible(&sources, &[window()], &monitor());
+        assert_eq!(fallback.targets.len(), 1);
+        assert_eq!(fallback_calls.load(Ordering::Relaxed), 1);
     }
 
     // REQ-SRC-05: a requested fallback still observes its own budget.
