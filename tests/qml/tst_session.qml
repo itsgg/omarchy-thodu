@@ -21,6 +21,8 @@ Item {
     // Targets the fake sends with the next key reply, as the grid does.
     property var nextTargets: null
     property var fallbackReply: null
+    property bool sawScrollPassThrough: false
+    property string scrollReplyStatus: ""
     property var shownView: ({ state: "showing", visible: ["a0", "a1"], focused: null, search: "", label_prefix: "", collecting: false })
 
     readonly property var fullReply: ({
@@ -53,12 +55,21 @@ Item {
                 reply.targets = top.nextTargets;
                 top.nextTargets = null;
             }
+        } else if (request.op === "scroll-ready") {
+            top.shownView = Object.assign({}, top.shownView, { state: "showing", scroll_mode: true });
+            reply = { v: 1, ok: true, session: "s1", view: top.shownView,
+                      status: top.scrollReplyStatus || top.fullReply.status };
+            top.scrollReplyStatus = "";
         } else {
             reply = { v: 1, ok: true };
         }
         Qt.callLater(() => {
             top.lastReplyAt = Date.now();
             view.apply(reply);
+            if (reply.view && reply.view.state === "acting" && reply.view.scroll_mode) {
+                top.sawScrollPassThrough = view.scrollPassThrough;
+                Qt.callLater(() => view.notifyScrollReady());
+            }
         });
     }
 
@@ -89,6 +100,10 @@ Item {
             top.nextLinger = false;
             top.nextTargets = null;
             top.fallbackReply = null;
+            top.sawScrollPassThrough = false;
+            top.scrollReplyStatus = "";
+            view.statusTimeoutMs = 2000;
+            view.scrollRepeatMs = 80;
             top.shownView = { state: "showing", visible: ["a0", "a1"], focused: null, search: "", label_prefix: "", collecting: false };
             view.begin("s1");
             view.forceActiveFocus();
@@ -236,8 +251,8 @@ Item {
                    "REQ-SESSION-01: every key request names its displayed generation");
         }
 
-        // REQ-SESSION-07: numeric area selection is only sent in scroll mode,
-        // and held keys cannot repeat a wheel action after the overlay resumes.
+        // REQ-SESSION-07: numeric area selection is only sent in scroll mode;
+        // REQ-ACT-06: the timer drives held repeats and OS repeats stay ignored.
         function test_req_session_07_scroll_keys_and_cue() {
             compare(view.keyRequest(Qt.Key_2, Qt.NoModifier, "2", false), null,
                     "digits stay ignored in hints mode");
@@ -247,7 +262,7 @@ Item {
             compare(view.keyRequest(Qt.Key_J, Qt.ShiftModifier, "J", false).key, "J");
             compare(view.keyRequest(Qt.Key_J, Qt.NoModifier, "j", true), null,
                     "auto-repeat cannot send multiple wheel actions");
-            compare(view.hintCue(), "j/k scroll | h/l horizontal | Shift+HJKL larger | Tab cycles | digits select | Esc exits");
+            compare(view.hintCue(), "hold HJKL to scroll | Shift larger | Tab cycles | digits select | Esc exits");
             view.targets = [];
             compare(view.hintCue(), "no scroll areas | Esc exits");
         }
@@ -440,7 +455,7 @@ Item {
             }));
             view.apply({
                 v: 1, ok: true, session: "s1", status: longStatus,
-                view: { state: "showing", visible: ["a0", "a1"], focused: "a0", search: "", label_prefix: "", label_selected: true, labels_only: true }
+                view: { state: "showing", visible: ["a0", "a1"], focused: "a0", search: "", label_prefix: "", label_selected: true, labels_only: true, status_persistent: true }
             });
             const ring = findChild(view, "focus-ring");
             const chip = findChild(view, "label-a");
@@ -462,18 +477,109 @@ Item {
             verify(toast.height > 38, "the wrapped status and activation cue fit in the toast");
             view.apply({
                 v: 1, ok: true, session: "s1", status: longStatus,
-                view: { state: "showing", visible: ["a0"], focused: "a0", search: "o", searching: true, label_prefix: "", label_selected: false, labels_only: true }
+                view: { state: "showing", visible: ["a0"], focused: "a0", search: "o", searching: true, label_prefix: "", label_selected: false, labels_only: true, status_persistent: true }
             });
             verify(ring.visible, "text-search focus keeps the target outline");
             verify(cue.text.indexOf("lowercase searches") !== -1);
             verify(cue.text.indexOf("Tab cycles hints") !== -1);
             view.apply({
                 v: 1, ok: true, session: "s1", status: longStatus,
-                view: { state: "showing", visible: ["a0"], focused: "a0", search: "", label_prefix: "", label_selected: false, labels_only: false }
+                view: { state: "showing", visible: ["a0"], focused: "a0", search: "", label_prefix: "", label_selected: false, labels_only: false, status_persistent: true }
             });
             verify(cue.text.indexOf("type to search") !== -1);
             verify(cue.text.indexOf("lowercase selects") === -1,
                    "the cue does not claim labels select in search-first mode");
+        }
+
+        function test_req_session_08_status_detail_modes_keep_guidance_and_attention() {
+            view.statusTimeoutMs = 30;
+            const ordinary = {
+                state: "showing", visible: ["a0"], focused: null, search: "", label_prefix: "",
+                status_display: "auto", status_persistent: false
+            };
+            view.apply({ v: 1, ok: true, session: "s1", status: "2 targets from atspi in 3 ms", view: ordinary });
+            view.statusTimeoutMs = 30;
+            view.restartStatusExpiry();
+            const message = findChild(view, "status-text");
+            const cue = findChild(view, "hint-text");
+            verify(message.visible, "auto shows routine details at first");
+            wait(60);
+            verify(!message.visible, "auto hides routine details after its timeout");
+            verify(cue.visible, "the keyboard cue remains visible");
+
+            view.apply({ v: 1, ok: true, session: "s1", status: "2 targets from atspi in 3 ms",
+                         view: Object.assign({}, ordinary, { status_display: "always" }) });
+            verify(message.visible, "always keeps routine detail visible after expiry");
+
+            view.apply({ v: 1, ok: true, session: "s1", status: "2 targets from atspi in 3 ms",
+                         view: Object.assign({}, ordinary, { status_display: "off" }) });
+            verify(!message.visible, "off hides routine detail");
+            verify(cue.visible, "off keeps the keyboard cue");
+
+            view.apply({ v: 1, ok: true, session: "s1", status: "atspi missed its 80 ms budget",
+                         view: Object.assign({}, ordinary, { status_display: "off", status_persistent: true }) });
+            verify(message.visible, "warnings remain visible in off mode");
+            view.apply({ v: 1, ok: true, session: "s1", status: "2 targets from atspi in 3 ms",
+                         view: Object.assign({}, ordinary, { status_display: "off", search: "save" }) });
+            verify(message.visible);
+            compare(message.text, "/save");
+            view.apply({ v: 1, ok: true, session: "s1", status: "2 targets from atspi in 3 ms",
+                         view: Object.assign({}, ordinary, { status_display: "off", label_prefix: "a" }) });
+            verify(message.visible);
+            compare(message.text, "A");
+            view.apply({ v: 1, ok: true, session: "s1", status: "collecting visual targets",
+                         view: Object.assign({}, ordinary, { status_display: "off", collecting: true }) });
+            verify(message.visible, "active collection remains visible in off mode");
+        }
+
+        function test_req_act_06_held_scroll_repeats_until_key_release() {
+            view.scrollMode = true;
+            view.scrollRepeatMs = 20;
+            top.nextState = "acting";
+            top.shownView = Object.assign({}, top.shownView, { scroll_mode: true, focused: "a0" });
+            keyPress(Qt.Key_J);
+            tryVerify(() => top.sent.some(r => r.op === "scroll-ready"), 1000, "the pass-through handshake completes");
+            verify(top.sawScrollPassThrough, "the overlay remains active in pointer pass-through mode");
+            compare(view.scrollHole.x, 49);
+            compare(view.scrollHole.y, 44);
+            tryVerify(() => top.sent.filter(r => r.op === "key" && r.key === "j").length >= 2,
+                      1000, "a held key repeats after the first wheel action");
+            keyRelease(Qt.Key_J);
+            const count = top.sent.filter(r => r.op === "key" && r.key === "j").length;
+            wait(80);
+            compare(top.sent.filter(r => r.op === "key" && r.key === "j").length, count,
+                    "release stops further repeats");
+            compare(top.sent.filter(r => r.op === "scroll-stop").length, 1,
+                    "release asks thodud to restore the pointer");
+            verify(!view.scrollPassThrough, "the overlay returns to its normal input region");
+            verify(view.active, "scroll mode stays open");
+        }
+
+        function test_req_act_06_failed_wheel_action_stops_repeat() {
+            view.scrollMode = true;
+            view.scrollRepeatMs = 20;
+            top.nextState = "acting";
+            top.scrollReplyStatus = "scroll input failed: test failure";
+            top.shownView = Object.assign({}, top.shownView, { scroll_mode: true, focused: "a0" });
+            keyPress(Qt.Key_J);
+            tryVerify(() => view.status === "scroll input failed: test failure", 1000,
+                      "the failed wheel action reports its error");
+            const count = top.sent.filter(r => r.op === "key" && r.key === "j").length;
+            wait(80);
+            compare(top.sent.filter(r => r.op === "key" && r.key === "j").length, count,
+                    "a failed wheel action stops the repeat");
+            verify(view.active, "the failed action leaves scroll mode dismissible");
+        }
+
+        function test_req_act_06_ignores_os_repeat_and_escape_stops_scroll() {
+            view.scrollMode = true;
+            top.shownView = Object.assign({}, top.shownView, { scroll_mode: true });
+            compare(view.keyRequest(Qt.Key_J, Qt.NoModifier, "j", true), null,
+                    "OS repeat events do not add wheel actions");
+            keyPress(Qt.Key_J);
+            keyPress(Qt.Key_Escape);
+            tryVerify(() => top.ended !== null, 1000, "Escape ends after the pending wheel event");
+            compare(view.heldScrollKey, "", "Escape clears the held key");
         }
 
         // A session thodud pushed draws from its reply, with no request.

@@ -86,15 +86,18 @@ The screenshot below shows Thodu labeling the Open, Save and Close buttons expos
 - `Tab` and `Shift+Tab` move focus. `Escape` closes the session. `Space` opens the grid when no target is focused.
 - `Shift+Return` right-clicks, `Control+Return` clicks with Control held, and two distinct `Return` presses within 300 ms double-click.
 - Press the grid binding to choose a point on the focused monitor. Select a cell to refine it, then press `Return` to click its center.
-- Press the scroll binding (`SUPER + ALT + F12` by default) to select and scroll panes across visible app windows on the focused monitor. Lowercase `j`/`k` scroll down/up and `h`/`l` scroll left/right. Uppercase `J`/`K`/`H`/`L` sends a larger step. `Tab` and `Shift+Tab` cycle areas, digits select an area by its number, `Return` clears the number prefix, and `Escape` exits. The overlay hides while the wheel event is sent, then resumes the same session.
+- Press the scroll binding (`SUPER + ALT + F12` by default) to select and scroll panes across visible app windows on the focused monitor. Hold `j`/`k` to scroll down/up continuously and `h`/`l` to scroll left/right. A tap sends one wheel action; holding repeats every 80 ms. `Shift` uses `scroll_shift_step`. The overlay keeps keyboard capture while passing wheel input through to the selected pane. `Tab` and `Shift+Tab` cycle areas, digits select an area by its number, `Return` clears the number prefix, and `Escape` exits.
 
-The configuration file is `~/.config/thodu/config.toml`. The supported setting is:
+The configuration file is `~/.config/thodu/config.toml` and is read at the start of each session. Supported settings are:
 
 ```toml
 labels_only = true
+status_display = "auto"
+scroll_step = 1
+scroll_shift_step = 5
 ```
 
-The default is `false`, which starts in search-first mode. Restart an active session after changing the setting.
+`labels_only` defaults to `false`, which starts in search-first mode. `status_display` accepts `auto`, `always` or `off` and defaults to `auto`. Auto hides routine source counts two seconds after the overlay appears; warnings, missing targets, active collection, search text and the key cue remain visible. `scroll_step` and `scroll_shift_step` default to 1 and 5 wheel detents, and each accepts 1 through 100. The Shift step can be smaller than the normal step. Restart an active session after changing settings.
 
 ## Commands
 

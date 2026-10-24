@@ -129,6 +129,8 @@ Item {
                 hidden.stop();
                 client.send({ op: "hidden", session: id });
             }
+            if (view.scrollPassThrough)
+                view.notifyScrollReady();
             if (!root.opened || !view.loaded || root.drawnSent)
                 return;
             root.drawnSent = true;
@@ -148,7 +150,8 @@ Item {
         }
         color: "transparent"
         // Keep the surface mapped but remove its input region during the wait.
-        mask: view.lingering || root.focusReleasePending ? passThrough : null
+        mask: view.lingering || root.focusReleasePending ? passThrough :
+              view.scrollPassThrough ? scrollPassThrough : null
         exclusionMode: ExclusionMode.Ignore
         WlrLayershell.namespace: "thodu"
         WlrLayershell.layer: WlrLayer.Overlay
@@ -161,6 +164,15 @@ Item {
             y: 0
             width: panel.width
             height: panel.height
+        }
+
+        Region {
+            id: scrollPassThrough
+            intersection: Intersection.Subtract
+            x: view.scrollHole.x
+            y: view.scrollHole.y
+            width: 2
+            height: 2
         }
 
         // A click anywhere ends the session without acting.

@@ -202,12 +202,27 @@ Acceptance:
 - scenario: WHEN Hyprland reports the window 10 units to the right after collection THEN no pointer event is sent and a new collection runs.
 
 ### REQ-ACT-04: Scroll the selected area
-In scroll mode, `j` and `k` shall send one vertical wheel step down and up, and `l` and `h` shall send one horizontal wheel step right and left, at the selected area's center. Shift with those keys shall send five wheel steps. Scrolling shall not click, shall keep the selected area and mode, and shall resume the overlay after the wheel event. The input path shall support GTK, Qt, Chromium and Electron through the installed uinput device. If the owning window moved, closed or is no longer topmost before the wheel event, the system shall send no wheel event and shall report that the session must be restarted.
+In scroll mode, `j` and `k` shall send vertical wheel detents down and up, and `l` and `h` shall send horizontal wheel detents right and left, at the selected area's center. The number of detents is configured by REQ-ACT-05. Scrolling shall not click, shall keep the selected area and mode, and shall return the overlay to its normal input region after the wheel event. The input path shall support GTK, Qt, Chromium and Electron through the installed uinput device. If the owning window moved, closed or is no longer topmost before the wheel event, the system shall send no wheel event and shall report that the session must be restarted.
 Acceptance:
-- scenario: REQ-ACT-04 unit tests verify all four directions and the one-step and five-step amounts, with no button events.
-- scenario: a daemon test waits for the overlay-hidden event, sends the wheel event to the selected point, and returns the same session to showing.
+- scenario: REQ-ACT-04 unit tests verify all four directions and configured detent amounts, with no button events.
+- scenario: a daemon test waits for the overlay's pointer-pass-through-ready event, sends the wheel event to the selected point, and returns the same session to showing.
 - scenario: a moved or occluded window produces no wheel event.
 - live: scroll a GTK or Qt pane and a Chromium or Electron document, then confirm the overlay remains in scroll mode.
+
+### REQ-ACT-05: Configure scroll distance
+`~/.config/thodu/config.toml` shall accept `scroll_step` and `scroll_shift_step`, each an integer wheel detent count from 1 through 100. Their defaults shall be 1 and 5 respectively. A normal H/J/K/L press shall send `scroll_step` signed detents; a Shift-H/J/K/L press shall send `scroll_shift_step` signed detents. The Shift step may be smaller than the normal step. Invalid values shall make the configuration report an error and use defaults for the session.
+Acceptance:
+- scenario: config tests verify both defaults, custom values, invalid bounds and the ability for the Shift step to be smaller than the normal step.
+- scenario: session tests verify each direction uses its configured signed detent count.
+
+### REQ-ACT-06: Repeat scroll while a key is held
+While scroll mode is active, pressing H/J/K/L shall send one wheel action immediately and repeat it at 80 ms intervals until the same key is released. The repeat shall use the step size selected at key-down. Operating-system key-repeat events shall not add actions. During each wheel action, the overlay shall remain mapped and retain exclusive keyboard focus while a small pointer input region over the selected area's center passes through, so wheel events reach the selected area and physical key releases do not reach the application. The pointer shall return to its prior safe position when the hold ends, not after each wheel action. Releasing the key shall stop further actions. Pressing a different non-modifier key shall stop the current repeat before processing that key. Escape shall end scroll mode and stop repetition.
+Acceptance:
+- scenario: QML tests verify held H/J/K/L repeat at the 80 ms interval and release stops further requests.
+- scenario: a QML test verifies OS repeat events do not create extra actions and Escape stops the repeat.
+- scenario: a QML test verifies the overlay retains keyboard focus while a small pointer region passes through for wheel events.
+- scenario: the pointer remains over the selected area across repeat ticks and returns to its prior safe position on release.
+- scenario: a stale or failed scroll action stops repetition and leaves the session dismissible.
 
 ### The grid
 
@@ -247,8 +262,10 @@ Acceptance:
 The IPC is JSON lines over the Unix socket `$XDG_RUNTIME_DIR/thodu.sock`, one request and one reply per line, each with a `v` field equal to 1.
 
 - `{"v":1,"op":"start","mode":"hints"|"grid"|"scroll","scope":"visible"|"focused"}` returns `{"v":1,"ok":true,"session":ID,"status":TEXT}` and summons the overlay with the session. For hints and scroll, omitted `scope` defaults to `visible`; `focused` limits collection to the active window. An optional `window` (a Hyprland address) selects one window, `overlay` false runs the session over the IPC alone, and `test` true summons the overlay without the keyboard, for live checks.
-- `{"v":1,"op":"session","session":ID}` returns the session's monitor, targets and labels and its view for the overlay; with `"brief":true`, the view alone, for the overlay's heartbeat (REQ-SESSION-03). The view's `labels_only` and `label_selected` booleans are additive presentation fields.
+- `{"v":1,"op":"session","session":ID}` returns the session's monitor, targets and labels and its view for the overlay; with `"brief":true`, the view alone, for the overlay's heartbeat (REQ-SESSION-03). The view's `labels_only`, `label_selected`, `status_display` and `status_persistent` fields are additive presentation fields.
 - `{"v":1,"op":"key","session":ID,"generation":N,"key":NAME,"shift":B,"ctrl":B}` returns the session's new view: its state (showing, acting or closed), the targets still kept, the focused target, the search and the typed label. The daemon ignores a stale-generation request other than Escape and returns the current targets and view; Escape always ends the session.
+- `{"v":1,"op":"scroll-ready","session":ID}` says that the overlay's pointer input region is passing events through at the selected scroll area's center while keyboard focus stays exclusive; `thodud` sends the pending wheel action and returns the session to showing.
+- `{"v":1,"op":"scroll-stop","session":ID}` says that the held scroll key was released; `thodud` restores the pointer to its prior safe position when no wheel action remains pending.
 - `{"v":1,"op":"hidden","session":ID}`: the overlay's surface is gone, so a pending action may run (REQ-ACT-01); `thodud` acts anyway 400 ms after the action if none comes.
 - `{"v":1,"op":"targets","scope":"visible"|"focused"}` returns the visible windows' targets without a session; omitted `scope` defaults to `visible`. `focused` or an optional `window` limits collection to one window.
 - `{"v":1,"op":"close","session":ID}`.
@@ -265,7 +282,7 @@ A `window` is a Hyprland address, or `class:NAME` for the first window of that c
 
 Errors are `{"v":1,"ok":false,"error":KIND,"message":TEXT}` with KIND one of no-window, no-tree, busy, stale, internal, bad-request. The command line prints an ERROR line with the message and exits 1 on any error, 2 on bad arguments.
 
-Keys inside a hints session: in search-first mode lowercase letters search, while in labels-only mode they type labels until `/` starts a search (REQ-SEARCH-01, REQ-SEARCH-02); Shift with letters types a label, and an uppercase final label character activates its visible target (REQ-SEARCH-01, REQ-ACT-01); Tab and Shift-Tab move the focus, Return, Shift-Return, Control-Return and a double Return act (REQ-ACT-01, REQ-ACT-02), Space opens the grid, Backspace deletes the last letter, Escape ends the session. In scroll mode, number keys select an area, Tab and Shift-Tab cycle areas, H/J/K/L send wheel steps, Shift+H/J/K/L send larger steps, Return clears the number prefix, and Escape ends the session (REQ-SESSION-07, REQ-ACT-04).
+Keys inside a hints session: in search-first mode lowercase letters search, while in labels-only mode they type labels until `/` starts a search (REQ-SEARCH-01, REQ-SEARCH-02); Shift with letters types a label, and an uppercase final label character activates its visible target (REQ-SEARCH-01, REQ-ACT-01); Tab and Shift-Tab move the focus, Return, Shift-Return, Control-Return and a double Return act (REQ-ACT-01, REQ-ACT-02), Space opens the grid, Backspace deletes the last letter, Escape ends the session. In scroll mode, number keys select an area, Tab and Shift-Tab cycle areas, holding H/J/K/L sends wheel actions immediately and every 80 ms until release, Shift+H/J/K/L use the configured Shift step, Return clears the number prefix, and Escape ends the session (REQ-SESSION-07, REQ-ACT-04, REQ-ACT-06).
 
 ## 8. Unwanted behavior
 
@@ -286,12 +303,20 @@ Acceptance:
 - scenario: with no active app window and no source targets, hints opens the grid and reports that no targets were found.
 
 ### REQ-SESSION-07: Select scroll areas from the keyboard
-When `thodu scroll` runs, the system shall start on the focused monitor and collect areas in the requested scope, defaulting to every visible window. It shall number areas in reading order, initially focus the first area, outline the focused area, and show the available keys. Tab and Shift-Tab cycle areas. Decimal digits select an area by its one-based number, with `0` selecting area 10; digits can be combined for areas 11 and above. Return clears the number prefix without scrolling. Escape ends the mode. With no areas, the overlay shall remain dismissible and report that no scroll areas were found, without opening the click grid.
+When `thodu scroll` runs, the system shall start on the focused monitor and collect areas in the requested scope, defaulting to every visible window. It shall number areas in reading order, initially focus the first area, outline the focused area, and show the available keys, including that holding H/J/K/L repeats scrolling. Tab and Shift-Tab cycle areas. Decimal digits select an area by its one-based number, with `0` selecting area 10; digits can be combined for areas 11 and above. Return clears the number prefix without scrolling. Escape ends the mode. With no areas, the overlay shall remain dismissible and report that no scroll areas were found, without opening the click grid.
 Acceptance:
 - scenario: a session test verifies reading-order focus, area cycling, one- and multi-digit selection, Backspace, Return and Escape.
-- scenario: a QML test verifies numeric keys are sent only in scroll mode, repeat keys do not issue scrolls, and the overlay identifies the scroll bindings.
+- scenario: a QML test verifies numeric keys are sent only in scroll mode and the overlay identifies the scroll bindings and hold behavior.
 - scenario: `thodu scroll --scope focused` scopes to one app; the default mode includes all visible windows on the monitor.
 - scenario: when no app window is open, `thodu scroll` opens with no areas and remains dismissible.
+
+### REQ-SESSION-08: Keep guidance while controlling status detail
+The overlay shall keep its key cue visible throughout an active session. The `status_display` setting shall accept `auto`, `always` or `off`, defaulting to `auto`. In `auto`, routine collection details shall be visible for 2000 ms after the session first draws, then hidden. In `always`, routine details shall remain visible. In `off`, routine details shall be hidden. Warnings, missing-source or budget failures, no-target states, and active collection shall remain visible in every mode. Live search text and an incomplete label prefix shall remain visible in every mode. These rules shall not apply during the click-through linger state.
+Acceptance:
+- scenario: a QML test verifies the cue remains visible after routine details expire in auto mode.
+- scenario: QML tests verify routine details persist in always mode and are hidden in off mode.
+- scenario: QML tests verify warnings, empty-target status, active collection, live search and label prefixes remain visible in off mode.
+- scenario: a daemon test verifies which source and no-target statuses are marked persistent.
 
 ### REQ-CLI-02: No Hyprland
 If Hyprland's request socket cannot be reached, then `thodu` shall print an ERROR line saying so and exit 1, without starting a session.
@@ -341,6 +366,7 @@ Unit tests and properties cover labels, search, the grid, coordinates and the st
 - 2026-10-24: change 0015, image supplementation applies to every visible-window collection and session keys are generation-checked.
 - 2026-10-24: change 0016, sessions without an active app use Hyprland's focused monitor and can label bar items.
 - 2026-10-24: change 0017, accessible scroll areas, keyboard scroll mode, uinput wheel events and an F12-family scroll binding.
+- 2026-10-24: change 0018, configurable status detail and scroll distance, plus held H/J/K/L scrolling with retained keyboard capture.
 
 ### Retired
 

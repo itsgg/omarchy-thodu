@@ -67,7 +67,6 @@ type CollectionScope = (Option<Window>, Monitor, Vec<Window>, Vec<Window>);
 enum ScrollFailure {
     Stale,
     Input(String),
-    Cancelled,
 }
 
 struct Entry {
@@ -93,6 +92,10 @@ struct Entry {
     closing: bool,
     /// Where the pointer goes back to when the session ends.
     restore: Option<(Monitor, (i32, i32))>,
+    /// The pointer position to restore when the active scroll hold ends.
+    scroll_restore: Option<(Monitor, (i32, i32))>,
+    /// A release can arrive before the pass-through-ready wheel event.
+    scroll_released: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -346,13 +349,15 @@ impl Daemon {
             status.push_str("; collecting visual targets");
         }
         let session = if scroll {
-            Session::new_scroll(targets)
+            Session::new_scroll(targets).with_config(&settings)
         } else if collecting {
             Session::new(targets, settings.labels_only)
+                .with_config(&settings)
                 .reserving_label_prefix('z')
                 .with_area(monitor.logical())
         } else {
             Session::begin(targets, monitor.logical(), settings.labels_only, grid)
+                .with_config(&settings)
         };
         let status = with_grid_note(status, &session, grid);
         let id = format!("s{}", self.next.fetch_add(1, Ordering::Relaxed));
@@ -389,6 +394,8 @@ impl Daemon {
                     workspace_changed: false,
                     closing: false,
                     restore: None,
+                    scroll_restore: None,
+                    scroll_released: true,
                 },
             );
         }
@@ -544,6 +551,12 @@ impl Daemon {
             collecting: entry.collecting,
             linger: s.state == State::Acting && s.act.as_ref().is_some_and(|a| a.linger),
             scroll_mode: s.scroll_mode,
+            status_display: s.status_display,
+            status_persistent: status_persistent(
+                &entry.status,
+                entry.collecting,
+                s.targets.is_empty(),
+            ),
         }
     }
 
@@ -626,7 +639,10 @@ impl Daemon {
         let generation = entry.session.generation;
         let at = entry.created.elapsed().as_millis() as u64;
         let act = entry.session.key_at(key, at);
-        let scroll = entry.session.take_scroll_action();
+        let scroll = entry.session.pending_scroll_action();
+        if scroll.is_some() {
+            entry.scroll_released = false;
+        }
         let view = Self::view(entry);
         // New targets, from the grid, go with the reply.
         let targets = (entry.session.generation != generation).then(|| Self::labeled(entry));
@@ -647,11 +663,7 @@ impl Daemon {
                     }
                 });
             }
-            None if let Some(action) = scroll => {
-                let daemon = Arc::clone(self);
-                let id = id.to_string();
-                thread::spawn(move || daemon.scroll(&id, action));
-            }
+            None if scroll.is_some() => {}
             None if closed => self.finish(id),
             None => {}
         }
@@ -840,10 +852,13 @@ impl Daemon {
         self.finish(id);
     }
 
-    /// Wait for the overlay to unmap, verify the selected window, then send
-    /// the wheel event. Tests inject the input operation while exercising the
-    /// same wait and resume path used by the daemon.
-    fn scroll_with<F>(self: &Arc<Self>, id: &str, action: ScrollAction, perform: F)
+    fn scroll_ready(&self, id: &str) -> Res<Reply> {
+        self.scroll_ready_with(id, |target, window, monitor, action, _test| {
+            self.perform_scroll_event(target, window, monitor, action)
+        })
+    }
+
+    fn scroll_ready_with<F>(&self, id: &str, perform: F) -> Res<Reply>
     where
         F: FnOnce(
             &Target,
@@ -853,158 +868,184 @@ impl Daemon {
             bool,
         ) -> Result<(), ScrollFailure>,
     {
-        let Ok(sessions) = self.sessions.lock() else {
-            return;
-        };
-        let Ok((sessions, _)) = self
-            .changed
-            .wait_timeout_while(sessions, HIDE_WAIT, |sessions| {
-                sessions
-                    .get(id)
-                    .is_some_and(|entry| entry.overlay && !entry.hidden && !entry.closing)
-            })
-        else {
-            return;
-        };
-        let Some((overlay, hidden, closing, target, window, monitor, test)) =
-            sessions.get(id).map(|e| {
-                let target = e.session.targets.get(action.target).cloned();
-                let window = target
-                    .as_ref()
-                    .and_then(|target| window_for_target(e.window.as_ref(), target))
-                    .cloned();
-                (
-                    e.overlay,
-                    e.hidden,
-                    e.closing,
-                    target,
-                    window,
-                    e.monitor.clone(),
-                    e.test,
+        let action = {
+            let mut sessions = self.sessions.lock().map_err(|_| internal("session lock"))?;
+            let entry = sessions
+                .get_mut(id)
+                .ok_or_else(|| fail(ErrorKind::BadRequest, format!("no session {id}")))?;
+            entry.session.take_scroll_action().ok_or_else(|| {
+                fail(
+                    ErrorKind::BadRequest,
+                    "no scroll action is waiting for pass-through",
                 )
-            })
-        else {
-            return;
+            })?
         };
-        drop(sessions);
+        self.scroll_with(id, action, perform)
+    }
 
-        let result = if closing {
-            Err(ScrollFailure::Cancelled)
-        } else if overlay && !hidden {
-            Err(ScrollFailure::Input(
-                "overlay did not hide before scrolling; try the key again".into(),
-            ))
-        } else if let Some(target) = target {
-            perform(&target, window.as_ref(), &monitor, action, test)
+    fn scroll_stop(&self, id: &str) -> Res<Reply> {
+        let restore = {
+            let mut sessions = self.sessions.lock().map_err(|_| internal("session lock"))?;
+            let entry = sessions
+                .get_mut(id)
+                .ok_or_else(|| fail(ErrorKind::BadRequest, format!("no session {id}")))?;
+            entry.scroll_released = true;
+            if entry.pending == 0 {
+                entry.scroll_restore.take()
+            } else {
+                None
+            }
+        };
+        if let Some((monitor, point)) = restore {
+            pointer::move_to(&monitor, point).map_err(internal)?;
+        }
+        Ok(Reply::ok())
+    }
+
+    /// Send one wheel action after the overlay has made its pointer region
+    /// transparent. Tests inject the wheel input through `perform`.
+    fn scroll_with<F>(&self, id: &str, action: ScrollAction, perform: F) -> Res<Reply>
+    where
+        F: FnOnce(
+            &Target,
+            Option<&Window>,
+            &Monitor,
+            ScrollAction,
+            bool,
+        ) -> Result<(), ScrollFailure>,
+    {
+        let (target, window, monitor, test, capture_pointer) = {
+            let sessions = self.sessions.lock().map_err(|_| internal("session lock"))?;
+            let entry = sessions
+                .get(id)
+                .ok_or_else(|| fail(ErrorKind::BadRequest, format!("no session {id}")))?;
+            let target = entry.session.targets.get(action.target).cloned();
+            let window = target
+                .as_ref()
+                .and_then(|target| window_for_target(entry.window.as_ref(), target))
+                .cloned();
+            (
+                target,
+                window,
+                entry.monitor.clone(),
+                entry.test,
+                entry.scroll_restore.is_none(),
+            )
+        };
+
+        if capture_pointer
+            && let Some(restore) = target
+                .as_ref()
+                .and_then(|target| scroll_restore_candidate(target, test))
+        {
+            let mut sessions = self.sessions.lock().map_err(|_| internal("session lock"))?;
+            if let Some(entry) = sessions.get_mut(id)
+                && entry.scroll_restore.is_none()
+            {
+                entry.scroll_restore = Some(restore);
+            }
+        }
+
+        let result = if let Some(target) = target.as_ref() {
+            perform(target, window.as_ref(), &monitor, action, test)
         } else {
             Err(ScrollFailure::Stale)
         };
 
-        let (resume, test, status, closing) = {
-            let Ok(mut sessions) = self.sessions.lock() else {
-                return;
-            };
-            let Some(entry) = sessions.get_mut(id) else {
-                return;
-            };
-            entry.pending = entry.pending.saturating_sub(1);
-            if entry.closing {
-                self.changed.notify_all();
-                (false, entry.test, entry.status.clone(), true)
-            } else {
-                entry.hidden = false;
-                entry.session.resume_after_scroll();
-                match result {
-                    Ok(()) => {}
-                    Err(ScrollFailure::Stale) => {
-                        entry.session = Session::new_scroll(Vec::new());
-                        entry.status =
-                            "scroll target moved, closed or became covered; restart scroll mode"
-                                .into();
-                    }
-                    Err(ScrollFailure::Input(message)) => entry.status = message,
-                    Err(ScrollFailure::Cancelled) => entry.status = "scroll cancelled".into(),
-                }
-                self.changed.notify_all();
-                (entry.overlay, entry.test, entry.status.clone(), false)
-            }
+        let mut sessions = self.sessions.lock().map_err(|_| internal("session lock"))?;
+        let entry = sessions
+            .get_mut(id)
+            .ok_or_else(|| fail(ErrorKind::BadRequest, format!("no session {id}")))?;
+        entry.pending = entry.pending.saturating_sub(1);
+        let closing = entry.closing;
+        let failed = result.is_err();
+        if failed {
+            entry.scroll_released = true;
+        }
+        let restore = if failed || entry.scroll_released || closing {
+            entry.scroll_restore.take()
+        } else {
+            None
         };
+        if !closing {
+            entry.session.resume_after_scroll();
+            match result {
+                Ok(()) => {}
+                Err(ScrollFailure::Stale) => {
+                    entry.session.clear_scroll_targets();
+                    entry.status =
+                        "scroll target moved, closed or became covered; restart scroll mode".into();
+                }
+                Err(ScrollFailure::Input(message)) => entry.status = message,
+            }
+        }
+        let reply = if closing {
+            None
+        } else {
+            Some(Reply {
+                session: Some(id.to_string()),
+                targets: Some(Self::labeled(entry)),
+                view: Some(Self::view(entry)),
+                status: Some(entry.status.clone()),
+                timing: Some(entry.timing.clone()),
+                ..Reply::ok()
+            })
+        };
+        drop(sessions);
+        self.changed.notify_all();
+        if let Some((monitor, point)) = restore
+            && let Err(error) = pointer::move_to(&monitor, point)
+        {
+            eprintln!("thodud: {id}: the pointer did not go back after scrolling: {error}");
+        }
         if closing {
             self.finish(id);
-            return;
+            return Err(fail(ErrorKind::BadRequest, "scroll session was closed"));
         }
-        if resume
-            && !self.push(id, test)
-            && let Err(error) = overlay::summon(id, &self.socket, test)
-        {
-            eprintln!("ERROR {id}: could not resume the scroll overlay: {error}");
-            if let Ok(mut sessions) = self.sessions.lock()
-                && let Some(entry) = sessions.get_mut(id)
-            {
-                entry.status = format!("{status}; could not resume overlay: {error}");
-            }
-        }
+        reply.ok_or_else(|| internal("scroll action reply was not created"))
     }
 
-    fn scroll(self: &Arc<Self>, id: &str, action: ScrollAction) {
-        self.scroll_with(id, action, |target, window, monitor, action, test| {
-            if !target.window.is_empty() {
-                let Some(window) = window else {
-                    return Err(ScrollFailure::Stale);
-                };
-                if scroll_target_is_stale(target, window) {
-                    return Err(ScrollFailure::Stale);
-                }
+    fn perform_scroll_event(
+        &self,
+        target: &Target,
+        window: Option<&Window>,
+        monitor: &Monitor,
+        action: ScrollAction,
+    ) -> Result<(), ScrollFailure> {
+        if !target.window.is_empty() {
+            let Some(window) = window else {
+                return Err(ScrollFailure::Stale);
+            };
+            if scroll_target_is_stale(target, window) {
+                return Err(ScrollFailure::Stale);
             }
+        }
 
-            let point = target.bounds.center();
-            let old_pointer = hypr::cursor()
-                .ok()
-                .and_then(|cursor| {
-                    hypr::monitors()
-                        .ok()?
-                        .into_iter()
-                        .map(|monitor| monitor.monitor)
-                        .find(|monitor| monitor.logical().contains_point(cursor.0, cursor.1))
-                        .map(|monitor| (monitor, cursor))
-                })
-                .filter(|(_, cursor)| {
-                    test || thodu_core::input::should_restore(
-                        hypr::follows_mouse(),
-                        hypr::window_at(cursor.0, cursor.1).as_deref(),
-                        hypr::window_at(point.0, point.1).as_deref(),
-                    )
-                });
-            pointer::move_to(monitor, point).map_err(ScrollFailure::Input)?;
-            let result = (|| {
-                let mut wheel = self
-                    .wheel
-                    .lock()
-                    .map_err(|_| ScrollFailure::Input("wheel lock failed".into()))?;
-                if wheel.is_none() {
-                    *wheel = Some(wheel::Wheel::open().map_err(ScrollFailure::Input)?);
-                }
-                if !target.window.is_empty()
-                    && window.is_some_and(|window| scroll_target_is_stale(target, window))
-                {
-                    return Err(ScrollFailure::Stale);
-                }
-                wheel
-                    .as_mut()
-                    .ok_or_else(|| ScrollFailure::Input("no wheel device".into()))?
-                    .emit(action)
-                    .map_err(ScrollFailure::Input)
-            })();
-            if result.is_ok() {
-                thread::sleep(Duration::from_millis(30));
+        let point = target.bounds.center();
+        pointer::move_to(monitor, point).map_err(ScrollFailure::Input)?;
+        let result = (|| {
+            let mut wheel = self
+                .wheel
+                .lock()
+                .map_err(|_| ScrollFailure::Input("wheel lock failed".into()))?;
+            if wheel.is_none() {
+                *wheel = Some(wheel::Wheel::open().map_err(ScrollFailure::Input)?);
             }
-            if let Some((old_monitor, cursor)) = old_pointer
-                && let Err(error) = pointer::move_to(&old_monitor, cursor)
+            if !target.window.is_empty()
+                && window.is_some_and(|window| scroll_target_is_stale(target, window))
             {
-                eprintln!("thodud: pointer restore after scroll failed: {error}");
+                return Err(ScrollFailure::Stale);
             }
-            result
-        });
+            wheel
+                .as_mut()
+                .ok_or_else(|| ScrollFailure::Input("no wheel device".into()))?
+                .emit(action)
+                .map_err(ScrollFailure::Input)
+        })();
+        if result.is_ok() {
+            thread::sleep(Duration::from_millis(30));
+        }
+        result
     }
 
     fn remove(&self, id: &str) {
@@ -1017,7 +1058,7 @@ impl Daemon {
     /// End a session: at once, putting the pointer back if a click moved
     /// it, or, while a click is still to come, once that click is done.
     fn finish(&self, id: &str) {
-        let restore = {
+        let restores = {
             let Ok(mut sessions) = self.sessions.lock() else {
                 return;
             };
@@ -1029,13 +1070,17 @@ impl Daemon {
                 self.changed.notify_all();
                 return;
             }
-            sessions.remove(id).and_then(|e| e.restore)
+            sessions
+                .remove(id)
+                .map(|entry| [entry.restore, entry.scroll_restore])
         };
         self.changed.notify_all();
-        if let Some((monitor, point)) = restore
-            && let Err(e) = pointer::move_to(&monitor, point)
-        {
-            eprintln!("thodud: {id}: the pointer did not go back: {e}");
+        if let Some(restores) = restores {
+            for (monitor, point) in restores.into_iter().flatten() {
+                if let Err(e) = pointer::move_to(&monitor, point) {
+                    eprintln!("thodud: {id}: the pointer did not go back: {e}");
+                }
+            }
         }
     }
 
@@ -1133,6 +1178,8 @@ impl Daemon {
                 shift,
                 ctrl,
             } => self.key(&session, &key, shift, ctrl, generation),
+            Request::ScrollReady { session } => self.scroll_ready(&session),
+            Request::ScrollStop { session } => self.scroll_stop(&session),
             Request::Hidden { session } => self.hidden(&session),
             Request::Drawn { session, overlays } => self.drawn(&session, overlays),
             // serve() registers the connection once the reply is written.
@@ -1163,6 +1210,33 @@ fn with_grid_note(status: String, session: &Session, asked: bool) -> String {
     } else {
         format!("{status}; no targets found, so the grid is open")
     }
+}
+
+/// REQ-SESSION-08: routine collection counts expire, while incomplete or
+/// failed work and empty sessions keep their explanation visible.
+fn status_persistent(status: &str, collecting: bool, no_targets: bool) -> bool {
+    if collecting || no_targets {
+        return true;
+    }
+    let status = status.to_ascii_lowercase();
+    [
+        "missed its",
+        "unavailable",
+        "unregistered",
+        "failed",
+        "error",
+        "could not",
+        "budget",
+        "cut short",
+        "no targets found",
+        "scroll target moved",
+        "scroll cancelled",
+        "needs /dev/uinput",
+        "wheel lock failed",
+        "using the defaults",
+    ]
+    .iter()
+    .any(|marker| status.contains(marker))
 }
 
 fn no_active_window_scope(
@@ -1324,6 +1398,23 @@ fn scroll_target_is_stale(target: &Target, window: &Window) -> bool {
     let owner = hypr::window_at(target.bounds.center().0, target.bounds.center().1);
     target_is_stale(target, window, now.as_ref())
         || visible_target_owner_changed(target, owner.as_deref())
+}
+
+fn scroll_restore_candidate(target: &Target, test: bool) -> Option<(Monitor, (i32, i32))> {
+    let cursor = hypr::cursor().ok()?;
+    let monitor = hypr::monitors()
+        .ok()?
+        .into_iter()
+        .map(|monitor| monitor.monitor)
+        .find(|monitor| monitor.logical().contains_point(cursor.0, cursor.1))?;
+    let point = target.bounds.center();
+    (test
+        || thodu_core::input::should_restore(
+            hypr::follows_mouse(),
+            hypr::window_at(cursor.0, cursor.1).as_deref(),
+            hypr::window_at(point.0, point.1).as_deref(),
+        ))
+    .then_some((monitor, cursor))
 }
 
 fn restart_address(named: bool, scope: &str, windows: &[Window]) -> Option<String> {
@@ -1554,24 +1645,21 @@ mod tests {
     use thodu_core::model::Window;
 
     use std::collections::{HashMap, HashSet};
-    use std::io::BufRead;
-    use std::os::unix::net::UnixStream;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicU64};
     use std::sync::{Condvar, Mutex, mpsc};
-    use std::thread;
     use std::time::{Duration, Instant};
 
     use thodu_core::model::{ActionKind, Monitor, Rect, Role, Source as TargetSource, Target};
     use thodu_core::protocol::{ErrorKind, Timing};
-    use thodu_core::session::{Key, ScrollAction, ScrollAxis, Session, State};
+    use thodu_core::session::{Key, ScrollAxis, Session, State};
     use thodu_core::{labels, protocol};
 
     use super::{
         Daemon, Entry, WORKSPACE_CHANGE_WAIT, WindowScope, grid_window, image_fallback_exclusions,
         merge_fallback, no_active_window_scope, parse_key, refresh_options, restart_address,
-        scoped_windows, start_refreshed_session, visible_target_owner_changed,
+        scoped_windows, start_refreshed_session, status_persistent, visible_target_owner_changed,
         wait_for_workspace_change, window_for_target, with_grid_note,
     };
     use crate::sources::{self, Found, Source};
@@ -1623,10 +1711,10 @@ mod tests {
         assert_eq!(probes, 3);
     }
 
-    // REQ-ACT-04: wheel input waits until the overlay reports hidden, then
-    // returns the same scroll session to showing with its pane still selected.
+    // REQ-ACT-04: wheel input waits for pointer pass-through, then resumes
+    // the same scroll session without unmapping its keyboard surface.
     #[test]
-    fn req_act_04_scroll_waits_for_hidden_and_resumes_the_same_session() {
+    fn req_act_04_scroll_ready_sends_one_wheel_action_and_resumes_session() {
         let monitor = Monitor {
             name: "M".into(),
             x: 0,
@@ -1645,8 +1733,13 @@ mod tests {
             actions: vec![ActionKind::Scroll],
             window: window.address.clone(),
         };
+        let mut session = Session::new_scroll(vec![target.clone()]);
+        session.key(Key::Char {
+            c: 'j',
+            shift: false,
+        });
         let entry = Entry {
-            session: Session::new_scroll(vec![target.clone()]),
+            session,
             window: Some(WindowScope {
                 windows: HashMap::from([(window.address.clone(), window.clone())]),
                 refetch_address: None,
@@ -1665,55 +1758,31 @@ mod tests {
             workspace_changed: false,
             closing: false,
             restore: None,
+            scroll_restore: None,
+            scroll_released: false,
         };
         let daemon = daemon_with_entry(entry);
-        let (client, server) = UnixStream::pair().expect("create overlay listener");
-        daemon.listeners.lock().unwrap().add(server);
-        client
-            .set_read_timeout(Some(Duration::from_secs(1)))
-            .expect("set listener timeout");
-
         let (sent, received) = mpsc::channel();
-        let worker = {
-            let daemon = Arc::clone(&daemon);
-            thread::spawn(move || {
-                daemon.scroll_with(
-                    "s1",
-                    ScrollAction {
-                        target: 0,
-                        axis: ScrollAxis::Vertical,
-                        value: -1,
-                    },
-                    move |pane, owner, _, action, _| {
-                        sent.send((
-                            pane.bounds.center(),
-                            owner.map(|w| w.address.clone()),
-                            action,
-                        ))
-                        .expect("report injected wheel event");
-                        Ok(())
-                    },
-                );
+        let reply = daemon
+            .scroll_ready_with("s1", move |pane, owner, _, action, _| {
+                sent.send((
+                    pane.bounds.center(),
+                    owner.map(|w| w.address.clone()),
+                    action,
+                ))
+                .expect("report injected wheel event");
+                Ok(())
             })
-        };
-        assert!(received.recv_timeout(Duration::from_millis(30)).is_err());
-        daemon.hidden("s1").expect("overlay hidden event");
-        let (point, owner, action) = received
-            .recv_timeout(Duration::from_secs(1))
-            .expect("wheel action followed hidden event");
+            .expect("pointer pass-through ready");
+        let (point, owner, action) = received.recv().expect("one wheel event");
         assert_eq!(point, (40, 40));
         assert_eq!(owner.as_deref(), Some("0x1"));
         assert_eq!(action.axis, ScrollAxis::Vertical);
         assert_eq!(action.value, -1);
-        worker.join().expect("scroll worker completed");
+        let view = reply.view.expect("resumed view");
+        assert_eq!(view.state, State::Showing);
+        assert_eq!(view.visible, ["pane"]);
 
-        let mut pushed = String::new();
-        std::io::BufReader::new(client)
-            .read_line(&mut pushed)
-            .expect("read resumed session");
-        let event: protocol::OpenEvent =
-            serde_json::from_str(&pushed).expect("parse resumed session");
-        assert_eq!(event.session, "s1");
         let sessions = daemon.sessions.lock().unwrap();
         let entry = sessions.get("s1").expect("session remains open");
         assert_eq!(entry.session.state, State::Showing);
@@ -1739,6 +1808,29 @@ mod tests {
                 format!("0 targets from {}", self.0),
             ))
         }
+    }
+
+    // REQ-SESSION-08: important diagnostics persist while routine counts can expire.
+    #[test]
+    fn req_session_08_status_persistence_marks_attention_states() {
+        assert!(!status_persistent(
+            "20 targets from atspi in 14 ms",
+            false,
+            false
+        ));
+        assert!(status_persistent(
+            "atspi missed its 80 ms budget",
+            false,
+            false
+        ));
+        assert!(status_persistent("atspi unavailable", false, false));
+        assert!(status_persistent("0 scroll areas from atspi", false, true));
+        assert!(status_persistent("20 targets from atspi", true, false));
+        assert!(status_persistent(
+            "config parse failed; using the defaults",
+            false,
+            false
+        ));
     }
 
     // REQ-SESSION-04: when every source returns nothing, the grid opens
@@ -1873,6 +1965,8 @@ mod tests {
             workspace_changed: false,
             closing: false,
             restore: None,
+            scroll_restore: None,
+            scroll_released: true,
         };
 
         assert!(merge_fallback(
@@ -2018,6 +2112,8 @@ mod tests {
             workspace_changed: false,
             closing: false,
             restore: None,
+            scroll_restore: None,
+            scroll_released: true,
         });
         let worker = Arc::clone(&daemon);
         let (tx, rx) = mpsc::channel();
@@ -2080,6 +2176,8 @@ mod tests {
             workspace_changed: false,
             closing: false,
             restore: None,
+            scroll_restore: None,
+            scroll_released: true,
         };
 
         let active = daemon_with_entry(entry());
@@ -2142,6 +2240,8 @@ mod tests {
             workspace_changed: false,
             closing: false,
             restore: None,
+            scroll_restore: None,
+            scroll_released: true,
         });
 
         let busy = daemon.key("s1", "A", false, false, 0).unwrap_err();
@@ -2193,6 +2293,8 @@ mod tests {
             workspace_changed: false,
             closing: false,
             restore: None,
+            scroll_restore: None,
+            scroll_released: true,
         });
 
         let reply = daemon.key("s1", "A", true, false, 0).unwrap();
@@ -2317,6 +2419,8 @@ mod tests {
                 workspace_changed: false,
                 closing: false,
                 restore: None,
+                scroll_restore: None,
+                scroll_released: true,
             };
 
             let actual = start_refreshed_session(
@@ -2447,6 +2551,8 @@ mod tests {
             workspace_changed: true,
             closing: false,
             restore: None,
+            scroll_restore: None,
+            scroll_released: true,
         });
         let worker = Arc::clone(&daemon);
         let (tx, rx) = mpsc::channel();

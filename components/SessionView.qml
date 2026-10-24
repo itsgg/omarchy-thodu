@@ -29,6 +29,10 @@ FocusScope {
     property bool searching: false
     property string labelPrefix: ""
     property string status: ""
+    property string statusDisplay: "auto"
+    property bool statusPersistent: false
+    property bool statusExpired: false
+    property int statusTimeoutMs: 2000
     property bool active: false
     property bool collecting: false
     // The targets' version: the grid replaces them as cells are chosen.
@@ -38,6 +42,14 @@ FocusScope {
     // with nothing drawn and the pointer passing through (REQ-ACT-02).
     property bool lingering: false
     property int lingerMs: 300
+    property string heldScrollKey: ""
+    property bool heldScrollShift: false
+    property bool scrollBusy: false
+    property bool scrollPassThrough: false
+    property bool scrollReadySent: false
+    property int scrollRepeatMs: 80
+    property var deferredKey: null
+    property var deferredEnd: null
 
     // A brief session request this often tells a live thodud from a dead
     // one, and shows changes made by keys sent over the IPC in test mode.
@@ -80,13 +92,27 @@ FocusScope {
         view.searching = false;
         view.labelPrefix = "";
         view.status = "";
+        view.statusDisplay = "auto";
+        view.statusPersistent = false;
+        view.statusExpired = false;
         view.collecting = false;
         view.generation = 0;
         view.fetching = false;
         view.lingering = false;
+        view.heldScrollKey = "";
+        view.heldScrollShift = false;
+        view.scrollBusy = false;
+        view.scrollPassThrough = false;
+        view.scrollReadySent = false;
+        view.deferredKey = null;
+        view.deferredEnd = null;
+        view.statusTimeoutMs = 2000;
+        view.scrollRepeatMs = 80;
         view.active = true;
         view.focus = true;
         silence.restart();
+        statusExpiry.stop();
+        scrollRepeat.stop();
         if (reply)
             view.apply(reply);
         else
@@ -96,11 +122,24 @@ FocusScope {
     function end(why, acting) {
         if (!view.active)
             return;
+        if (view.scrollMode && view.scrollBusy && why !== "thodu stopped answering" &&
+                why !== "thodu closed the connection") {
+            view.stopScrollHold("");
+            view.deferredEnd = { why: why, acting: acting };
+            return;
+        }
         view.active = false;
         view.focus = false;
         view.lingering = false;
+        view.heldScrollKey = "";
+        view.scrollBusy = false;
+        view.scrollPassThrough = false;
+        view.deferredKey = null;
+        view.deferredEnd = null;
         silence.stop();
         linger.stop();
+        statusExpiry.stop();
+        scrollRepeat.stop();
         view.finished(why, acting);
     }
 
@@ -111,6 +150,8 @@ FocusScope {
             return;
         silence.restart();
         if (!reply.ok) {
+            view.scrollBusy = false;
+            view.scrollPassThrough = false;
             view.end(reply.message || "thodud refused the session", false);
             return;
         }
@@ -118,6 +159,9 @@ FocusScope {
             view.end("workspace changed", false);
             return;
         }
+        const wasLoaded = view.loaded;
+        const wasScrollPassThrough = view.scrollPassThrough;
+        const previousStatus = view.status;
         const shownGeneration = reply.view ? (reply.view.generation || 0) : view.generation;
         if (reply.targets) {
             if (!view.loaded || shownGeneration !== view.generation) {
@@ -142,6 +186,8 @@ FocusScope {
         if (!shown)
             return;
         view.collecting = shown.collecting === true || view.fetching;
+        view.statusDisplay = shown.status_display || "auto";
+        view.statusPersistent = shown.status_persistent === true;
         const kept = {};
         for (const id of shown.visible)
             kept[id] = true;
@@ -150,10 +196,27 @@ FocusScope {
         view.labelSelected = shown.label_selected === true;
         view.labelsOnly = shown.labels_only === true;
         view.scrollMode = shown.scroll_mode === true;
+        if (view.scrollMode && shown.state === "acting") {
+            if (!view.scrollPassThrough)
+                view.scrollReadySent = false;
+            view.scrollBusy = true;
+            view.scrollPassThrough = true;
+        } else if (view.scrollMode && shown.state === "showing") {
+            view.scrollBusy = false;
+            view.scrollPassThrough = false;
+            view.scrollReadySent = false;
+            if (wasScrollPassThrough && reply.status && reply.status !== previousStatus)
+                view.stopScrollHold("");
+        }
         view.search = shown.search || "";
         view.searching = shown.searching === true;
         view.labelPrefix = shown.label_prefix || "";
-        if (shown.state === "acting" && shown.linger) {
+        if (!wasLoaded && view.loaded)
+            view.restartStatusExpiry();
+        if (shown.state === "acting" && view.scrollMode) {
+            // The layer remains mapped and keyboard-exclusive. Thodu waits
+            // for notifyScrollReady after this frame passes wheel input through.
+        } else if (shown.state === "acting" && shown.linger) {
             if (!view.lingering) {
                 view.lingering = true;
                 linger.restart();
@@ -163,6 +226,21 @@ FocusScope {
             view.end("acting", true);
         } else if (shown.state === "closed") {
             view.end("closed", false);
+        }
+        if (shown.state === "showing" && view.scrollMode && view.deferredEnd !== null) {
+            const pending = view.deferredEnd;
+            view.deferredEnd = null;
+            view.end(pending.why, pending.acting);
+        } else if (shown.state === "showing" && view.scrollMode && view.deferredKey !== null) {
+            const pending = view.deferredKey;
+            view.deferredKey = null;
+            if (pending.key === Qt.Key_Escape) {
+                view.end("escape", false);
+            } else if (!view.collecting) {
+                const request = view.keyRequest(pending.key, pending.modifiers, pending.text, pending.autoRepeat);
+                if (request)
+                    view.send(request);
+            }
         }
     }
 
@@ -204,6 +282,70 @@ FocusScope {
         return { op: "key", session: view.session, generation: view.generation, key: name, shift: shift, ctrl: ctrl };
     }
 
+    function scrollKeyName(key) {
+        if (key === Qt.Key_H) return "h";
+        if (key === Qt.Key_J) return "j";
+        if (key === Qt.Key_K) return "k";
+        if (key === Qt.Key_L) return "l";
+        return "";
+    }
+
+    function scrollKeyCode(name) {
+        if (name === "h") return Qt.Key_H;
+        if (name === "j") return Qt.Key_J;
+        if (name === "k") return Qt.Key_K;
+        if (name === "l") return Qt.Key_L;
+        return Qt.Key_unknown;
+    }
+
+    function startScrollHold(name, shift) {
+        if (!view.active || !view.scrollMode || view.targets.length === 0 || name.length !== 1)
+            return;
+        view.heldScrollKey = name;
+        view.heldScrollShift = shift;
+        if (view.scrollBusy)
+            return;
+        const request = view.keyRequest(view.scrollKeyCode(name), shift ? Qt.ShiftModifier : Qt.NoModifier, name, false);
+        if (!request)
+            return;
+        view.scrollBusy = true;
+        view.send(request);
+    }
+
+    function repeatScrollHold() {
+        if (!view.active || !view.scrollMode || view.scrollBusy || view.heldScrollKey.length === 0)
+            return;
+        const request = view.keyRequest(view.scrollKeyCode(view.heldScrollKey),
+                                        view.heldScrollShift ? Qt.ShiftModifier : Qt.NoModifier,
+                                        view.heldScrollKey, false);
+        if (!request)
+            return;
+        view.scrollBusy = true;
+        view.send(request);
+    }
+
+    function stopScrollHold(name) {
+        if (name.length > 0 && name !== view.heldScrollKey)
+            return;
+        const wasHeld = view.heldScrollKey.length > 0;
+        view.heldScrollKey = "";
+        view.heldScrollShift = false;
+        if (wasHeld && view.active && view.scrollMode)
+            view.send({ op: "scroll-stop", session: view.session });
+    }
+
+    function notifyScrollReady() {
+        if (!view.active || !view.scrollPassThrough || view.scrollReadySent)
+            return;
+        view.scrollReadySent = true;
+        view.send({ op: "scroll-ready", session: view.session });
+    }
+
+    function restartStatusExpiry() {
+        view.statusExpired = false;
+        statusExpiry.restart();
+    }
+
     // The smallest rectangle holding every rectangle in `rects`.
     function bounding(rects) {
         if (rects.length === 0)
@@ -241,7 +383,7 @@ FocusScope {
         if (view.scrollMode) {
             if (view.targets.length === 0)
                 return "no scroll areas | Esc exits";
-            return "j/k scroll | h/l horizontal | Shift+HJKL larger | Tab cycles | digits select | Esc exits";
+            return "hold HJKL to scroll | Shift larger | Tab cycles | digits select | Esc exits";
         }
         if (view.labelPrefix.length > 0)
             return "lowercase continues | uppercase final activates | Tab cycles hints";
@@ -295,6 +437,26 @@ FocusScope {
         event.accepted = true;
         if (!view.active)
             return;
+        const scrollKey = view.scrollMode ? view.scrollKeyName(event.key) : "";
+        if (scrollKey.length > 0) {
+            if (!event.isAutoRepeat)
+                view.startScrollHold(scrollKey, (event.modifiers & Qt.ShiftModifier) !== 0);
+            return;
+        }
+        const modifierKey = event.key === Qt.Key_Shift || event.key === Qt.Key_Control ||
+            event.key === Qt.Key_Alt || event.key === Qt.Key_Meta;
+        if (view.scrollMode && view.scrollBusy && !modifierKey) {
+            view.stopScrollHold("");
+            view.deferredKey = {
+                key: event.key,
+                modifiers: event.modifiers,
+                text: event.text,
+                autoRepeat: event.isAutoRepeat
+            };
+            return;
+        }
+        if (view.scrollMode && !modifierKey)
+            view.stopScrollHold("");
         if (view.collecting && event.key !== Qt.Key_Escape)
             return;
         const request = view.keyRequest(event.key, event.modifiers, event.text, event.isAutoRepeat);
@@ -309,6 +471,13 @@ FocusScope {
         // Any other key ends the session at once, and is not seen again.
         else if (view.lingering && (request.key !== "Return" || request.shift || request.ctrl))
             view.end("a key in the wait after a click", false);
+    }
+
+    Keys.onReleased: event => {
+        event.accepted = true;
+        if (!view.active || event.isAutoRepeat || !view.scrollMode)
+            return;
+        view.stopScrollHold(view.scrollKeyName(event.key));
     }
 
     Timer {
@@ -329,6 +498,20 @@ FocusScope {
         id: silence
         interval: view.silenceMs
         onTriggered: view.end("thodud stopped answering", false)
+    }
+
+    Timer {
+        id: statusExpiry
+        interval: view.statusTimeoutMs
+        onTriggered: view.statusExpired = true
+    }
+
+    Timer {
+        id: scrollRepeat
+        interval: view.scrollRepeatMs
+        repeat: true
+        running: view.active && view.scrollMode && view.heldScrollKey.length > 0
+        onTriggered: view.repeatScrollHold()
     }
 
     // The focused target's bounds, for a search that has not narrowed to
@@ -354,6 +537,15 @@ FocusScope {
     readonly property var gridCells: view.loaded && !view.lingering ? view.targets.filter(t => t.source === "grid") : []
     readonly property var gridArea: view.bounding(view.gridCells.map(t => t.bounds))
     readonly property bool zoomed: view.gridCells.length > 0 && view.gridArea.w * view.gridArea.h < view.area.w * view.area.h
+    readonly property var scrollHole: {
+        const target = view.targets.find(t => t.id === view.focusedId);
+        if (!target)
+            return { x: 0, y: 0 };
+        return {
+            x: target.bounds.x - view.area.x + target.bounds.w / 2 - 1,
+            y: target.bounds.y - view.area.y + target.bounds.h / 2 - 1
+        };
+    }
 
     Repeater {
         model: view.zoomed ? [] : view.gridCells
@@ -475,11 +667,12 @@ FocusScope {
         id: statusLine
         objectName: "status-line"
         readonly property real maxWidth: Math.max(1, Math.min(parent.width - 32, 640))
-        visible: view.loaded && statusText.text.length > 0 && !view.lingering
+        visible: view.loaded && (statusText.shouldShow || hintText.text.length > 0) && !view.lingering
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: parent.bottom
         anchors.bottomMargin: 24
-        width: Math.min(maxWidth, Math.max(statusMetrics.width, hintMetrics.width) + 24)
+        width: Math.min(maxWidth, Math.max(statusText.shouldShow ? statusMetrics.width : 0,
+                                            hintText.text.length > 0 ? hintMetrics.width : 0) + 24)
         height: statusContent.implicitHeight + 16
         radius: 6
         color: view.background
@@ -498,6 +691,11 @@ FocusScope {
                 width: parent.width
                 text: view.labelPrefix.length > 0 ? view.labelPrefix.toUpperCase() :
                     (view.search || view.searching ? "/" + view.search : view.status)
+                readonly property bool shouldShow: text.length > 0 && (view.labelPrefix.length > 0 || view.search.length > 0 ||
+                    view.searching || view.collecting || view.statusPersistent ||
+                    view.statusDisplay === "always" ||
+                    (view.statusDisplay === "auto" && !view.statusExpired))
+                visible: shouldShow
                 wrapMode: Text.Wrap
                 color: view.foreground
                 font.family: view.fontFamily

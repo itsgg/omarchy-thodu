@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+use crate::config::StatusDisplay;
 use crate::model::{ActionKind, Rect, Role, Source};
 use crate::session::State;
 
@@ -53,6 +54,15 @@ pub enum Request {
         shift: bool,
         #[serde(default)]
         ctrl: bool,
+    },
+    /// The overlay's pointer region passes wheel events through while it
+    /// keeps exclusive keyboard focus; perform one pending scroll action.
+    ScrollReady {
+        session: String,
+    },
+    /// The held scroll key was released; restore the pointer when safe.
+    ScrollStop {
+        session: String,
     },
     /// The overlay is gone; a pending action may run.
     Hidden {
@@ -234,6 +244,12 @@ pub struct View {
     /// The session uses pane selection and wheel keys instead of hint actions.
     #[serde(default)]
     pub scroll_mode: bool,
+    /// How routine status details are presented (REQ-SESSION-08).
+    #[serde(default)]
+    pub status_display: StatusDisplay,
+    /// Status details that need attention remain visible in every mode.
+    #[serde(default)]
+    pub status_persistent: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

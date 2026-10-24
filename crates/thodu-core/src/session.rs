@@ -10,6 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::{Config, StatusDisplay};
 use crate::grid;
 use crate::labels;
 use crate::model::{Rect, Role, Target};
@@ -121,6 +122,9 @@ pub struct Session {
     /// Bumped whenever the targets change, so the overlay fetches them.
     pub generation: u32,
     pub scroll_mode: bool,
+    pub status_display: StatusDisplay,
+    pub scroll_step: u16,
+    pub scroll_shift_step: u16,
     pub scroll_number: String,
     scroll_number_origin: Option<Option<usize>>,
     scroll_action: Option<ScrollAction>,
@@ -160,6 +164,9 @@ impl Session {
             scroll_number: String::new(),
             scroll_number_origin: None,
             scroll_action: None,
+            status_display: StatusDisplay::Auto,
+            scroll_step: 1,
+            scroll_shift_step: 5,
             reserved_label_prefix: None,
         }
     }
@@ -179,10 +186,32 @@ impl Session {
         self.scroll_action.take()
     }
 
+    pub fn pending_scroll_action(&self) -> Option<ScrollAction> {
+        self.scroll_action
+    }
+
     pub fn resume_after_scroll(&mut self) {
         self.state = State::Showing;
         self.act = None;
         self.scroll_action = None;
+    }
+
+    pub fn clear_scroll_targets(&mut self) {
+        self.targets.clear();
+        self.labels.clear();
+        self.focused = None;
+        self.scroll_number.clear();
+        self.scroll_number_origin = None;
+        self.scroll_action = None;
+        self.state = State::Showing;
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    pub fn with_config(mut self, config: &Config) -> Self {
+        self.status_display = config.status_display;
+        self.scroll_step = config.scroll_step;
+        self.scroll_shift_step = config.scroll_shift_step;
+        self
     }
 
     fn scroll_digit(&mut self, digit: u8) {
@@ -254,7 +283,12 @@ impl Session {
         self.scroll_action = Some(ScrollAction {
             target,
             axis,
-            value: direction * if shift { 5 } else { 1 },
+            value: direction
+                * i32::from(if shift {
+                    self.scroll_shift_step
+                } else {
+                    self.scroll_step
+                }),
         });
         self.state = State::Acting;
     }

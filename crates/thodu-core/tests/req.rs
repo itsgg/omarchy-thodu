@@ -450,6 +450,31 @@ fn req_act_04_scroll_keys_make_wheel_actions_without_clicks() {
     assert!(session.act.is_none(), "scroll mode never creates a click");
 }
 
+// REQ-ACT-05: configured normal and Shift steps control the detent count in
+// every direction, including a Shift step smaller than the normal step.
+#[test]
+fn req_act_05_session_uses_configured_steps_in_all_directions() {
+    let settings = config::parse("scroll_step = 4\nscroll_shift_step = 2\n").expect("settings");
+    let mut session =
+        Session::new_scroll(vec![target("pane", Rect::new(10, 20, 80, 60))]).with_config(&settings);
+    for (key, axis, value, shift) in [
+        ('h', ScrollAxis::Horizontal, -4, false),
+        ('j', ScrollAxis::Vertical, -4, false),
+        ('k', ScrollAxis::Vertical, 4, false),
+        ('l', ScrollAxis::Horizontal, 4, false),
+        ('h', ScrollAxis::Horizontal, -2, true),
+        ('j', ScrollAxis::Vertical, -2, true),
+        ('k', ScrollAxis::Vertical, 2, true),
+        ('l', ScrollAxis::Horizontal, 2, true),
+    ] {
+        session.key(Key::Char { c: key, shift });
+        let action = session.take_scroll_action().expect("one wheel action");
+        assert_eq!(action.axis, axis);
+        assert_eq!(action.value, value);
+        session.resume_after_scroll();
+    }
+}
+
 // REQ-ACT-04: a key received while the wheel action is pending cannot close
 // the scroll session or queue a second action.
 #[test]
@@ -1294,13 +1319,49 @@ fn req_search_02_setting() {
     );
     assert_eq!(
         config::parse("labels_only = true\n"),
-        Ok(Config { labels_only: true })
+        Ok(Config {
+            labels_only: true,
+            ..Config::default()
+        })
     );
     assert!(config::parse("label_only = true").is_err(), "unknown key");
     assert!(
         config::parse("labels_only = \"yes\"").is_err(),
         "wrong type"
     );
+}
+
+// REQ-ACT-05: scroll steps default to one and five detents and can be
+// configured independently within bounded values.
+#[test]
+fn req_act_05_scroll_steps_are_configurable_and_bounded() {
+    let defaults = Config::default();
+    assert_eq!(defaults.scroll_step, 1);
+    assert_eq!(defaults.scroll_shift_step, 5);
+
+    let custom = config::parse("scroll_step = 4\nscroll_shift_step = 2\n").expect("valid steps");
+    assert_eq!(custom.scroll_step, 4);
+    assert_eq!(
+        custom.scroll_shift_step, 2,
+        "Shift may be slower than normal"
+    );
+
+    assert!(config::parse("scroll_step = 0").is_err());
+    assert!(config::parse("scroll_shift_step = 101").is_err());
+}
+
+// REQ-SESSION-08: status detail accepts the three documented display modes.
+#[test]
+fn req_session_08_status_display_config_defaults_and_parses() {
+    assert_eq!(
+        Config::default().status_display,
+        thodu_core::config::StatusDisplay::Auto
+    );
+    for mode in ["auto", "always", "off"] {
+        let config = config::parse(&format!("status_display = \"{mode}\"\n")).expect("mode");
+        assert_eq!(format!("{:?}", config.status_display).to_lowercase(), mode);
+    }
+    assert!(config::parse("status_display = \"sometimes\"").is_err());
 }
 
 fn role_named(name: &str) -> Role {
