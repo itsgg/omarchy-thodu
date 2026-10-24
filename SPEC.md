@@ -12,16 +12,16 @@ Requirement IDs are REQ-<AREA>-<NN>, with these areas: SESSION (starting and end
 
 ## 2. Scope and non-goals
 
-This spec covers SEED section 9's first coherent experience: click mode with search and the grid, across every visible window on the focused window's monitor, on GG's laptop. Targets come from the accessibility tree for GTK3, GTK4, Qt Widgets, Electron apps and Chromium's own controls, the Omarchy bar, and a bounded image supplement after primary targets. Every click action and Escape work.
+This spec covers SEED section 9's first coherent experience: click mode with search and the grid, plus keyboard scroll mode, across every visible window on the focused window's monitor, on GG's laptop. Targets come from the accessibility tree for GTK3, GTK4, Qt Widgets, Electron apps and Chromium's own controls, the Omarchy bar, and a bounded image supplement after primary targets. Every click action, scroll direction and Escape work.
 
-Out of this milestone, and designed for so that no code assumes they never come: scroll mode, web page targets (SEED section 5, source 2), full screen-image coverage for foot and Zed, drag and hover, the agent interface beyond `thodu targets`, more than one monitor. REQ-SRC-06 adds bounded image targets to every visible-window collection; it does not promise full image coverage. Permanently out (SEED section 9): desktops other than Omarchy.
+Out of this milestone, and designed for so that no code assumes they never come: direct web page targets (SEED section 5, source 2), full screen-image coverage for foot and Zed, drag and hover, the agent interface beyond `thodu targets`, more than one monitor. REQ-SRC-06 adds bounded image targets to every visible-window collection; it does not promise full image coverage. Permanently out (SEED section 9): desktops other than Omarchy.
 
 ## 3. Terms
 
 - Target: something a mouse could act on, with bounds, a role, text and a source (section 5).
 - Label: the letters drawn over a target; typing it with Shift selects the target.
 - Visible window: a mapped, non-hidden client on the focused window's monitor that is on its active workspace, pinned, or on a shown special workspace.
-- Source: where targets come from: `atspi`, `shell`, a bounded `image` supplement for every visible-window collection, and `grid` in this milestone; full `image` coverage and `web` later.
+- Source: where targets come from: `atspi`, `shell`, a bounded `image` supplement for every visible-window collection, a window-sized fallback in scroll mode, and `grid` in this milestone; full `image` coverage and direct `web` targets later.
 - Session: one press of the key until an action or Escape.
 - Logical coordinates: Hyprland's layout coordinates, in which a window's `at` and `size` are given; one logical unit is `scale` physical pixels on that monitor (1.25 on eDP-1).
 - Focused window: Hyprland's `activewindow`.
@@ -33,7 +33,7 @@ Four components, each with one job:
 
 1. `thodud`, the service: collects targets from the sources, assigns labels, owns sessions, performs actions, and answers the IPC of section 7. It runs as a systemd user service started with the session.
 2. The overlay, `io.github.itsgg.thodu`: an omarchy-shell plugin of kind overlay (QML). It draws one session's labels on the focused window's monitor, takes the keyboard exclusively, reports keys to `thodud`, and lists the shell's own items for the `shell` source. It holds no target logic. It is kept loaded and listens on `thodud`'s socket, so `thodud` pushes each session to it and summons it through omarchy-shell only when nothing listens. The same plugin is a bar widget too: `BarProbe.qml`, which draws nothing, finds the bar's clickable items once a second and sends them to `thodud` when they change.
-3. `thodu`, the command line: starts sessions (`thodu hints`, `thodu grid`), and reads and acts for agents (`thodu targets`). Hyprland keybindings call it.
+3. `thodu`, the command line: starts sessions (`thodu hints`, `thodu grid`, `thodu scroll`), and reads and acts for agents (`thodu targets`). Hyprland keybindings call it.
 4. Later, the Chromium extension (SEED section 5); not in this milestone.
 
 Layout: `crates/thodu-core` holds the logic with no input or output (the target model, coordinates, labels, search, the grid, the stale check), `crates/thodud` the sources, actions and IPC server, and `crates/thodu` the command line. The overlay sits at the repository root as an Omarchy plugin: `manifest.json`, `Thodu.qml` and `components/`. Conformance cases live in `spec/cases/`, acceptance tests of record in `tests/acceptance/`, QML tests in `tests/qml/`.
@@ -54,8 +54,8 @@ A target is:
 | `bounds` | `{x, y, w, h}` integers | logical coordinates, clipped to the window and the monitor |
 | `role` | string | one of button, link, entry, menu-item, tab, list-item, check, toggle, combo, slider, scroll-area, text, unknown |
 | `text` | string | name, description and value joined by one space, for search |
-| `source` | string | atspi, shell, image or grid |
-| `actions` | list | of click, right, middle, double, focus |
+| `source` | string | atspi, shell, image, window or grid |
+| `actions` | list | of click, right, middle, double, focus or scroll |
 | `window` | string | Hyprland window address, empty for shell targets |
 
 A session holds its id, the window and its geometry at collection, the monitor's name, logical origin and scale, the targets, the labels, and the time each source took.
@@ -143,6 +143,14 @@ Acceptance:
 - scenario: in focused or explicit-window scope, AT-SPI targets covered by another visible window are omitted, and activation rechecks ownership before clicking.
 - live: default hints on a monitor with two visible apps reports targets from both window addresses; `--window` remains scoped to that window.
 
+### REQ-SRC-08: Scroll areas across visible windows
+When scroll mode starts, the system shall collect visible AT-SPI scroll panes and web document viewports from each window in scope. It shall use one window-sized fallback area for a window with no semantic scroll area, clip areas to the window and monitor, keep the owning window address, and omit areas whose center is owned by another visible window. If there are no app windows, it shall return an empty area list and a status message without failing.
+Acceptance:
+- scenario: a replayed tree with nested scroll panes produces separate visible areas in window coordinates, while hidden and off-window panes are omitted.
+- scenario: a Chromium document with no scroll-pane role is exposed as a scroll area; a window with no semantic area gets one window fallback.
+- scenario: areas in overlapping windows retain only the topmost window's areas at overlapped points.
+- scenario: zero visible app windows returns an empty result and status instead of a no-window error.
+
 ### Labels
 
 ### REQ-LABEL-01: Prefix-free labels from the home row
@@ -193,6 +201,14 @@ If the target's window has moved, resized, closed or left the active workspace s
 Acceptance:
 - scenario: WHEN Hyprland reports the window 10 units to the right after collection THEN no pointer event is sent and a new collection runs.
 
+### REQ-ACT-04: Scroll the selected area
+In scroll mode, `j` and `k` shall send one vertical wheel step down and up, and `l` and `h` shall send one horizontal wheel step right and left, at the selected area's center. Shift with those keys shall send five wheel steps. Scrolling shall not click, shall keep the selected area and mode, and shall resume the overlay after the wheel event. The input path shall support GTK, Qt, Chromium and Electron through the installed uinput device. If the owning window moved, closed or is no longer topmost before the wheel event, the system shall send no wheel event and shall report that the session must be restarted.
+Acceptance:
+- scenario: REQ-ACT-04 unit tests verify all four directions and the one-step and five-step amounts, with no button events.
+- scenario: a daemon test waits for the overlay-hidden event, sends the wheel event to the selected point, and returns the same session to showing.
+- scenario: a moved or occluded window produces no wheel event.
+- live: scroll a GTK or Qt pane and a Chromium or Electron document, then confirm the overlay remains in scroll mode.
+
 ### The grid
 
 ### REQ-GRID-01: Every point is reachable
@@ -219,18 +235,18 @@ Acceptance:
 ### Installing
 
 ### REQ-INSTALL-01: Works on Omarchy as installed
-When `thodu install` runs, the system shall set `ACCESSIBILITY_ENABLED=1` and `QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1` in the Hyprland session environment, install a udev rule giving the logged-in user `/dev/uinput` through `uaccess`, install and enable the overlay plugin and the `thodud` user service, and bind keys in the user's Lua configuration; `thodu doctor` shall report each of these as present or missing. On a fresh configuration with no active Thodu bindings, an install without key options shall bind `SUPER + SHIFT + F12` to `thodu hints` and `SUPER + CTRL + F12` to `thodu grid`. When both Thodu bindings already exist, an install without key options shall preserve them. Supplying both `--hints-key` and `--grid-key` shall replace both Thodu bindings with those choices.
+When `thodu install` runs, the system shall set `ACCESSIBILITY_ENABLED=1` and `QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1` in the Hyprland session environment, install a udev rule giving the logged-in user `/dev/uinput` through `uaccess`, install and enable the overlay plugin and the `thodud` user service, and bind keys in the user's Lua configuration; `thodu doctor` shall report each of these as present or missing. On a fresh configuration with no active Thodu bindings, an install without key options shall bind `SUPER + SHIFT + F12` to `thodu hints`, `SUPER + CTRL + F12` to `thodu grid`, and `SUPER + ALT + F12` to `thodu scroll`. Re-running without options shall preserve existing Thodu bindings and add the default scroll binding if it is missing. Supplying `--scroll-key` shall set only the scroll binding; supplying both `--hints-key` and `--grid-key` shall replace those bindings, with `--scroll-key` optional.
 Acceptance:
 - scenario: on a fake home directory, `thodu install` then `thodu doctor` reports every item present, and `thodu doctor` alone reports them missing.
-- scenario: on a fresh fake home directory, non-interactive `thodu install` writes the F12 defaults and `thodu doctor` reports the bindings present.
-- scenario: on a fake home directory with both Thodu bindings, install without key options preserves them.
-- scenario: explicit key options replace both Thodu bindings.
+- scenario: on a fresh fake home directory, non-interactive `thodu install` writes all three F12 defaults and `thodu doctor` reports the bindings present.
+- scenario: on a fake home directory with custom hints and grid bindings, install without key options preserves them and adds the default scroll binding.
+- scenario: `--scroll-key` changes only the scroll binding, and supplying all explicit options replaces all three bindings.
 
 ## 7. Interfaces
 
 The IPC is JSON lines over the Unix socket `$XDG_RUNTIME_DIR/thodu.sock`, one request and one reply per line, each with a `v` field equal to 1.
 
-- `{"v":1,"op":"start","mode":"hints"|"grid","scope":"visible"|"focused"}` returns `{"v":1,"ok":true,"session":ID,"status":TEXT}` and summons the overlay with the session. For hints, omitted `scope` defaults to `visible`; `focused` limits collection to the active window. An optional `window` (a Hyprland address) selects one window, `overlay` false runs the session over the IPC alone, and `test` true summons the overlay without the keyboard, for live checks.
+- `{"v":1,"op":"start","mode":"hints"|"grid"|"scroll","scope":"visible"|"focused"}` returns `{"v":1,"ok":true,"session":ID,"status":TEXT}` and summons the overlay with the session. For hints and scroll, omitted `scope` defaults to `visible`; `focused` limits collection to the active window. An optional `window` (a Hyprland address) selects one window, `overlay` false runs the session over the IPC alone, and `test` true summons the overlay without the keyboard, for live checks.
 - `{"v":1,"op":"session","session":ID}` returns the session's monitor, targets and labels and its view for the overlay; with `"brief":true`, the view alone, for the overlay's heartbeat (REQ-SESSION-03). The view's `labels_only` and `label_selected` booleans are additive presentation fields.
 - `{"v":1,"op":"key","session":ID,"generation":N,"key":NAME,"shift":B,"ctrl":B}` returns the session's new view: its state (showing, acting or closed), the targets still kept, the focused target, the search and the typed label. The daemon ignores a stale-generation request other than Escape and returns the current targets and view; Escape always ends the session.
 - `{"v":1,"op":"hidden","session":ID}`: the overlay's surface is gone, so a pending action may run (REQ-ACT-01); `thodud` acts anyway 400 ms after the action if none comes.
@@ -249,7 +265,7 @@ A `window` is a Hyprland address, or `class:NAME` for the first window of that c
 
 Errors are `{"v":1,"ok":false,"error":KIND,"message":TEXT}` with KIND one of no-window, no-tree, busy, stale, internal, bad-request. The command line prints an ERROR line with the message and exits 1 on any error, 2 on bad arguments.
 
-Keys inside a session: in search-first mode lowercase letters search, while in labels-only mode they type labels until `/` starts a search (REQ-SEARCH-01, REQ-SEARCH-02); Shift with letters types a label, and an uppercase final label character activates its visible target (REQ-SEARCH-01, REQ-ACT-01); Tab and Shift-Tab move the focus, Return, Shift-Return, Control-Return and a double Return act (REQ-ACT-01, REQ-ACT-02), Space opens the grid, Backspace deletes the last letter, Escape ends the session.
+Keys inside a hints session: in search-first mode lowercase letters search, while in labels-only mode they type labels until `/` starts a search (REQ-SEARCH-01, REQ-SEARCH-02); Shift with letters types a label, and an uppercase final label character activates its visible target (REQ-SEARCH-01, REQ-ACT-01); Tab and Shift-Tab move the focus, Return, Shift-Return, Control-Return and a double Return act (REQ-ACT-01, REQ-ACT-02), Space opens the grid, Backspace deletes the last letter, Escape ends the session. In scroll mode, number keys select an area, Tab and Shift-Tab cycle areas, H/J/K/L send wheel steps, Shift+H/J/K/L send larger steps, Return clears the number prefix, and Escape ends the session (REQ-SESSION-07, REQ-ACT-04).
 
 ## 8. Unwanted behavior
 
@@ -268,6 +284,14 @@ When `thodu hints` runs and Hyprland reports no active app window, the system sh
 Acceptance:
 - scenario: with no active app window and a cached bar item, hints labels the bar item on the focused monitor.
 - scenario: with no active app window and no source targets, hints opens the grid and reports that no targets were found.
+
+### REQ-SESSION-07: Select scroll areas from the keyboard
+When `thodu scroll` runs, the system shall start on the focused monitor and collect areas in the requested scope, defaulting to every visible window. It shall number areas in reading order, initially focus the first area, outline the focused area, and show the available keys. Tab and Shift-Tab cycle areas. Decimal digits select an area by its one-based number, with `0` selecting area 10; digits can be combined for areas 11 and above. Return clears the number prefix without scrolling. Escape ends the mode. With no areas, the overlay shall remain dismissible and report that no scroll areas were found, without opening the click grid.
+Acceptance:
+- scenario: a session test verifies reading-order focus, area cycling, one- and multi-digit selection, Backspace, Return and Escape.
+- scenario: a QML test verifies numeric keys are sent only in scroll mode, repeat keys do not issue scrolls, and the overlay identifies the scroll bindings.
+- scenario: `thodu scroll --scope focused` scopes to one app; the default mode includes all visible windows on the monitor.
+- scenario: when no app window is open, `thodu scroll` opens with no areas and remains dismissible.
 
 ### REQ-CLI-02: No Hyprland
 If Hyprland's request socket cannot be reached, then `thodu` shall print an ERROR line saying so and exit 1, without starting a session.
@@ -316,6 +340,7 @@ Unit tests and properties cover labels, search, the grid, coordinates and the st
 - 2026-10-24: change 0014, hints can draw primary labels while the bounded image fallback continues, then update the target generation.
 - 2026-10-24: change 0015, image supplementation applies to every visible-window collection and session keys are generation-checked.
 - 2026-10-24: change 0016, sessions without an active app use Hyprland's focused monitor and can label bar items.
+- 2026-10-24: change 0017, accessible scroll areas, keyboard scroll mode, uinput wheel events and an F12-family scroll binding.
 
 ### Retired
 
