@@ -6,7 +6,7 @@ cd "$root"
 
 require_text() {
   local text="$1"
-  if ! rg --fixed-strings --quiet -- "$text" README.md; then
+  if ! grep --fixed-strings --quiet -- "$text" README.md; then
     printf 'ERROR: README.md is missing browser setup guidance: %s\n' "$text" >&2
     exit 1
   fi
