@@ -1,8 +1,8 @@
 # Thodu
 
-Thodu is a keyboard hint picker for Omarchy. It labels clickable controls in the focused window and the Omarchy bar, so you can choose them without reaching for the pointer. Thodu means "touch" in Tamil.
+Thodu is a keyboard hint picker for Omarchy. It labels clickable controls in every visible window on the focused monitor and in the Omarchy bar, so you can choose them without reaching for the pointer. Thodu means "touch" in Tamil.
 
-This is an early, Omarchy-only milestone. It uses accessibility trees for GTK 3, GTK 4, Qt Widgets, Chromium controls and Electron controls, plus clickable items in the Omarchy bar. When a visible list row is missing from an accessibility tree, a bounded screenshot detector can add click hints for its text and box-like controls. Those image hints have no searchable text and use an amber style. They fill some gaps; they do not recognize every icon or guarantee that every visible control is labeled. A grid remains available for choosing any point on the focused monitor. Web page content, scrolling, dragging and hovering are not supported yet.
+This is an early, Omarchy-only milestone. It uses accessibility trees for GTK 3, GTK 4, Qt Widgets, Chromium controls and Electron controls, plus clickable items in the Omarchy bar. When a visible list row or a large content panel is missing from an accessibility tree, a bounded monitor screenshot detector can add click hints for text and box-like controls. Those image hints have no searchable text and use an amber style. They can miss icons and controls without useful accessibility data or visible text. A grid remains available for choosing any point on the focused monitor. Web page content, scrolling, dragging and hovering are not supported yet.
 
 ## Install
 
@@ -35,7 +35,8 @@ Installation may ask for authorization to add the `/dev/uinput` rule. `thodu doc
 
 ## Use
 
-- Press the hints binding to show labels for targets in the focused window and the bar on its monitor.
+- Press the hints binding to show labels for targets in every visible window on the focused monitor and the bar.
+- Add `--scope focused` to `thodu hints` or `thodu targets` to restrict a request to the focused window. `--window ADDRESS` selects one specific window.
 - In the default search-first mode, type text to narrow targets. Use `Shift` with a label letter to enter a label. In labels-only mode, type a label directly; press `/` to search by text.
 - Completing a label in lowercase focuses it. Making the label's final letter uppercase activates it immediately. `Return` activates the focused target.
 - `Tab` and `Shift+Tab` move focus. `Escape` closes the session. `Space` opens the grid when no target is focused.
@@ -53,12 +54,17 @@ The default is `false`, which starts in search-first mode. Restart an active ses
 ## Commands
 
 ```sh
-thodu hints                  # show target labels
+thodu hints                  # show target labels across visible windows
+thodu hints --scope focused  # show targets from the focused window only
 thodu grid                   # choose a point with the grid
+thodu targets --json         # print targets from visible windows
+thodu targets --scope focused --json  # print targets from the focused window
 thodu doctor                 # check the installation
 thodu bench --sessions 50    # measure time until labels are drawn
 thodu record-tree --out tree.json  # record the focused app accessibility tree
 ```
+
+Each JSON target includes its `window` address and supported `actions`.
 
 `thodu hints` and `thodu grid` accept `--window ADDRESS` to target a Hyprland window address or `class:NAME`. The `--test` option shows an overlay without taking the keyboard, and `--no-overlay` runs a session without showing it. Benchmark samples are stored under `~/.local/share/thodu/bench/`.
 

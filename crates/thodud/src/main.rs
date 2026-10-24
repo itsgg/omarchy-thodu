@@ -53,10 +53,15 @@ const LISTENER_WRITE: Duration = Duration::from_millis(100);
 /// Sessions nobody finished are dropped after this.
 const SESSION_LIFE: Duration = Duration::from_secs(120);
 
+struct WindowScope {
+    windows: HashMap<String, Window>,
+    refetch_address: Option<String>,
+}
+
 struct Entry {
     session: Session,
-    /// None for a grid started with no window focused.
-    window: Option<Window>,
+    /// The geometry snapshot for each app window that contributed targets.
+    window: Option<WindowScope>,
     monitor: Monitor,
     status: String,
     test: bool,
@@ -160,10 +165,34 @@ impl Daemon {
         })
     }
 
+    /// The default scope is every mapped client shown on the focused
+    /// window's monitor; an explicit address keeps the single-window scope.
+    fn collection_scope(
+        &self,
+        address: Option<&str>,
+        scope: &str,
+    ) -> Res<(Window, Monitor, Vec<Window>)> {
+        if !matches!(scope, "visible" | "focused") {
+            return Err(fail(
+                ErrorKind::BadRequest,
+                format!("unknown window scope {scope}; use visible or focused"),
+            ));
+        }
+        let active = self.window(address)?;
+        let monitor = hypr::monitor_of(&active).map_err(internal)?;
+        let visible = if address.is_some() || scope == "focused" {
+            Vec::new()
+        } else {
+            hypr::visible_windows(active.monitor).map_err(internal)?
+        };
+        let windows = scoped_windows(&active, visible, address.is_some(), scope);
+        Ok((active, monitor, windows))
+    }
+
     /// Targets of `window` from every source within its budget
     /// (REQ-SRC-05), and a status line.
-    fn collect(&self, window: &Window, monitor: &Monitor) -> Res<(Vec<Target>, String)> {
-        let got = sources::collect(&self.sources, window, monitor);
+    fn collect(&self, windows: &[Window], monitor: &Monitor) -> Res<(Vec<Target>, String)> {
+        let got = sources::collect_visible(&self.sources, windows, monitor);
         Ok((got.targets, got.status.join("; ")))
     }
 
@@ -186,30 +215,31 @@ impl Daemon {
         })
     }
 
-    fn start(&self, window: Option<String>, mode: &str, overlay: bool, test: bool) -> Res<Reply> {
+    fn start(
+        &self,
+        window: Option<String>,
+        scope: &str,
+        mode: &str,
+        overlay: bool,
+        test: bool,
+    ) -> Res<Reply> {
         let grid = mode == "grid";
         let named = window.is_some();
-        let window = match self.window(window.as_deref()) {
-            Ok(w) => Some(w),
-            Err(_) if grid => None,
-            Err(e) => return Err(e),
-        };
-        // The grid covers the focused monitor unless a window is named; it
-        // needs no window, as on an empty workspace.
-        let (window, monitor) = if grid && !named {
+        let (window, monitor, windows) = if grid && !named {
             let focused = hypr::focused_monitor().map_err(internal)?;
-            (grid_window(window, focused.id), focused.monitor)
+            let window = self.window(None).ok();
+            (grid_window(window, focused.id), focused.monitor, Vec::new())
+        } else if grid {
+            let window = self.window(window.as_deref())?;
+            let monitor = hypr::monitor_of(&window).map_err(internal)?;
+            (Some(window), monitor, Vec::new())
         } else {
-            let monitor = match &window {
-                Some(w) => hypr::monitor_of(w),
-                None => hypr::focused_monitor().map(|m| m.monitor),
-            }
-            .map_err(internal)?;
-            (window, monitor)
+            let (active, monitor, windows) = self.collection_scope(window.as_deref(), scope)?;
+            (Some(active), monitor, windows)
         };
         let began = Instant::now();
-        let (targets, status) = match &window {
-            Some(w) if !grid => self.collect(w, &monitor)?,
+        let (targets, status) = match window.as_ref() {
+            Some(_) if !grid => self.collect(&windows, &monitor)?,
             _ => (Vec::new(), "the grid".to_string()),
         };
         let collect_ms = began.elapsed().as_millis() as u64;
@@ -228,7 +258,14 @@ impl Daemon {
                 id.clone(),
                 Entry {
                     session,
-                    window,
+                    window: (!windows.is_empty()).then(|| WindowScope {
+                        windows: windows
+                            .iter()
+                            .cloned()
+                            .map(|window| (window.address.clone(), window))
+                            .collect(),
+                        refetch_address: restart_address(named, scope, &windows),
+                    }),
                     monitor,
                     status: status.clone(),
                     test,
@@ -323,6 +360,8 @@ impl Daemon {
                 role: t.role,
                 text: t.text.clone(),
                 source: t.source,
+                actions: t.actions.clone(),
+                window: t.window.clone(),
                 label: label.clone(),
                 placed: labels::place(&t.bounds, protocol::label_size(label.len()), &area),
             })
@@ -433,20 +472,40 @@ impl Daemon {
         }) else {
             return;
         };
-        let Some((window, monitor, test, target, source)) = sessions.get(id).map(|e| {
+        let Some((window, refetch, monitor, test, target, source)) = sessions.get(id).map(|e| {
             let target = e.session.targets[act.target].clone();
             let source = target.source;
-            (e.window.clone(), e.monitor.clone(), e.test, target, source)
+            (
+                window_for_target(e.window.as_ref(), &target).cloned(),
+                e.window
+                    .as_ref()
+                    .and_then(|scope| scope.refetch_address.clone()),
+                e.monitor.clone(),
+                e.test,
+                target,
+                source,
+            )
         }) else {
             return;
         };
         drop(sessions);
-        if let Some(window) = window.filter(|_| !target.window.is_empty()) {
-            let now = hypr::window(&window.address).ok().flatten();
-            if target_is_stale(&target, &window, now.as_ref()) {
-                eprintln!("thodud: {id}: the window moved since collection; collecting again");
+        if !target.window.is_empty() {
+            let Some(window) = window else {
                 self.remove(id);
-                if let Err(e) = self.start(Some(window.address.clone()), "hints", true, test) {
+                return;
+            };
+            let now = hypr::window(&window.address).ok().flatten();
+            let owner = if refetch.is_none() && !target.window.is_empty() {
+                hypr::window_at(target.bounds.center().0, target.bounds.center().1)
+            } else {
+                None
+            };
+            let newly_covered =
+                visible_target_owner_changed(&target, refetch.as_deref(), owner.as_deref());
+            if target_is_stale(&target, &window, now.as_ref()) || newly_covered {
+                eprintln!("thodud: {id}: the target changed or became covered; collecting again");
+                self.remove(id);
+                if let Err(e) = self.start(refetch, "visible", "hints", true, test) {
                     eprintln!("thodud: {id}: {}", e.message.unwrap_or_default());
                 }
                 return;
@@ -626,10 +685,9 @@ impl Daemon {
         Ok(Reply::ok())
     }
 
-    fn targets(&self, window: Option<String>) -> Res<Reply> {
-        let window = self.window(window.as_deref())?;
-        let monitor = hypr::monitor_of(&window).map_err(internal)?;
-        let (targets, status) = self.collect(&window, &monitor)?;
+    fn targets(&self, window: Option<String>, scope: &str) -> Res<Reply> {
+        let (_, monitor, windows) = self.collection_scope(window.as_deref(), scope)?;
+        let (targets, status) = self.collect(&windows, &monitor)?;
         let mut session = Session::new(targets, false);
         let labeled = session
             .targets
@@ -661,10 +719,11 @@ impl Daemon {
         let result = match envelope.request {
             Request::Start {
                 mode,
+                scope,
                 window,
                 overlay,
                 test,
-            } => self.start(window, &mode, overlay, test),
+            } => self.start(window, &scope, &mode, overlay, test),
             Request::Session { session, brief } => self.session(&session, brief),
             Request::Key {
                 session,
@@ -676,7 +735,7 @@ impl Daemon {
             Request::Drawn { session } => self.drawn(&session),
             // serve() registers the connection once the reply is written.
             Request::Listen => Ok(Reply::ok()),
-            Request::Targets { window } => self.targets(window),
+            Request::Targets { window, scope } => self.targets(window, &scope),
             Request::Record { window } => self.record(window),
             Request::ShellItems { screen, items } => {
                 if let Ok(mut known) = self.shell.items.lock() {
@@ -702,6 +761,46 @@ fn with_grid_note(status: String, session: &Session, asked: bool) -> String {
     } else {
         format!("{status}; no targets found, so the grid is open")
     }
+}
+
+fn window_for_target<'a>(scope: Option<&'a WindowScope>, target: &Target) -> Option<&'a Window> {
+    scope?.windows.get(&target.window)
+}
+
+fn restart_address(named: bool, scope: &str, windows: &[Window]) -> Option<String> {
+    if named || scope == "focused" {
+        windows.first().map(|window| window.address.clone())
+    } else {
+        None
+    }
+}
+
+fn visible_target_owner_changed(
+    target: &Target,
+    refetch_address: Option<&str>,
+    current_owner: Option<&str>,
+) -> bool {
+    !target.window.is_empty()
+        && refetch_address.is_none()
+        && current_owner != Some(target.window.as_str())
+}
+
+fn scoped_windows(active: &Window, visible: Vec<Window>, named: bool, scope: &str) -> Vec<Window> {
+    let mut windows = if named || scope == "focused" {
+        vec![active.clone()]
+    } else {
+        visible
+    };
+    if let Some(index) = windows
+        .iter()
+        .position(|window| window.address == active.address)
+    {
+        let focused = windows.remove(index);
+        windows.insert(0, focused);
+    } else {
+        windows.insert(0, active.clone());
+    }
+    windows
 }
 
 /// The window a grid with no window named belongs to: the active window
@@ -899,7 +998,8 @@ mod tests {
     use thodu_core::session::{Key, Session};
 
     use super::{
-        Daemon, Entry, WORKSPACE_CHANGE_WAIT, grid_window, parse_key, wait_for_workspace_change,
+        Daemon, Entry, WORKSPACE_CHANGE_WAIT, WindowScope, grid_window, parse_key, restart_address,
+        scoped_windows, visible_target_owner_changed, wait_for_workspace_change, window_for_target,
         with_grid_note,
     };
     use crate::sources::{self, Found, Source};
@@ -982,6 +1082,7 @@ mod tests {
             size: (10, 10),
             workspace: 1,
             monitor,
+            ..Window::default()
         }
     }
 
@@ -992,6 +1093,97 @@ mod tests {
         assert_eq!(grid_window(Some(on(0)), 0), Some(on(0)));
         assert_eq!(grid_window(Some(on(1)), 0), None);
         assert_eq!(grid_window(None, 0), None);
+    }
+
+    // REQ-SRC-07: an action uses the window that produced the target,
+    // instead of the window that happened to start the session.
+    #[test]
+    fn req_src_07_action_uses_the_target_window_address() {
+        let mut second = on(0);
+        second.address = "0x2".into();
+        let scope = WindowScope {
+            windows: HashMap::from([
+                (on(0).address.clone(), on(0)),
+                (second.address.clone(), second),
+            ]),
+            refetch_address: None,
+        };
+        let target = Target {
+            id: "target".into(),
+            bounds: Rect::new(10, 10, 20, 20),
+            role: Role::Button,
+            text: "target".into(),
+            source: TargetSource::Atspi,
+            actions: vec![ActionKind::Click],
+            window: "0x2".into(),
+        };
+
+        assert_eq!(
+            window_for_target(Some(&scope), &target).map(|window| window.address.as_str()),
+            Some("0x2")
+        );
+    }
+
+    // REQ-SRC-07: a stale target refresh retains a request's single-window scope.
+    #[test]
+    fn req_src_07_stale_refresh_preserves_single_window_scope() {
+        let window = on(0);
+        assert_eq!(
+            restart_address(false, "visible", std::slice::from_ref(&window)),
+            None
+        );
+        assert_eq!(
+            restart_address(false, "focused", std::slice::from_ref(&window)),
+            Some(window.address.clone())
+        );
+        assert_eq!(
+            restart_address(true, "visible", std::slice::from_ref(&window)),
+            Some(window.address)
+        );
+    }
+
+    // REQ-SRC-07: if another visible window moves over a target after
+    // collection, activation refreshes instead of clicking the occluder.
+    #[test]
+    fn req_src_07_visible_target_refreshes_when_another_window_owns_its_click_point() {
+        let target = Target {
+            id: "a0".into(),
+            bounds: Rect::new(20, 20, 20, 20),
+            role: Role::Button,
+            text: "Open".into(),
+            source: TargetSource::Atspi,
+            actions: vec![ActionKind::Click],
+            window: "0x1".into(),
+        };
+
+        assert!(!visible_target_owner_changed(&target, None, Some("0x1")));
+        assert!(visible_target_owner_changed(&target, None, Some("0x2")));
+        assert!(visible_target_owner_changed(&target, None, None));
+        assert!(!visible_target_owner_changed(
+            &target,
+            Some("0x1"),
+            Some("0x2")
+        ));
+    }
+
+    // REQ-SRC-07: defaults include every visible window; focused and named
+    // requests stay limited to the active window.
+    #[test]
+    fn req_src_07_request_scope_selects_visible_or_single_window() {
+        let active = on(0);
+        let mut other = on(0);
+        other.address = "0x2".into();
+        let visible = vec![other.clone(), active.clone()];
+
+        let all = scoped_windows(&active, visible.clone(), false, "visible");
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].address, active.address);
+        assert_eq!(all[1].address, other.address);
+        assert_eq!(
+            scoped_windows(&active, visible.clone(), false, "focused").len(),
+            1
+        );
+        assert_eq!(scoped_windows(&active, visible, true, "visible").len(), 1);
     }
 
     // REQ-ACT-02: the focus handoff reply waits until the first click has

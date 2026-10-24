@@ -40,22 +40,31 @@ impl Source for ImageSource {
     }
 
     fn collect(&self, window: &Window, monitor: &Monitor) -> Found {
+        self.collect_windows(std::slice::from_ref(window), monitor)
+    }
+
+    fn collect_many(&self, windows: &[Window], monitor: &Monitor) -> Found {
+        self.collect_windows(windows, monitor)
+    }
+}
+
+impl ImageSource {
+    fn collect_windows(&self, windows: &[Window], monitor: &Monitor) -> Found {
         let started = Instant::now();
-        let active = crate::hypr::active_window()?.ok_or("no focused window")?;
-        if active.address != window.address {
+        if windows.is_empty() {
             return Ok(SourceTargets::new(
                 Vec::new(),
-                "image skipped for a non-focused window",
+                "image skipped with no visible windows",
             ));
         }
 
-        let visible = Rect::new(window.at.0, window.at.1, window.size.0, window.size.1)
-            .intersect(&monitor.logical())
-            .ok_or_else(|| "no visible window area to capture".to_string())?;
+        let visible = monitor.logical();
         let geometry = format!("{},{} {}x{}", visible.x, visible.y, visible.w, visible.h);
         let scale = monitor.scale.to_string();
         let captured = Command::new("grim")
-            .args(["-g", &geometry, "-s", &scale, "-"])
+            // Compression level 0 keeps the PNG stream lossless while
+            // avoiding capture time that would consume the detector budget.
+            .args(["-l", "0", "-g", &geometry, "-s", &scale, "-"])
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .output()
@@ -82,7 +91,9 @@ impl Source for ImageSource {
             scale: monitor.scale as f32,
         };
         let params = DetectParams {
-            downscale_width: 1920,
+            // Bound CPU work on common 1920-pixel outputs while mapping
+            // candidates back to full-resolution coordinates.
+            downscale_width: 960,
             max_elements: 500,
             deadline: Some(started + self.budget),
             ..DetectParams::default()
@@ -108,7 +119,7 @@ impl Source for ImageSource {
                 })
             })
             .collect();
-        let targets = targets_from_detections(window, visible, monitor.scale, &boxes, &[]);
+        let targets = targets_from_monitor_detections(windows, visible, monitor.scale, &boxes, &[]);
         let took = started.elapsed().as_millis();
         let count = targets.len();
         Ok(SourceTargets::new(
@@ -135,6 +146,7 @@ struct DetectionBox {
 
 /// Convert frame-pixel candidates to logical target bounds. `visible` is both
 /// the frame origin and the area to which candidates are clipped.
+#[cfg(test)]
 fn targets_from_detections(
     window: &Window,
     visible: Rect,
@@ -178,11 +190,67 @@ fn targets_from_detections(
         .collect()
 }
 
+/// Convert monitor-image candidates and attach each one to the frontmost
+/// visible window at its click point. A candidate whose click point shifts
+/// when clipped to its window is dropped, keeping its eventual click safe.
+fn targets_from_monitor_detections(
+    windows: &[Window],
+    visible: Rect,
+    scale: f64,
+    detections: &[DetectionBox],
+    accessible: &[Target],
+) -> Vec<Target> {
+    if !scale.is_finite() || scale <= 0.0 {
+        return Vec::new();
+    }
+    detections
+        .iter()
+        .filter(|d| d.confidence >= 0.4)
+        .filter_map(|d| {
+            let logical = |v: i32| (f64::from(v) / scale).round() as i32;
+            let x = visible.x + logical(d.bounds.x);
+            let y = visible.y + logical(d.bounds.y);
+            let right = visible.x + logical(d.bounds.right());
+            let bottom = visible.y + logical(d.bounds.bottom());
+            let bounds = Rect::new(x, y, right - x, bottom - y).intersect(&visible)?;
+            let center = bounds.center();
+            let window = windows
+                .iter()
+                .filter(|window| window.rect().contains_point(center.0, center.1))
+                .min_by_key(|window| window.stacking_key())?;
+            let bounds = bounds.intersect(&window.rect())?;
+            if bounds.center() != center
+                || covered_by_accessible(bounds, &window.address, accessible)
+            {
+                return None;
+            }
+            let role = match d.kind {
+                DetectionKind::TextLine => Role::Text,
+                DetectionKind::Link => Role::Link,
+                DetectionKind::Box => Role::Unknown,
+            };
+            Some((window.address.clone(), bounds, role))
+        })
+        .enumerate()
+        .map(|(i, (window, bounds, role))| Target {
+            id: format!("{window}:i{i}"),
+            bounds,
+            role,
+            text: String::new(),
+            source: From::Image,
+            actions: vec![ActionKind::Click],
+            window,
+        })
+        .collect()
+}
+
 pub(super) fn covered_by_accessible(bounds: Rect, window: &str, accessible: &[Target]) -> bool {
     let area = i64::from(bounds.w) * i64::from(bounds.h);
     area > 0
         && accessible.iter().any(|target| {
-            if target.source != From::Atspi || target.window != window {
+            if target.source == From::Image
+                || (!target.window.is_empty() && target.window != window)
+            {
                 return false;
             }
             target
@@ -236,7 +304,9 @@ fn decode_png(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DetectionBox, DetectionKind, targets_from_detections};
+    use super::{
+        DetectionBox, DetectionKind, targets_from_detections, targets_from_monitor_detections,
+    };
     use thodu_core::model::{ActionKind, Rect, Role, Source, Target, Window};
 
     fn window() -> Window {
@@ -249,6 +319,7 @@ mod tests {
             size: (200, 120),
             workspace: 1,
             monitor: 0,
+            ..Window::default()
         }
     }
 
@@ -340,5 +411,45 @@ mod tests {
             &[],
         );
         assert!(!targets.is_empty());
+    }
+
+    // REQ-SRC-06 and REQ-SRC-07: visual candidates from one monitor image
+    // belong to the topmost window at their click point, and AT-SPI wins.
+    #[test]
+    fn req_src_07_monitor_detections_are_addressed_to_the_topmost_window() {
+        let mut front = window();
+        front.address = "0xfront".into();
+        front.at = (0, 0);
+        front.size = (100, 100);
+        front.focus_history_id = 0;
+        let mut back = front.clone();
+        back.address = "0xback".into();
+        back.size = (200, 100);
+        back.floating = true;
+        back.focus_history_id = 3;
+        let detection = |x| DetectionBox {
+            bounds: Rect::new(x, 20, 20, 10),
+            kind: DetectionKind::TextLine,
+            confidence: 0.9,
+        };
+        let accessible = Target {
+            id: "a0".into(),
+            bounds: Rect::new(130, 20, 20, 10),
+            role: Role::Button,
+            text: "accessible".into(),
+            source: thodu_core::model::Source::Atspi,
+            actions: vec![ActionKind::Click],
+            window: "0xback".into(),
+        };
+        let targets = targets_from_monitor_detections(
+            &[front, back],
+            Rect::new(0, 0, 200, 100),
+            1.0,
+            &[detection(20), detection(130)],
+            &[accessible],
+        );
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].window, "0xback");
+        assert_eq!(targets[0].bounds, Rect::new(20, 20, 20, 10));
     }
 }

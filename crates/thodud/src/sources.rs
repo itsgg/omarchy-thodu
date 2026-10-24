@@ -52,6 +52,14 @@ pub trait Source: Send + Sync {
     }
     /// The targets, and what to say about them in the status line.
     fn collect(&self, window: &Window, monitor: &Monitor) -> Found;
+    /// Collect a session spanning multiple windows. Existing single-window
+    /// sources keep their original implementation through this adapter.
+    fn collect_many(&self, windows: &[Window], monitor: &Monitor) -> Found {
+        match windows.first() {
+            Some(window) => self.collect(window, monitor),
+            None => Ok(SourceTargets::new(Vec::new(), "0 targets")),
+        }
+    }
 }
 
 pub struct Collected {
@@ -60,15 +68,26 @@ pub struct Collected {
 }
 
 /// Run primary sources together, then only run fallbacks requested by them.
+#[cfg(test)]
 pub fn collect(sources: &[Arc<dyn Source>], window: &Window, monitor: &Monitor) -> Collected {
+    collect_visible(sources, std::slice::from_ref(window), monitor)
+}
+
+/// Collect targets across every window in the session's visible scope.
+pub fn collect_visible(
+    sources: &[Arc<dyn Source>],
+    windows: &[Window],
+    monitor: &Monitor,
+) -> Collected {
     let (primary, fallback): (Vec<_>, Vec<_>) =
         sources.iter().partition(|source| !source.is_fallback());
-    let mut got = collect_phase(&primary, window, monitor);
+    let mut got = collect_phase(&primary, windows, monitor);
     if got.request_fallback && !fallback.is_empty() {
-        let image = collect_phase(&fallback, window, monitor);
+        let image = collect_phase(&fallback, windows, monitor);
         got.targets.extend(image.targets);
         got.status.extend(image.status);
     }
+    keep_targets_on_topmost_windows(&mut got.targets, windows);
     remove_covered_image_targets(&mut got.targets);
     Collected {
         targets: got.targets,
@@ -82,15 +101,15 @@ struct Phase {
     request_fallback: bool,
 }
 
-fn collect_phase(sources: &[&Arc<dyn Source>], window: &Window, monitor: &Monitor) -> Phase {
+fn collect_phase(sources: &[&Arc<dyn Source>], windows: &[Window], monitor: &Monitor) -> Phase {
     let started = Instant::now();
     let (tx, rx) = mpsc::channel();
     for (i, source) in sources.iter().enumerate() {
         let source = Arc::clone(source);
         let tx = tx.clone();
-        let (window, monitor) = (window.clone(), monitor.clone());
+        let (windows, monitor) = (windows.to_vec(), monitor.clone());
         thread::spawn(move || {
-            let _ = tx.send((i, source.collect(&window, &monitor)));
+            let _ = tx.send((i, source.collect_many(&windows, &monitor)));
         });
     }
     drop(tx);
@@ -149,13 +168,57 @@ fn collect_phase(sources: &[&Arc<dyn Source>], window: &Window, monitor: &Monito
 fn remove_covered_image_targets(targets: &mut Vec<Target>) {
     let accessible: Vec<_> = targets
         .iter()
-        .filter(|target| target.source == From::Atspi)
+        .filter(|target| matches!(target.source, From::Atspi | From::Shell))
         .cloned()
         .collect();
     targets.retain(|target| {
         target.source != From::Image
             || !crate::image::covered_by_accessible(target.bounds, &target.window, &accessible)
     });
+}
+
+/// A window target is actionable only when its click point belongs to the
+/// frontmost collected window. Shell targets use their own layer and remain.
+fn keep_targets_on_topmost_windows(targets: &mut Vec<Target>, windows: &[Window]) {
+    targets.retain(|target| {
+        if target.window.is_empty() {
+            return true;
+        }
+        windows
+            .iter()
+            .filter(|window| {
+                window
+                    .rect()
+                    .contains_point(target.bounds.center().0, target.bounds.center().1)
+            })
+            .min_by_key(|window| window.stacking_key())
+            .is_some_and(|window| window.address == target.window)
+    });
+}
+
+fn unregistered_status(window: &Window) -> String {
+    let proc = std::path::PathBuf::from(format!("/proc/{}", window.pid));
+    let exe_result = std::fs::read_link(proc.join("exe"));
+    let exe = exe_result
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    let maps_result = std::fs::read_to_string(proc.join("maps"));
+    let libs: Vec<String> = maps_result
+        .as_deref()
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.split_whitespace().nth(5))
+        .filter(|p| p.contains(".so"))
+        .map(String::from)
+        .collect();
+    if (exe_result.is_err() || maps_result.is_err())
+        && unregistered::toolkit(&exe, &libs).is_empty()
+    {
+        unregistered::inspection_failed(&window.class)
+    } else {
+        unregistered::message(&window.class, &exe, &libs)
+    }
 }
 
 /// The accessibility tree of the window's process.
@@ -179,7 +242,20 @@ impl Source for Atspi {
     }
 
     fn collect(&self, window: &Window, monitor: &Monitor) -> Found {
+        self.collect_windows(std::slice::from_ref(window), monitor)
+    }
+
+    fn collect_many(&self, windows: &[Window], monitor: &Monitor) -> Found {
+        self.collect_windows(windows, monitor)
+    }
+}
+
+impl Atspi {
+    fn collect_windows(&self, windows: &[Window], monitor: &Monitor) -> Found {
         let started = Instant::now();
+        if windows.is_empty() {
+            return Ok(SourceTargets::new(Vec::new(), "0 targets from atspi"));
+        }
         let mut bus = self.bus.lock().map_err(|_| "bus lock".to_string())?;
         if bus.is_none() {
             *bus = Some(atspi::Bus::connect()?);
@@ -189,54 +265,55 @@ impl Source for Atspi {
         // The walk stops short of the budget, so its partial tree still
         // arrives in time.
         let mut walk = atspi::Walk::new(self.budget.saturating_sub(self.budget / 8));
-        let snapshot = atspi::snapshot(reader, window, monitor, &mut walk, &mut woken);
+        let snapshots = atspi::snapshot_many(reader, windows, monitor, &mut walk, &mut woken);
         let took = started.elapsed().as_millis();
-        if snapshot.apps.is_empty() {
-            // REQ-SESSION-05: say what the app needs; the other sources
-            // carry on.
-            let proc = std::path::PathBuf::from(format!("/proc/{}", window.pid));
-            let exe_result = std::fs::read_link(proc.join("exe"));
-            let exe = exe_result
-                .as_ref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default();
-            let maps_result = std::fs::read_to_string(proc.join("maps"));
-            let libs: Vec<String> = maps_result
-                .as_deref()
-                .unwrap_or_default()
-                .lines()
-                .filter_map(|l| l.split_whitespace().nth(5))
-                .filter(|p| p.contains(".so"))
-                .map(String::from)
-                .collect();
-            if (exe_result.is_err() || maps_result.is_err())
-                && unregistered::toolkit(&exe, &libs).is_empty()
-            {
-                return Ok(SourceTargets::new(
-                    Vec::new(),
-                    unregistered::inspection_failed(&window.class),
-                )
-                .with_fallback());
+        let mut targets = Vec::new();
+        let mut fallback = false;
+        let mut unavailable = Vec::new();
+        for (window, snapshot) in windows.iter().zip(snapshots.iter()) {
+            if !snapshot.apps.iter().any(|app| app.pid == window.pid) {
+                unavailable.push(unregistered_status(window));
+                fallback = true;
+                continue;
             }
-            return Ok(SourceTargets::new(
-                Vec::new(),
-                unregistered::message(&window.class, &exe, &libs),
-            )
-            .with_fallback());
+            let focused = windows
+                .first()
+                .is_some_and(|first| first.address == window.address);
+            let frame = tree::match_frame_for_window(snapshot, focused);
+            let found = frame
+                .map(|frame| tree::targets(frame, window, monitor))
+                .unwrap_or_default();
+            fallback |= found.is_empty() || frame.is_none_or(tree::needs_image_fallback);
+            targets.extend(found.into_iter().map(|mut target| {
+                target.id = format!("{}:{}", target.window, target.id);
+                target
+            }));
         }
-        let frame = tree::match_frame(&snapshot);
-        let targets = frame
-            .map(|frame| tree::targets(frame, window, monitor))
-            .unwrap_or_default();
-        let request_fallback = targets.is_empty() || frame.is_none_or(tree::needs_image_fallback);
         let cut = if walk.truncated {
             ", cut short at the budget"
         } else {
             ""
         };
-        let said = format!("{} targets from atspi in {took} ms{cut}", targets.len());
+        let said = if unavailable.is_empty() {
+            format!(
+                "{} targets from atspi across {} windows in {took} ms{cut}",
+                targets.len(),
+                windows.len()
+            )
+        } else {
+            format!(
+                "{} targets from atspi across {} windows in {took} ms{cut}; {}",
+                targets.len(),
+                windows.len(),
+                unavailable
+                    .into_iter()
+                    .take(2)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )
+        };
         let result = SourceTargets::new(targets, said);
-        Ok(if request_fallback {
+        Ok(if fallback {
             result.with_fallback()
         } else {
             result
@@ -429,6 +506,7 @@ mod tests {
             size: (100, 100),
             workspace: 1,
             monitor: 0,
+            ..Window::default()
         }
     }
 
@@ -441,6 +519,109 @@ mod tests {
             height: 100,
             scale: 1.0,
         }
+    }
+
+    // REQ-SRC-07: a floating window stays actionable over a tiled window,
+    // even when the tiled window has the newer focus history.
+    #[test]
+    fn req_src_07_targets_follow_floating_over_tiled_stacking() {
+        let mut tiled = window();
+        tiled.focus_history_id = 0;
+        let mut floating = window();
+        floating.address = "0x2".into();
+        floating.at = (50, 0);
+        floating.floating = true;
+        floating.focus_history_id = 3;
+        let target = |id: &str, x, window: &str| Target {
+            id: id.into(),
+            bounds: Rect::new(x, 10, 20, 20),
+            role: Role::Button,
+            text: id.into(),
+            source: From::Atspi,
+            actions: vec![ActionKind::Click],
+            window: window.into(),
+        };
+        let mut targets = vec![
+            target("covered", 60, "0x1"),
+            target("floating", 60, "0x2"),
+            target("visible", 120, "0x2"),
+        ];
+
+        keep_targets_on_topmost_windows(&mut targets, &[tiled, floating]);
+
+        assert_eq!(
+            targets
+                .iter()
+                .map(|target| target.id.as_str())
+                .collect::<Vec<_>>(),
+            ["floating", "visible"]
+        );
+    }
+
+    struct EveryWindow;
+
+    impl Source for EveryWindow {
+        fn name(&self) -> &'static str {
+            "atspi"
+        }
+
+        fn budget(&self) -> Duration {
+            Duration::from_millis(100)
+        }
+
+        fn collect(&self, window: &Window, _: &Monitor) -> Found {
+            Ok(SourceTargets::new(
+                vec![Target {
+                    id: "a0".into(),
+                    bounds: Rect::new(window.at.0 + 10, window.at.1 + 10, 20, 20),
+                    role: Role::Button,
+                    text: window.address.clone(),
+                    source: From::Atspi,
+                    actions: vec![ActionKind::Click],
+                    window: window.address.clone(),
+                }],
+                "targets from every window",
+            ))
+        }
+
+        fn collect_many(&self, windows: &[Window], _: &Monitor) -> Found {
+            Ok(SourceTargets::new(
+                windows
+                    .iter()
+                    .map(|window| Target {
+                        id: "a0".into(),
+                        bounds: Rect::new(window.at.0 + 10, window.at.1 + 10, 20, 20),
+                        role: Role::Button,
+                        text: window.address.clone(),
+                        source: From::Atspi,
+                        actions: vec![ActionKind::Click],
+                        window: window.address.clone(),
+                    })
+                    .collect(),
+                "targets from every window",
+            ))
+        }
+    }
+
+    // REQ-SRC-07: one collection request carries targets from all windows
+    // and preserves their distinct compositor addresses.
+    #[test]
+    fn req_src_07_source_collection_keeps_all_visible_window_targets() {
+        let first = window();
+        let mut second = window();
+        second.address = "0x2".into();
+        second.at = (100, 0);
+        let monitor = Monitor {
+            width: 200,
+            ..monitor()
+        };
+        let sources: Vec<Arc<dyn Source>> = vec![Arc::new(EveryWindow)];
+
+        let got = collect_visible(&sources, &[first.clone(), second.clone()], &monitor);
+
+        assert_eq!(got.targets.len(), 2);
+        assert_eq!(got.targets[0].window, first.address);
+        assert_eq!(got.targets[1].window, second.address);
     }
 
     // REQ-SRC-05: a source that sleeps past its budget is left out and

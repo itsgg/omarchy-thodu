@@ -1,11 +1,10 @@
 //! The accessibility bus, read into the `Snapshot` thodu-core replays.
 //!
-//! Only the frames of the window's own process are read (REQ-SRC-01), and
-//! only the frame that matches the window is walked below its top. A subtree
-//! that is not SHOWING and VISIBLE is not descended into, and the walk stops
-//! at a node cap or a deadline, so one slow application cannot hold a
-//! session up. Each level of the tree is read with all its calls in flight
-//! at once, so a walk costs a round trip per level, not per call.
+//! Only the frames of visible windows' processes are read (REQ-SRC-01), and
+//! only frames matched to those windows are walked below their tops. A
+//! subtree that is not SHOWING and VISIBLE is not descended into, and the
+//! walk stops at a node cap or a shared deadline, so one slow application
+//! cannot hold a session up. Each level is read with calls in flight at once.
 //!
 //! Chromium and Electron keep their tree dormant until something asks for
 //! it: a frame whose only child is the null object is woken with one
@@ -546,6 +545,7 @@ fn wake(bus: &dyn Tree, frame: &Ref, pid: u32, woken: &mut HashSet<u32>) -> bool
 /// The applications of `window`'s process, each frame read at its top,
 /// and the frame that matches the window walked within `walk`'s budget.
 /// `woken` keeps the processes whose tree was woken.
+#[cfg(test)]
 pub fn snapshot(
     bus: &dyn Tree,
     window: &Window,
@@ -553,18 +553,41 @@ pub fn snapshot(
     walk: &mut Walk,
     woken: &mut HashSet<u32>,
 ) -> Snapshot {
+    snapshot_many(bus, std::slice::from_ref(window), monitor, walk, woken)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| Snapshot {
+            window: window.clone(),
+            monitor: monitor.clone(),
+            apps: Vec::new(),
+        })
+}
+
+/// Read each visible process once, then walk each matching frame once for a
+/// session spanning multiple windows.
+pub fn snapshot_many(
+    bus: &dyn Tree,
+    windows: &[Window],
+    monitor: &Monitor,
+    walk: &mut Walk,
+    woken: &mut HashSet<u32>,
+) -> Vec<Snapshot> {
+    if windows.is_empty() {
+        return Vec::new();
+    }
+    let pids: HashSet<u32> = windows.iter().map(|window| window.pid).collect();
     let mut apps = Vec::new();
     let mut frame_refs = Vec::new();
     let mut cached_apps = Vec::new();
-    let gtk4 = uses_gtk4(window.pid);
     for app in bus.apps() {
-        if bus.pid(&app) != Some(window.pid) {
+        let Some(pid) = bus.pid(&app).filter(|pid| pids.contains(pid)) else {
             continue;
-        }
+        };
+        let gtk4 = uses_gtk4(pid);
         if gtk4 && let Some(frames) = bus.cache_frames(&app, walk) {
             apps.push(App {
                 name: String::new(),
-                pid: window.pid,
+                pid,
                 frames,
             });
             frame_refs.push(Vec::new());
@@ -579,46 +602,52 @@ pub fn snapshot(
         let frames = bus.read(&refs).into_iter().map(|(n, _)| n).collect();
         apps.push(App {
             name: bus.name(&app),
-            pid: window.pid,
+            pid,
             frames,
         });
         frame_refs.push(refs);
         cached_apps.push(false);
     }
-    let shallow = Snapshot {
-        window: window.clone(),
-        monitor: monitor.clone(),
-        apps,
-    };
-    let Some(matched) = tree::match_frame(&shallow).cloned() else {
-        return shallow;
-    };
-    let mut snap = shallow.clone();
-    for (a, app) in shallow.apps.iter().enumerate() {
-        for (f, frame) in app.frames.iter().enumerate() {
-            if *frame != matched {
-                continue;
-            }
-            if cached_apps[a] {
-                return snap;
-            }
-            let at = frame_refs[a][f].clone();
-            if wake(bus, &at, window.pid, woken) {
-                // The tree fills in tens of milliseconds; wait for its first
-                // children, within the budget.
-                while Instant::now() + WAKE_POLL < walk.deadline
-                    && !children_ready(&bus.children(&at))
-                {
-                    std::thread::sleep(WAKE_POLL);
-                }
-            }
-            if let Some(full) = walk_from(bus, vec![at], walk).pop() {
-                snap.apps[a].frames[f] = full;
-            }
-            return snap;
+    let mut selected = Vec::new();
+    for (i, window) in windows.iter().enumerate() {
+        let shallow = Snapshot {
+            window: window.clone(),
+            monitor: monitor.clone(),
+            apps: apps.clone(),
+        };
+        let focused = i == 0;
+        if let Some(frame) = tree::match_frame_index(&shallow, focused)
+            && !selected.contains(&frame)
+        {
+            selected.push(frame);
         }
     }
-    snap
+    for (a, f) in selected {
+        if cached_apps[a] {
+            continue;
+        }
+        let pid = apps[a].pid;
+        let at = frame_refs[a][f].clone();
+        if wake(bus, &at, pid, woken) {
+            // The tree fills in tens of milliseconds; wait for its first
+            // children, within the shared session budget.
+            while Instant::now() + WAKE_POLL < walk.deadline && !children_ready(&bus.children(&at))
+            {
+                std::thread::sleep(WAKE_POLL);
+            }
+        }
+        if let Some(full) = walk_from(bus, vec![at], walk).pop() {
+            apps[a].frames[f] = full;
+        }
+    }
+    windows
+        .iter()
+        .map(|window| Snapshot {
+            window: window.clone(),
+            monitor: monitor.clone(),
+            apps: apps.clone(),
+        })
+        .collect()
 }
 
 /// Every frame of `window`'s process walked in full, for record-tree.
@@ -741,6 +770,81 @@ mod tests {
         }
     }
 
+    struct MultiProcess;
+
+    impl MultiProcess {
+        fn node(path: &str) -> Node {
+            let shown = vec!["showing".to_string(), "visible".to_string()];
+            match path {
+                "/frame1" => Node {
+                    role: "frame".into(),
+                    states: shown,
+                    name: "First frame".into(),
+                    extents: Some([0, 0, 100, 100]),
+                    ..Node::default()
+                },
+                "/frame2" => Node {
+                    role: "frame".into(),
+                    states: shown,
+                    name: "Second frame".into(),
+                    extents: Some([0, 0, 100, 100]),
+                    ..Node::default()
+                },
+                "/button1" => Node {
+                    role: "button".into(),
+                    states: shown,
+                    name: "First app".into(),
+                    extents: Some([10, 10, 20, 20]),
+                    ..Node::default()
+                },
+                "/button2" => Node {
+                    role: "button".into(),
+                    states: shown,
+                    name: "Second app".into(),
+                    extents: Some([10, 10, 20, 20]),
+                    ..Node::default()
+                },
+                _ => Node::default(),
+            }
+        }
+    }
+
+    impl Tree for MultiProcess {
+        fn apps(&self) -> Vec<Ref> {
+            vec![r("/app1"), r("/app2")]
+        }
+
+        fn pid(&self, app: &Ref) -> Option<u32> {
+            match app.1.as_str() {
+                "/app1" => Some(11),
+                "/app2" => Some(12),
+                _ => None,
+            }
+        }
+
+        fn name(&self, app: &Ref) -> String {
+            app.1.as_str().to_string()
+        }
+
+        fn read(&self, at: &[Ref]) -> Vec<(Node, Vec<Ref>)> {
+            at.iter()
+                .map(|reference| (Self::node(reference.1.as_str()), self.children(reference)))
+                .collect()
+        }
+
+        fn children(&self, at: &Ref) -> Vec<Ref> {
+            match at.1.as_str() {
+                "/app1" => vec![r("/frame1")],
+                "/app2" => vec![r("/frame2")],
+                "/frame1" => vec![r("/button1")],
+                "/frame2" => vec![r("/button2")],
+                _ => Vec::new(),
+            }
+        }
+
+        fn attributes(&self, _: &Ref) {}
+    }
+
     fn window() -> Window {
         Window {
             address: "0x1".into(),
@@ -751,6 +855,7 @@ mod tests {
             size: (400, 300),
             workspace: 1,
             monitor: 0,
+            ..Window::default()
         }
     }
 
@@ -842,5 +947,51 @@ mod tests {
         assert_eq!(bus.attribute_calls.get(), 0);
         assert!(woken.is_empty());
         assert_eq!(tree::match_frame(&snap).expect("frame").children.len(), 1);
+    }
+
+    // REQ-SRC-07: one AT-SPI scan walks frames from all visible processes.
+    #[test]
+    fn req_src_07_snapshot_collects_each_visible_process() {
+        let bus = MultiProcess;
+        let mut first = window();
+        first.pid = 11;
+        first.size = (100, 100);
+        let second = Window {
+            address: "0x2".into(),
+            class: "other-app".into(),
+            title: String::new(),
+            pid: 12,
+            at: (100, 0),
+            size: (100, 100),
+            workspace: 1,
+            monitor: 0,
+            ..Window::default()
+        };
+        let monitor = Monitor {
+            width: 200,
+            ..monitor()
+        };
+        let mut woken = HashSet::new();
+        let mut walk = Walk::new(Duration::from_secs(1));
+
+        let snapshots = snapshot_many(
+            &bus,
+            &[first.clone(), second.clone()],
+            &monitor,
+            &mut walk,
+            &mut woken,
+        );
+
+        assert_eq!(snapshots.len(), 2);
+        for (i, (window, expected)) in [(&first, "First app"), (&second, "Second app")]
+            .into_iter()
+            .enumerate()
+        {
+            let frame = tree::match_frame_for_window(&snapshots[i], i == 0).expect("own frame");
+            let targets = tree::targets(frame, window, &monitor);
+            assert_eq!(targets.len(), 1);
+            assert_eq!(targets[0].text, expected);
+            assert_eq!(targets[0].window, window.address);
+        }
     }
 }

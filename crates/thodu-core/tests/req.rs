@@ -16,7 +16,7 @@ use thodu_core::perf;
 use thodu_core::protocol::{Envelope, LabeledTarget, OpenEvent, Reply, Request, Timing};
 use thodu_core::session::{Button, DOUBLE_MS, Key, Session, State};
 use thodu_core::stale::{is_stale, target_is_stale};
-use thodu_core::tree::{self, App, Snapshot};
+use thodu_core::tree::{self, App, Node, Snapshot};
 use thodu_core::unregistered;
 
 fn cases(path: &str) -> PathBuf {
@@ -60,6 +60,7 @@ fn window() -> Window {
         size: (400, 300),
         workspace: 1,
         monitor: 0,
+        ..Window::default()
     }
 }
 
@@ -163,6 +164,79 @@ fn req_src_01_frames_are_matched_by_process() {
     }
 }
 
+// REQ-SRC-01 and REQ-SRC-07: active state identifies the focused window,
+// while geometry identifies a distinct background sibling when possible.
+#[test]
+fn req_src_07_same_process_windows_use_their_own_frame_or_skip_ambiguity() {
+    let frame = |name: &str, states: &[&str], width: i32, height: i32| Node {
+        role: "frame".into(),
+        name: name.into(),
+        states: states.iter().map(|state| (*state).into()).collect(),
+        extents: Some([0, 0, width, height]),
+        ..Node::default()
+    };
+    let snapshot = Snapshot {
+        window: Window {
+            address: "0x2".into(),
+            class: "chromium".into(),
+            title: "second".into(),
+            pid: 44,
+            at: (300, 0),
+            size: (300, 200),
+            workspace: 1,
+            monitor: 0,
+            ..Window::default()
+        },
+        monitor: monitor(),
+        apps: vec![App {
+            name: "Chromium".into(),
+            pid: 44,
+            frames: vec![
+                frame(
+                    "focused sibling",
+                    &["showing", "visible", "active"],
+                    800,
+                    600,
+                ),
+                frame("background window", &["showing", "visible"], 300, 200),
+            ],
+        }],
+    };
+    assert_eq!(
+        tree::match_frame_for_window(&snapshot, false).map(|node| node.name.as_str()),
+        Some("background window")
+    );
+    assert_eq!(
+        tree::match_frame_for_window(&snapshot, true).map(|node| node.name.as_str()),
+        Some("focused sibling")
+    );
+
+    let mut ambiguous = snapshot.clone();
+    ambiguous.apps[0].frames[0].extents = Some([0, 0, 300, 200]);
+    assert_eq!(tree::match_frame_for_window(&ambiguous, false), None);
+
+    let mut mismatched = snapshot.clone();
+    mismatched.apps[0].frames.truncate(1);
+    assert_eq!(tree::match_frame_for_window(&mismatched, false), None);
+}
+
+// REQ-SRC-07: IPC calls without a scope request every visible window.
+#[test]
+fn req_src_07_ipc_scope_defaults_to_visible() {
+    for request in [
+        serde_json::json!({"v": 1, "op": "start", "mode": "hints"}),
+        serde_json::json!({"v": 1, "op": "targets"}),
+    ] {
+        let envelope: Envelope = serde_json::from_value(request).expect("request");
+        match envelope.request {
+            Request::Start { scope, .. } | Request::Targets { scope, .. } => {
+                assert_eq!(scope, "visible");
+            }
+            _ => panic!("expected a target scope request"),
+        }
+    }
+}
+
 // REQ-SRC-04: hidden elements and a closed popup's items are not targets.
 #[test]
 fn req_src_04_hidden_and_closed_popups_are_dropped() {
@@ -253,6 +327,25 @@ fn req_src_06_incomplete_list_rows_request_image_fallback() {
         ..Node::default()
     };
     assert!(!tree::needs_image_fallback(&hidden));
+}
+
+// REQ-SRC-06: a large scrollable content region with no accessible
+// children can still contain visible file rows, so image fallback runs.
+#[test]
+fn req_src_06_large_content_area_requests_image_fallback() {
+    let empty_content_area = Node {
+        role: "frame".into(),
+        states: vec!["showing".into(), "visible".into()],
+        extents: Some([0, 0, 800, 600]),
+        children: vec![Node {
+            role: "panel".into(),
+            states: vec!["showing".into(), "visible".into()],
+            extents: Some([200, 50, 580, 500]),
+            ..Node::default()
+        }],
+        ..Node::default()
+    };
+    assert!(tree::needs_image_fallback(&empty_content_area));
 }
 
 // REQ-SRC-04: an element a later dialog covers is not a target.
@@ -1240,6 +1333,8 @@ fn req_cli_01_targets_json_matches_the_recorded_targets() {
             .map(|v| {
                 assert!(v.get("label").is_none(), "no labels in targets --json");
                 assert_eq!(v["source"], "atspi");
+                assert!(v["window"].is_string(), "target window address is present");
+                assert!(v["actions"].is_array(), "target actions are present");
                 let b = &v["bounds"];
                 let at = |k: &str| b[k].as_i64().expect("bound") as i32;
                 (

@@ -1,9 +1,9 @@
 //! thodu, the command line: Hyprland keybindings start sessions with it, and
 //! agents read targets with it (SPEC section 4, item 3).
 //!
-//!   thodu hints [--window ADDRESS] [--test] [--no-overlay]   start a session
+//!   thodu hints [--scope visible|focused] [--window ADDRESS] [--test] [--no-overlay] start a session
 //!   thodu grid [--window ADDRESS] [--test] [--no-overlay]    start on the grid
-//!   thodu targets [--json] [--window ADDRESS] the targets, without labels
+//!   thodu targets [--scope visible|focused] [--json] [--window ADDRESS] print targets without labels
 //!   thodu key SESSION KEY [--shift] [--ctrl]  send a key, for live checks
 //!   thodu close SESSION
 //!   thodu bench [--sessions N] [--window ADDRESS]   time to labels drawn
@@ -983,7 +983,7 @@ fn run(args: &[String]) -> Result<(), String> {
         Some(mode @ ("hints" | "grid")) => {
             check_hyprland()?;
             let reply = ask(
-                json!({"v": VERSION, "op": "start", "mode": mode, "window": value(args, "--window"), "test": flag(args, "--test"), "overlay": !flag(args, "--no-overlay")}),
+                json!({"v": VERSION, "op": "start", "mode": mode, "scope": value(args, "--scope").unwrap_or_else(|| "visible".into()), "window": value(args, "--window"), "test": flag(args, "--test"), "overlay": !flag(args, "--no-overlay")}),
             )?;
             println!(
                 "{} {}",
@@ -992,8 +992,9 @@ fn run(args: &[String]) -> Result<(), String> {
             );
         }
         Some("targets") => {
-            let reply =
-                ask(json!({"v": VERSION, "op": "targets", "window": value(args, "--window")}))?;
+            let reply = ask(
+                json!({"v": VERSION, "op": "targets", "scope": value(args, "--scope").unwrap_or_else(|| "visible".into()), "window": value(args, "--window")}),
+            )?;
             let targets = reply.targets.unwrap_or_default();
             for t in &targets {
                 if flag(args, "--json") {
@@ -1045,7 +1046,7 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) if e.is_empty() => {
             eprintln!(
-                "usage: thodu hints|grid|targets|key|close|bench|record-tree|install [--hints-key KEY --grid-key KEY]|doctor ..."
+                "usage: thodu hints|grid|targets|key|close|bench|record-tree|install [--hints-key KEY --grid-key KEY --scope visible|focused --window ADDRESS]|doctor ..."
             );
             ExitCode::from(2)
         }

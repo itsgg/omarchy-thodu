@@ -144,7 +144,7 @@ impl Monitor {
 }
 
 /// The parts of a Hyprland window the session depends on.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Window {
     pub address: String,
     pub class: String,
@@ -154,10 +154,38 @@ pub struct Window {
     pub size: (i32, i32),
     pub workspace: i64,
     pub monitor: i64,
+    /// Hyprland compositor state used to resolve overlap ownership. This is
+    /// deliberately omitted from recorded snapshots and the IPC contract.
+    #[serde(skip)]
+    pub floating: bool,
+    #[serde(skip)]
+    pub pinned: bool,
+    #[serde(skip)]
+    pub fullscreen: i64,
+    #[serde(skip)]
+    pub focus_history_id: i64,
 }
 
 impl Window {
     pub const fn rect(&self) -> Rect {
         Rect::new(self.at.0, self.at.1, self.size.0, self.size.1)
+    }
+
+    /// Approximate Hyprland's top-to-bottom scene layers. Hyprland draws
+    /// pinned windows over fullscreen, floating windows over tiled windows,
+    /// and its focused window last within a layer.
+    pub fn stacking_key(&self) -> (std::cmp::Reverse<u8>, i64) {
+        let layer = if self.pinned {
+            4
+        } else if self.workspace < 0 {
+            3
+        } else if self.fullscreen == 2 {
+            2
+        } else if self.floating {
+            1
+        } else {
+            0
+        };
+        (std::cmp::Reverse(layer), self.focus_history_id)
     }
 }

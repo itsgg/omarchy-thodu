@@ -70,11 +70,71 @@ pub fn window_from(v: &Value) -> Option<Window> {
             .and_then(Value::as_i64)
             .unwrap_or_default(),
         monitor: v.get("monitor").and_then(Value::as_i64).unwrap_or_default(),
+        floating: v.get("floating").and_then(Value::as_bool) == Some(true),
+        pinned: v.get("pinned").and_then(Value::as_bool) == Some(true),
+        fullscreen: v
+            .get("fullscreen")
+            .and_then(Value::as_i64)
+            .unwrap_or_default(),
+        focus_history_id: v
+            .get("focusHistoryID")
+            .and_then(Value::as_i64)
+            .unwrap_or(i64::MAX),
     })
 }
 
 pub fn active_window() -> Result<Option<Window>, String> {
     Ok(window_from(&json("activewindow")?))
+}
+
+/// Windows shown on one monitor: its active workspace, any shown special
+/// workspace, and pinned clients. The returned order is front to back.
+pub fn visible_windows(monitor_id: i64) -> Result<Vec<Window>, String> {
+    let monitors = json("monitors")?;
+    let clients = json("clients")?;
+    Ok(visible_windows_from(&monitors, &clients, monitor_id))
+}
+
+fn visible_windows_from(monitors: &Value, clients: &Value, monitor_id: i64) -> Vec<Window> {
+    let Some(monitor) = monitors
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|m| m.get("id").and_then(Value::as_i64) == Some(monitor_id))
+    else {
+        return Vec::new();
+    };
+    let active = monitor
+        .get("activeWorkspace")
+        .and_then(|w| w.get("id"))
+        .and_then(Value::as_i64);
+    let special = monitor
+        .get("specialWorkspace")
+        .and_then(|w| w.get("id"))
+        .and_then(Value::as_i64)
+        .filter(|id| *id != 0);
+    let mut windows: Vec<_> = clients
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(order, client)| {
+            if client.get("mapped").and_then(Value::as_bool) == Some(false)
+                || client.get("hidden").and_then(Value::as_bool) == Some(true)
+            {
+                return None;
+            }
+            let window = window_from(client)?;
+            let pinned = client.get("pinned").and_then(Value::as_bool) == Some(true);
+            let shown = active == Some(window.workspace) || special == Some(window.workspace);
+            if window.monitor != monitor_id || (!pinned && !shown) {
+                return None;
+            }
+            Some(((window.stacking_key(), order), window))
+        })
+        .collect();
+    windows.sort_by_key(|(key, _)| *key);
+    windows.into_iter().map(|(_, window)| window).collect()
 }
 
 /// The window at `address`, or with `class:NAME` the first window of that
@@ -198,12 +258,16 @@ pub fn follows_mouse() -> bool {
         .is_none_or(|n| n != 0)
 }
 
-/// The address of the window under a logical point on a shown workspace:
-/// the most recently focused of those holding it, so a floating window
-/// over a tiled one wins.
+/// The address of the frontmost window under a logical point on a shown
+/// workspace.
 pub fn window_at(x: i32, y: i32) -> Option<String> {
-    let shown: Vec<i64> = json("monitors")
-        .ok()?
+    let monitors = json("monitors").ok()?;
+    let clients = json("clients").ok()?;
+    window_at_from(&monitors, &clients, x, y)
+}
+
+fn window_at_from(monitors: &Value, clients: &Value, x: i32, y: i32) -> Option<String> {
+    let shown: Vec<i64> = monitors
         .as_array()?
         .iter()
         .flat_map(|m| {
@@ -213,24 +277,19 @@ pub fn window_at(x: i32, y: i32) -> Option<String> {
         })
         .filter(|id| *id != 0)
         .collect();
-    let clients = json("clients").ok()?;
     clients
         .as_array()?
         .iter()
-        .filter(|c| c.get("mapped").and_then(Value::as_bool) != Some(false))
-        .filter(|c| c.get("hidden").and_then(Value::as_bool) != Some(true))
-        .filter_map(|c| {
+        .enumerate()
+        .filter(|(_, c)| c.get("mapped").and_then(Value::as_bool) != Some(false))
+        .filter(|(_, c)| c.get("hidden").and_then(Value::as_bool) != Some(true))
+        .filter_map(|(order, c)| {
             let w = window_from(c)?;
-            let pinned = c.get("pinned").and_then(Value::as_bool) == Some(true);
-            let history = c
-                .get("focusHistoryID")
-                .and_then(Value::as_i64)
-                .unwrap_or(i64::MAX);
-            ((pinned || shown.contains(&w.workspace)) && w.rect().contains_point(x, y))
-                .then_some((history, w.address))
+            ((w.pinned || shown.contains(&w.workspace)) && w.rect().contains_point(x, y))
+                .then_some((w.stacking_key(), order, w.address))
         })
-        .min()
-        .map(|(_, address)| address)
+        .min_by_key(|(key, order, _)| (*key, *order))
+        .map(|(_, _, address)| address)
 }
 
 #[cfg(test)]
@@ -246,5 +305,100 @@ mod tests {
         assert_eq!(super::active_workspace_id_from(&monitors, "eDP-1"), Some(1));
         assert_eq!(super::active_workspace_id_from(&monitors, "DP-1"), Some(3));
         assert_eq!(super::active_workspace_id_from(&monitors, "missing"), None);
+    }
+
+    // REQ-SRC-07: mapped clients on inactive workspaces are not visible
+    // targets; pinned and shown special-workspace clients are.
+    #[test]
+    fn req_src_07_visible_windows_are_scoped_to_the_monitor_and_shown_workspaces() {
+        let monitors = json!([
+            {
+                "id": 0,
+                "activeWorkspace": { "id": 5 },
+                "specialWorkspace": { "id": -99 }
+            },
+            {
+                "id": 1,
+                "activeWorkspace": { "id": 8 },
+                "specialWorkspace": { "id": 0 }
+            }
+        ]);
+        let client = |address: &str, workspace: i64, monitor: i64, history: i64| {
+            json!({
+                "address": address,
+                "class": "app",
+                "title": "window",
+                "pid": 10,
+                "at": [0, 0],
+                "size": [100, 100],
+                "workspace": { "id": workspace },
+                "monitor": monitor,
+                "mapped": true,
+                "hidden": false,
+                "visible": true,
+                "pinned": false,
+                "floating": false,
+                "fullscreen": 0,
+                "focusHistoryID": history
+            })
+        };
+        let mut pinned = client("0xp", 3, 0, 2);
+        pinned["pinned"] = json!(true);
+        let mut hidden = client("0xh", 5, 0, 1);
+        hidden["hidden"] = json!(true);
+        let mut unmapped = client("0xu", 5, 0, 1);
+        unmapped["mapped"] = json!(false);
+        let clients = json!([
+            client("0xi", 4, 0, 0),
+            client("0xs", -99, 0, 3),
+            pinned,
+            client("0xo", 5, 1, 1),
+            hidden,
+            unmapped,
+            client("0xa", 5, 0, 1)
+        ]);
+
+        let windows = super::visible_windows_from(&monitors, &clients, 0);
+        assert_eq!(
+            windows
+                .iter()
+                .map(|window| window.address.as_str())
+                .collect::<Vec<_>>(),
+            ["0xp", "0xs", "0xa"]
+        );
+    }
+
+    // REQ-SRC-07: Hyprland draws floating windows above tiled windows even
+    // when the tiled window has the newer focus history.
+    #[test]
+    fn req_src_07_floating_window_owns_an_overlap_above_the_active_tiled_window() {
+        let monitors = json!([{
+            "activeWorkspace": { "id": 5 },
+            "specialWorkspace": { "id": 0 }
+        }]);
+        let client = |address: &str, floating: bool, history: i64| {
+            json!({
+                "address": address,
+                "class": "app",
+                "title": "window",
+                "pid": 10,
+                "at": [0, 0],
+                "size": [100, 100],
+                "workspace": { "id": 5 },
+                "monitor": 0,
+                "mapped": true,
+                "hidden": false,
+                "pinned": false,
+                "floating": floating,
+                "fullscreen": 0,
+                "focusHistoryID": history
+            })
+        };
+        let clients = json!([client("0xtiled", false, 0), client("0xfloating", true, 3)]);
+
+        assert_eq!(
+            super::window_at_from(&monitors, &clients, 50, 50).as_deref(),
+            Some("0xfloating")
+        );
     }
 }

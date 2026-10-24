@@ -1,6 +1,6 @@
 # 0012: Add bounded image targets
 
-Status: review
+Status: done
 Depends on: 0011
 Spec: REQ-SRC-06
 Goal: Fill gaps left by incomplete accessibility trees with fast image-detected text lines and box-like controls, so visible rows such as Flea's file entries can receive hints.
@@ -18,3 +18,4 @@ Acceptance:
 - 2026-10-23: SEED section 9 schedules general image coverage later; GG approved this narrower fallback for visible AT-SPI row gaps after the Flea report.
 - 2026-10-23: made sparse-row detection work under generic accessibility containers and reused the target builder's row roles; `tests/acceptance/reqs.sh REQ-SRC-06` and the full gate passed.
 - 2026-10-23: verified Agy's review: image targets were sorted after every AT-SPI target and skipped stale-window checks. Coordinate sorting now applies across both sources; window-scoped targets are stale-checked. Added REQ-LABEL-01 and REQ-ACT-03 regressions; all 40 core requirement tests and `tests/acceptance/reqs.sh REQ-SRC-06` pass.
+- 2026-10-23: landed on main at `5cb38ce`; the acceptance and full gate passed and the independent review was clean.

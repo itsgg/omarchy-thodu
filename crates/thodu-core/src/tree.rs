@@ -59,29 +59,50 @@ pub struct Snapshot {
     pub apps: Vec<App>,
 }
 
-/// REQ-SRC-01: the focused window's frame, found by the process id Hyprland
-/// reports and the frame's ACTIVE state, then by extents matching the
-/// window's size. An application's name is never compared.
+/// REQ-SRC-01: the focused window's frame, found by process and ACTIVE
+/// state, then by extents matching its size. An application's name is never
+/// compared.
 pub fn match_frame(snapshot: &Snapshot) -> Option<&Node> {
-    let frames: Vec<&Node> = snapshot
+    match_frame_for_window(snapshot, true)
+}
+
+/// Match the frame belonging to one window. ACTIVE is authoritative only
+/// for the focused window; a background sibling needs unique matching size.
+pub fn match_frame_for_window(snapshot: &Snapshot, focused: bool) -> Option<&Node> {
+    let (app, frame) = match_frame_index(snapshot, focused)?;
+    Some(&snapshot.apps[app].frames[frame])
+}
+
+/// The app and frame indices matched to one window, in `snapshot.apps`.
+pub fn match_frame_index(snapshot: &Snapshot, focused: bool) -> Option<(usize, usize)> {
+    let frames: Vec<(usize, usize, &Node)> = snapshot
         .apps
         .iter()
-        .filter(|app| app.pid == snapshot.window.pid)
-        .flat_map(|app| app.frames.iter())
-        .filter(|frame| frame.shown())
+        .enumerate()
+        .filter(|(_, app)| app.pid == snapshot.window.pid)
+        .flat_map(|(a, app)| {
+            app.frames
+                .iter()
+                .enumerate()
+                .map(move |(f, frame)| (a, f, frame))
+        })
+        .filter(|(_, _, frame)| frame.shown())
         .collect();
-    if let Some(active) = frames.iter().find(|frame| frame.has("active")) {
-        return Some(active);
+    if focused && let Some((app, frame, _)) = frames.iter().find(|(_, _, node)| node.has("active"))
+    {
+        return Some((*app, *frame));
     }
     let size = snapshot.window.size;
-    let sized: Vec<&&Node> = frames
+    let sized: Vec<_> = frames
         .iter()
-        .filter(|frame| frame.extents.is_some_and(|e| (e[2], e[3]) == size))
+        .filter(|(_, _, frame)| frame.extents.is_some_and(|e| (e[2], e[3]) == size))
         .collect();
-    match (sized.len(), frames.len()) {
-        (1, _) => Some(sized[0]),
-        (_, 1) => Some(frames[0]),
-        _ => None,
+    if sized.len() == 1 {
+        Some((sized[0].0, sized[0].1))
+    } else if focused && sized.is_empty() && frames.len() == 1 {
+        Some((frames[0].0, frames[0].1))
+    } else {
+        None
     }
 }
 
@@ -92,15 +113,53 @@ pub fn needs_image_fallback(root: &Node) -> bool {
     fn is_container(node: &Node) -> bool {
         matches!(
             node.role.as_str(),
-            "list" | "list box" | "tree" | "table" | "tree table" | "grid"
+            "list"
+                | "list box"
+                | "tree"
+                | "table"
+                | "tree table"
+                | "grid"
+                | "scroll pane"
+                | "viewport"
+                | "view port"
+                | "list view"
+                | "icon view"
+                | "panel"
+                | "container"
+                | "grouping"
         )
+    }
+
+    fn actionable_count(node: &Node, shown_parent: bool) -> usize {
+        if !shown_parent || !node.shown() {
+            return 0;
+        }
+        usize::from(role_of(&node.role).is_some() || node.action == "click")
+            + node
+                .children
+                .iter()
+                .map(|child| actionable_count(child, true))
+                .sum::<usize>()
+    }
+
+    fn large_region(node: &Node, root_area: i64) -> bool {
+        let Some([_, _, width, height]) = node.extents else {
+            return false;
+        };
+        let area = i64::from(width) * i64::from(height);
+        root_area > 0 && area >= root_area / 4
     }
 
     fn is_row(node: &Node) -> bool {
         role_of(&node.role) == Some(Role::ListItem)
     }
 
-    fn walk(node: &Node, shown_parent: bool, inside_row: bool) -> (usize, usize, bool) {
+    fn walk(
+        node: &Node,
+        shown_parent: bool,
+        inside_row: bool,
+        root_area: i64,
+    ) -> (usize, usize, bool) {
         let shown = shown_parent && node.shown();
         let row = shown && is_row(node) && !inside_row;
         let mut complete = 0;
@@ -117,7 +176,7 @@ pub fn needs_image_fallback(root: &Node) -> bool {
         let mut request = false;
         for child in &node.children {
             let (child_complete, child_incomplete, child_request) =
-                walk(child, shown, inside_row || row);
+                walk(child, shown, inside_row || row, root_area);
             request |= child_request;
             complete += child_complete;
             incomplete += child_incomplete;
@@ -125,13 +184,19 @@ pub fn needs_image_fallback(root: &Node) -> bool {
         if shown && is_container(node) {
             let visible_rows = complete + incomplete;
             request |= incomplete > 0 || (visible_rows > 0 && complete < MIN_NAMED_BOUNDED_ROWS);
+            request |= large_region(node, root_area)
+                && actionable_count(node, true) < MIN_NAMED_BOUNDED_ROWS;
             (0, 0, request)
         } else {
             (complete, incomplete, request)
         }
     }
 
-    let (complete, incomplete, request) = walk(root, true, false);
+    let root_area = root
+        .extents
+        .map(|e| i64::from(e[2]) * i64::from(e[3]))
+        .unwrap_or_default();
+    let (complete, incomplete, request) = walk(root, true, false, root_area);
     request || incomplete > 0 || (complete + incomplete > 0 && complete < MIN_NAMED_BOUNDED_ROWS)
 }
 

@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-use crate::model::{Rect, Role, Source};
+use crate::model::{ActionKind, Rect, Role, Source};
 use crate::session::State;
 
 pub const VERSION: u32 = 1;
@@ -23,11 +23,14 @@ pub const LABEL_PADDING: i32 = 8;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "kebab-case")]
 pub enum Request {
-    /// Start a session on the focused window, or on `window` (an address).
+    /// Start a session on visible windows by default, or on the active window
+    /// with `scope: focused`. An explicit address narrows it to one window.
     /// `test` keeps the overlay from taking the keyboard, for live checks.
     Start {
         #[serde(default = "hints")]
         mode: String,
+        #[serde(default = "visible")]
+        scope: String,
         #[serde(default)]
         window: Option<String>,
         #[serde(default = "yes")]
@@ -61,9 +64,12 @@ pub enum Request {
     /// The overlay's standing connection: `thodud` pushes each new session
     /// down it as an [`OpenEvent`] instead of summoning the overlay.
     Listen,
+    /// The targets in the requested scope; defaults to all visible windows.
     Targets {
         #[serde(default)]
         window: Option<String>,
+        #[serde(default = "visible")]
+        scope: String,
     },
     /// The bar's clickable items on the monitor `screen`, from the overlay
     /// plugin's bar widget, in the bar window's coordinates (REQ-SHELL-01).
@@ -98,6 +104,10 @@ fn hints() -> String {
     "hints".into()
 }
 
+fn visible() -> String {
+    "visible".into()
+}
+
 const fn yes() -> bool {
     true
 }
@@ -125,6 +135,10 @@ pub struct LabeledTarget {
     pub role: Role,
     pub text: String,
     pub source: Source,
+    #[serde(default)]
+    pub actions: Vec<ActionKind>,
+    #[serde(default)]
+    pub window: String,
     pub label: String,
     /// Where the label is drawn (REQ-LABEL-02).
     pub placed: Rect,
@@ -162,6 +176,8 @@ impl LabeledTarget {
             role: t.role,
             text: t.text,
             source: t.source,
+            actions: t.actions,
+            window: t.window,
             label: String::new(),
             placed: t.bounds,
         }
@@ -176,6 +192,8 @@ impl LabeledTarget {
             "role": self.role,
             "text": self.text,
             "source": self.source,
+            "actions": self.actions,
+            "window": self.window,
         })
         .to_string()
     }
