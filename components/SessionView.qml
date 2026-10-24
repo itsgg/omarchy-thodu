@@ -75,6 +75,10 @@ FocusScope {
     // thodud clicks while the view keeps the keyboard: the overlay must let
     // the pointer through and say it is out of the way.
     signal lingered
+    // The input mask changes without changing painted pixels. Ask the owner
+    // to schedule a frame so the pass-through region is committed before the
+    // daemon sends the wheel event.
+    signal scrollFrameRequested()
 
     // Start drawing session `id`; `reply` is its full session reply when
     // thodud pushed it, else the view asks for it.
@@ -202,6 +206,7 @@ FocusScope {
                 view.scrollReadySent = false;
             view.scrollBusy = true;
             view.scrollPassThrough = true;
+            view.scrollFrameRequested();
         } else if (view.scrollMode && shown.state === "showing") {
             view.scrollBusy = false;
             view.scrollPassThrough = false;

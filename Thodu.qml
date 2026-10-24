@@ -203,6 +203,7 @@ Item {
             fontFamily: Style.font.family
 
             onSend: request => client.send(request)
+            onScrollFrameRequested: view.Window.window.update()
             onLingered: {
                 // Hyprland's exclusive layer fallback catches pointer events
                 // outside an empty mask. Use on-demand focus while the click

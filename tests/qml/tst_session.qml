@@ -88,6 +88,12 @@ Item {
         onFinished: (why, acting) => top.ended = { why: why, acting: acting }
     }
 
+    SignalSpy {
+        id: scrollFrameSpy
+        target: view
+        signalName: "scrollFrameRequested"
+    }
+
     TestCase {
         name: "Session"
         when: windowShown
@@ -556,6 +562,22 @@ Item {
             verify(!view.scrollPassThrough, "the overlay returns to its normal input region");
             verify(view.active, "scroll mode stays open");
             verify(view.activeFocus, "keyboard focus remains in the overlay after the wheel action");
+        }
+
+        function test_req_act_06_scroll_pass_through_requests_a_frame() {
+            verify(view.Window.window !== null, "the overlay view has a render window");
+            compare(typeof view.Window.window.update, "function",
+                    "the render window can schedule a frame without a pixel change");
+            view.scrollMode = true;
+            view.focusedId = "a0";
+            scrollFrameSpy.clear();
+            view.apply({ v: 1, ok: true, session: "s1", view: {
+                state: "acting", scroll_mode: true, visible: ["a0", "a1"], focused: "a0",
+                label_selected: false, labels_only: false, searching: false, collecting: false
+            } });
+            verify(view.scrollPassThrough, "the scroll target receives pointer input");
+            compare(scrollFrameSpy.count, 1,
+                    "scroll pass-through requests a frame before sending scroll-ready");
         }
 
         function test_req_session_07_scroll_outline_has_a_distinct_accent() {

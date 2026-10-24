@@ -1,6 +1,6 @@
 # 0018: Keep scroll focus and distinguish the active area
 
-Status: claimed
+Status: review
 Depends on: none
 Spec: REQ-SESSION-07, REQ-ACT-06
 Goal: Keep scroll keys inside Thodu while wheel input is passed to the selected application, and make the selected scroll area easy to distinguish from a click target.
@@ -13,3 +13,4 @@ Acceptance:
 ## Log
 
 - 2026-10-24: created after live feedback reported scroll keys reaching the underlying terminal; acceptance covers retained keyboard capture and scroll-area feedback.
+- 2026-10-24: requested a render after the scroll input mask changes, so the frame-swapped handshake reaches thodud before wheel input. Kept the scroll focus outline on the theme accent. Rebuilt and installed both executables and the plugin. The acceptance suite passed; live Hyprland held H/J/K/L with an empty target input recorder, kept the session open, and Escape closed it.
