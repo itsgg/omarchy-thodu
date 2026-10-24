@@ -638,7 +638,15 @@ impl Daemon {
         }
         let generation = entry.session.generation;
         let at = entry.created.elapsed().as_millis() as u64;
+        let cancel_unstarted_scroll = key == Key::Escape
+            && entry.session.scroll_mode
+            && entry.session.state == State::Acting
+            && entry.session.pending_scroll_action().is_some();
         let act = entry.session.key_at(key, at);
+        if cancel_unstarted_scroll {
+            entry.pending = entry.pending.saturating_sub(1);
+            entry.scroll_released = true;
+        }
         let scroll = entry.session.pending_scroll_action();
         if scroll.is_some() {
             entry.scroll_released = false;
@@ -884,6 +892,13 @@ impl Daemon {
     }
 
     fn scroll_stop(&self, id: &str) -> Res<Reply> {
+        self.scroll_stop_with(id, pointer::move_to)
+    }
+
+    fn scroll_stop_with<F>(&self, id: &str, restore_pointer: F) -> Res<Reply>
+    where
+        F: FnOnce(&Monitor, (i32, i32)) -> Result<(), String>,
+    {
         let restore = {
             let mut sessions = self.sessions.lock().map_err(|_| internal("session lock"))?;
             let entry = sessions
@@ -896,8 +911,20 @@ impl Daemon {
                 None
             }
         };
-        if let Some((monitor, point)) = restore {
-            pointer::move_to(&monitor, point).map_err(internal)?;
+        let restore_error = restore
+            .as_ref()
+            .and_then(|(monitor, point)| restore_pointer(monitor, *point).err());
+        if let Some(error) = restore_error {
+            let mut sessions = self.sessions.lock().map_err(|_| internal("session lock"))?;
+            if let Some(entry) = sessions.get_mut(id) {
+                entry.status = format!("scroll pointer restore failed: {error}");
+                return Ok(Reply {
+                    session: Some(id.to_string()),
+                    view: Some(Self::view(entry)),
+                    status: Some(entry.status.clone()),
+                    ..Reply::ok()
+                });
+            }
         }
         Ok(Reply::ok())
     }
@@ -976,10 +1003,12 @@ impl Daemon {
                     entry.status =
                         "scroll target moved, closed or became covered; restart scroll mode".into();
                 }
-                Err(ScrollFailure::Input(message)) => entry.status = message,
+                Err(ScrollFailure::Input(message)) => {
+                    entry.status = format!("scroll failed: {message}")
+                }
             }
         }
-        let reply = if closing {
+        let mut reply = if closing {
             None
         } else {
             Some(Reply {
@@ -996,7 +1025,23 @@ impl Daemon {
         if let Some((monitor, point)) = restore
             && let Err(error) = pointer::move_to(&monitor, point)
         {
-            eprintln!("thodud: {id}: the pointer did not go back after scrolling: {error}");
+            if !closing {
+                let mut sessions = self.sessions.lock().map_err(|_| internal("session lock"))?;
+                if let Some(entry) = sessions.get_mut(id) {
+                    entry.status =
+                        format!("{}; scroll pointer restore failed: {error}", entry.status);
+                    reply = Some(Reply {
+                        session: Some(id.to_string()),
+                        targets: Some(Self::labeled(entry)),
+                        view: Some(Self::view(entry)),
+                        status: Some(entry.status.clone()),
+                        timing: Some(entry.timing.clone()),
+                        ..Reply::ok()
+                    });
+                }
+            } else {
+                eprintln!("thodud: {id}: the pointer did not go back after scrolling: {error}");
+            }
         }
         if closing {
             self.finish(id);
@@ -1791,6 +1836,154 @@ mod tests {
         assert!(!entry.hidden);
     }
 
+    // REQ-SESSION-02 and REQ-ACT-06: Escape closes scroll mode during both
+    // the pass-through wait and an already-started wheel event.
+    #[test]
+    fn req_session_02_escape_closes_scroll_mode_during_a_pending_action() {
+        let monitor = Monitor {
+            name: "M".into(),
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+            scale: 1.0,
+        };
+        let target = Target {
+            id: "pane".into(),
+            bounds: Rect::new(20, 30, 40, 20),
+            role: Role::ScrollArea,
+            text: "Document".into(),
+            source: TargetSource::Atspi,
+            actions: vec![ActionKind::Scroll],
+            window: String::new(),
+        };
+        let pending_entry = |action_started: bool| {
+            let mut session = Session::new_scroll(vec![target.clone()]);
+            session.key(Key::Char {
+                c: 'j',
+                shift: false,
+            });
+            if action_started {
+                assert!(session.take_scroll_action().is_some());
+            }
+            Entry {
+                session,
+                window: None,
+                monitor: monitor.clone(),
+                status: "1 scroll area".into(),
+                collecting: false,
+                overlay_bounds: None,
+                overlay: true,
+                test: true,
+                hidden: false,
+                created: Instant::now(),
+                timing: Timing::default(),
+                pending: 1,
+                clicked: false,
+                workspace_changed: false,
+                closing: false,
+                restore: None,
+                scroll_restore: None,
+                scroll_released: false,
+            }
+        };
+
+        let waiting = daemon_with_entry(pending_entry(false));
+        let waiting_reply = waiting.key("s1", "Escape", false, false, 0).unwrap();
+        assert_eq!(
+            waiting_reply
+                .view
+                .expect("Escape returns a closed view")
+                .state,
+            State::Closed
+        );
+        assert!(
+            waiting.sessions.lock().unwrap().get("s1").is_none(),
+            "an action not yet sent is cancelled and the session is removed"
+        );
+
+        let running = daemon_with_entry(pending_entry(true));
+        let running_reply = running.key("s1", "Escape", false, false, 0).unwrap();
+        assert_eq!(
+            running_reply
+                .view
+                .expect("Escape returns a closed view")
+                .state,
+            State::Closed
+        );
+        let sessions = running.sessions.lock().unwrap();
+        let entry = sessions
+            .get("s1")
+            .expect("the wheel event still owns its cleanup");
+        assert!(entry.closing);
+        assert_eq!(entry.pending, 1);
+    }
+
+    // REQ-SESSION-08: a pointer restoration error stays visible without
+    // turning a normal scroll-key release into a closed session.
+    #[test]
+    fn req_session_08_scroll_restore_error_is_visible_and_keeps_session_open() {
+        let monitor = Monitor {
+            name: "M".into(),
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+            scale: 1.0,
+        };
+        let daemon = daemon_with_entry(Entry {
+            session: Session::new_scroll(vec![Target {
+                id: "pane".into(),
+                bounds: Rect::new(20, 30, 40, 20),
+                role: Role::ScrollArea,
+                text: "Document".into(),
+                source: TargetSource::Atspi,
+                actions: vec![ActionKind::Scroll],
+                window: String::new(),
+            }]),
+            window: None,
+            monitor: monitor.clone(),
+            status: "1 scroll area".into(),
+            collecting: false,
+            overlay_bounds: None,
+            overlay: true,
+            test: true,
+            hidden: false,
+            created: Instant::now(),
+            timing: Timing::default(),
+            pending: 0,
+            clicked: false,
+            workspace_changed: false,
+            closing: false,
+            restore: None,
+            scroll_restore: Some((monitor, (5, 7))),
+            scroll_released: false,
+        });
+
+        let reply = daemon
+            .scroll_stop_with("s1", |_, _| {
+                Err("the compositor offers no virtual pointer".into())
+            })
+            .expect("a restore error is reported as session status");
+        assert!(reply.ok);
+        assert!(reply.view.as_ref().unwrap().status_persistent);
+        assert_eq!(
+            reply.status.as_deref(),
+            Some("scroll pointer restore failed: the compositor offers no virtual pointer")
+        );
+        assert_eq!(
+            daemon
+                .sessions
+                .lock()
+                .unwrap()
+                .get("s1")
+                .unwrap()
+                .session
+                .state,
+            State::Showing
+        );
+    }
+
     struct Empty(&'static str);
 
     impl Source for Empty {
@@ -1828,6 +2021,16 @@ mod tests {
         assert!(status_persistent("20 targets from atspi", true, false));
         assert!(status_persistent(
             "config parse failed; using the defaults",
+            false,
+            false
+        ));
+        assert!(status_persistent(
+            "scroll failed: the compositor offers no virtual pointer",
+            false,
+            false
+        ));
+        assert!(status_persistent(
+            "scroll pointer restore failed: the compositor offers no virtual pointer",
             false,
             false
         ));

@@ -534,6 +534,7 @@ Item {
 
         function test_req_act_06_held_scroll_repeats_until_key_release() {
             view.scrollMode = true;
+            compare(view.scrollRepeatMs, 80, "held scroll uses the documented repeat interval");
             view.scrollRepeatMs = 20;
             top.nextState = "acting";
             top.shownView = Object.assign({}, top.shownView, { scroll_mode: true, focused: "a0" });
@@ -553,6 +554,64 @@ Item {
                     "release asks thodud to restore the pointer");
             verify(!view.scrollPassThrough, "the overlay returns to its normal input region");
             verify(view.active, "scroll mode stays open");
+        }
+
+        function test_req_act_06_all_directions_repeat_while_held() {
+            view.scrollMode = true;
+            view.scrollRepeatMs = 20;
+            top.nextState = "acting";
+            top.shownView = Object.assign({}, top.shownView, { scroll_mode: true, focused: "a0" });
+            const keys = [
+                { code: Qt.Key_H, name: "h" },
+                { code: Qt.Key_J, name: "j" },
+                { code: Qt.Key_K, name: "k" },
+                { code: Qt.Key_L, name: "l" }
+            ];
+            for (const key of keys) {
+                const before = top.sent.filter(r => r.op === "key" && r.key === key.name).length;
+                keyPress(key.code);
+                tryVerify(() => top.sent.filter(r => r.op === "key" && r.key === key.name).length >= before + 2,
+                          1000, key.name + " repeats while held");
+                keyRelease(key.code);
+                tryVerify(() => !view.scrollBusy, 1000, key.name + " wheel action completes");
+                const count = top.sent.filter(r => r.op === "key" && r.key === key.name).length;
+                wait(50);
+                compare(top.sent.filter(r => r.op === "key" && r.key === key.name).length, count,
+                        key.name + " release stops its repeat");
+            }
+        }
+
+        function test_req_act_06_releasing_shift_keeps_scroll_key_held() {
+            view.scrollMode = true;
+            view.scrollRepeatMs = 20;
+            top.nextState = "acting";
+            top.shownView = Object.assign({}, top.shownView, { scroll_mode: true, focused: "a0" });
+            keyPress(Qt.Key_J, Qt.ShiftModifier);
+            tryVerify(() => top.sent.filter(r => r.op === "key" && r.key === "J").length >= 2,
+                      1000, "Shift+J begins repeating large scroll steps");
+            keyRelease(Qt.Key_Shift);
+            compare(view.heldScrollKey, "j", "releasing Shift does not release J");
+            const before = top.sent.filter(r => r.op === "key" && r.key === "J").length;
+            tryVerify(() => top.sent.filter(r => r.op === "key" && r.key === "J").length > before,
+                      1000, "the held scroll continues after Shift is released");
+            keyRelease(Qt.Key_J);
+            const count = top.sent.filter(r => r.op === "key" && r.key === "J").length;
+            wait(80);
+            compare(top.sent.filter(r => r.op === "key" && r.key === "J").length, count,
+                    "releasing J stops the repeat");
+        }
+
+        function test_req_act_06_scroll_hole_uses_integer_target_center() {
+            view.scrollMode = true;
+            view.area = { x: 100, y: 50, w: 800, h: 600 };
+            view.targets = [{
+                id: "odd", bounds: { x: 105, y: 59, w: 51, h: 51 },
+                placed: { x: 105, y: 59, w: 10, h: 10 }, label: "a",
+                role: "scroll-area", text: "Document", source: "atspi"
+            }];
+            view.focusedId = "odd";
+            compare(view.scrollHole.x, 29);
+            compare(view.scrollHole.y, 33);
         }
 
         function test_req_act_06_failed_wheel_action_stops_repeat() {
@@ -578,7 +637,8 @@ Item {
                     "OS repeat events do not add wheel actions");
             keyPress(Qt.Key_J);
             keyPress(Qt.Key_Escape);
-            tryVerify(() => top.ended !== null, 1000, "Escape ends after the pending wheel event");
+            verify(!view.active, "Escape returns the keyboard immediately while a wheel action is pending");
+            compare(top.ended.why, "escape");
             compare(view.heldScrollKey, "", "Escape clears the held key");
         }
 

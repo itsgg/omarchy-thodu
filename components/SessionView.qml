@@ -123,7 +123,7 @@ FocusScope {
         if (!view.active)
             return;
         if (view.scrollMode && view.scrollBusy && why !== "thodu stopped answering" &&
-                why !== "thodu closed the connection") {
+                why !== "thodu closed the connection" && why !== "escape") {
             view.stopScrollHold("");
             view.deferredEnd = { why: why, acting: acting };
             return;
@@ -445,7 +445,7 @@ FocusScope {
         }
         const modifierKey = event.key === Qt.Key_Shift || event.key === Qt.Key_Control ||
             event.key === Qt.Key_Alt || event.key === Qt.Key_Meta;
-        if (view.scrollMode && view.scrollBusy && !modifierKey) {
+        if (view.scrollMode && view.scrollBusy && !modifierKey && event.key !== Qt.Key_Escape) {
             view.stopScrollHold("");
             view.deferredKey = {
                 key: event.key,
@@ -477,7 +477,9 @@ FocusScope {
         event.accepted = true;
         if (!view.active || event.isAutoRepeat || !view.scrollMode)
             return;
-        view.stopScrollHold(view.scrollKeyName(event.key));
+        const name = view.scrollKeyName(event.key);
+        if (name.length > 0)
+            view.stopScrollHold(name);
     }
 
     Timer {
@@ -542,8 +544,8 @@ FocusScope {
         if (!target)
             return { x: 0, y: 0 };
         return {
-            x: target.bounds.x - view.area.x + target.bounds.w / 2 - 1,
-            y: target.bounds.y - view.area.y + target.bounds.h / 2 - 1
+            x: target.bounds.x - view.area.x + Math.floor(target.bounds.w / 2) - 1,
+            y: target.bounds.y - view.area.y + Math.floor(target.bounds.h / 2) - 1
         };
     }
 

@@ -523,6 +523,10 @@ impl Session {
             State::Closed => return None,
             State::Acting => {
                 if self.scroll_mode {
+                    if matches!(key, Key::Escape) {
+                        self.scroll_action = None;
+                        self.state = State::Closed;
+                    }
                     return None;
                 }
                 return self.after_act(key, at_ms);

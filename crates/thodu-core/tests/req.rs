@@ -504,6 +504,22 @@ fn req_act_04_pending_scroll_ignores_additional_keys_until_resume() {
     assert!(session.take_scroll_action().is_some());
 }
 
+// REQ-ACT-06: Escape cancels a scroll action that has not passed through yet.
+#[test]
+fn req_act_06_escape_closes_scroll_mode_while_an_action_is_waiting() {
+    let mut session = Session::new_scroll(vec![target("pane", Rect::new(10, 20, 80, 60))]);
+    session.key(Key::Char {
+        c: 'j',
+        shift: false,
+    });
+    assert_eq!(session.state, State::Acting);
+    assert!(session.pending_scroll_action().is_some());
+
+    session.key(Key::Escape);
+    assert_eq!(session.state, State::Closed);
+    assert!(session.pending_scroll_action().is_none());
+}
+
 // REQ-SRC-07: IPC calls without a scope request every visible window.
 #[test]
 fn req_src_07_ipc_scope_defaults_to_visible() {
