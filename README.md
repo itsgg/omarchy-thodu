@@ -4,7 +4,7 @@ Thodu is a keyboard hint picker for Omarchy. It labels clickable controls in eve
 
 This is an early, Omarchy-only milestone. It uses accessibility trees for GTK 3, GTK 4, Qt Widgets, Chromium controls and Electron controls, plus clickable items in the Omarchy bar. Default hints cover mapped windows on the focused monitor's active workspace, shown special workspace and pinned clients. One label sequence spans those windows, with the shortest labels placed near the top-left. `--scope focused` and `--window` restrict collection to one window.
 
-Every visible-window collection also runs a bounded monitor screenshot detector after primary targets draw. It can add click hints for visible text lines and box-like controls that apps do not expose in their accessibility trees, even when other controls are accessible. These image hints have no searchable text and use an amber style. They can miss controls, and may label visible text that is not interactive. A grid remains available for choosing any point on the focused monitor. Web page content, scrolling, dragging and hovering are not supported yet.
+Every visible-window collection also runs a bounded monitor screenshot detector after primary targets draw. It can add click hints for visible text lines and box-like controls that apps do not expose in their accessibility trees, even when other controls are accessible. These image hints have no searchable text and use an amber style. They can miss controls, and may label visible text that is not interactive. A grid remains available for choosing any point on the focused monitor. Some Chromium and Electron page controls can be labeled when exposed over AT-SPI, but broad website coverage is not promised yet. Scrolling, dragging and hovering are not supported; Thodu has no scroll-mode shortcut yet.
 
 When no app window is focused, Thodu uses the focused monitor and still labels the Omarchy bar. If no source finds targets, it opens the grid.
 
@@ -42,6 +42,20 @@ thodu install \
 ```
 
 Installation may ask for authorization to add the `/dev/uinput` rule. `thodu doctor` reports which installation requirements are present. If the Omarchy shell was not restarted by the installer, run `omarchy restart shell` and then `thodu doctor` again.
+
+## Chromium, Electron and web apps
+
+`thodu install` configures `ACCESSIBILITY_ENABLED=1` for apps started in the Omarchy session. Fully quit and restart Chromium and Electron apps after installing Thodu so they inherit the setting. `thodu doctor` checks the session configuration.
+
+Chromium-based web apps, including Slack opened as its own window, use the same Chromium setup. Thodu reads controls that the browser exposes through its accessibility tree; individual sites can still omit controls. Chromium normally enables its full accessibility APIs when assistive technology requests them. If a Chromium window still has no AT-SPI targets, open `chrome://accessibility` to enable or inspect the tree for the current run. Chromium also documents `--force-renderer-accessibility` as an override; on this Arch setup, put that switch on its own line in `~/.config/chromium-flags.conf`, then fully restart Chromium. Prefer the normal Thodu environment first, since forced accessibility can keep more of the browser tree active. See [Chromium's accessibility documentation](https://www.chromium.org/developers/design-documents/accessibility/).
+
+Electron enables accessibility when it detects assistive technology. Restart the app after `thodu install`. For a one-off check when an app was launched outside the Omarchy session, close it and start it with the environment prefix, for example `ACCESSIBILITY_ENABLED=1 obsidian`. If its controls are still missing, check that app's accessibility settings and bundled Electron version. See [Electron's accessibility documentation](https://www.electronjs.org/docs/latest/tutorial/accessibility/).
+
+This screenshot shows Thodu labeling controls exposed by the local Chromium reference page:
+
+![Thodu labels the Open, Save and Close controls in its Chromium reference page](docs/screenshots/chromium-reference-hints.png)
+
+The browser setup does not install Thodu's planned Chromium extension, so general web-page coverage remains limited. Page controls may be available through AT-SPI, but do not assume every site's links and custom controls will be labeled.
 
 ## Use
 
