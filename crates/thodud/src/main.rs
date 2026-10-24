@@ -305,7 +305,9 @@ impl Daemon {
             status.push_str("; collecting visual targets");
         }
         let session = if collecting {
-            Session::new(targets, settings.labels_only).with_area(monitor.logical())
+            Session::new(targets, settings.labels_only)
+                .reserving_label_prefix('z')
+                .with_area(monitor.logical())
         } else {
             Session::begin(targets, monitor.logical(), settings.labels_only, grid)
         };
@@ -378,7 +380,7 @@ impl Daemon {
                     &monitor,
                     &visual_exclusions,
                 );
-                daemon.finish_fallback(&fallback_id, fallback, &windows);
+                daemon.finish_fallback(&fallback_id, fallback, &visible_windows);
             });
         }
         Ok(Reply {
@@ -472,14 +474,14 @@ impl Daemon {
         ))
     }
 
-    fn finish_fallback(&self, id: &str, fallback: sources::Collected, windows: &[Window]) {
+    fn finish_fallback(&self, id: &str, fallback: sources::Collected, visible_windows: &[Window]) {
         let Ok(mut sessions) = self.sessions.lock() else {
             return;
         };
         let Some(entry) = sessions.get_mut(id) else {
             return;
         };
-        merge_fallback(entry, fallback, windows);
+        merge_fallback(entry, fallback, visible_windows);
     }
 
     fn view(entry: &Entry) -> View {
@@ -668,13 +670,12 @@ impl Daemon {
                 return;
             };
             let now = hypr::window(&window.address).ok().flatten();
-            let owner = if refetch.is_none() && !target.window.is_empty() {
+            let owner = if !target.window.is_empty() {
                 hypr::window_at(target.bounds.center().0, target.bounds.center().1)
             } else {
                 None
             };
-            let newly_covered =
-                visible_target_owner_changed(&target, refetch.as_deref(), owner.as_deref());
+            let newly_covered = visible_target_owner_changed(&target, owner.as_deref());
             if target_is_stale(&target, &window, now.as_ref()) || newly_covered {
                 eprintln!("thodud: {id}: the target changed or became covered; collecting again");
                 self.remove(id);
@@ -1050,7 +1051,11 @@ fn wrapped_line_count(text: &str, width: i32, char_width: i32) -> i32 {
     lines as i32
 }
 
-fn merge_fallback(entry: &mut Entry, fallback: sources::Collected, windows: &[Window]) -> bool {
+fn merge_fallback(
+    entry: &mut Entry,
+    fallback: sources::Collected,
+    visible_windows: &[Window],
+) -> bool {
     if !entry.collecting {
         return false;
     }
@@ -1058,23 +1063,19 @@ fn merge_fallback(entry: &mut Entry, fallback: sources::Collected, windows: &[Wi
         stop_collecting(entry);
         return false;
     }
-    let generation = entry.session.generation.wrapping_add(1);
     let mut targets = entry.session.targets.clone();
     targets.extend(fallback.targets);
-    sources::finish_visible_targets(&mut targets, windows);
-    let mut session =
-        Session::new(targets, entry.session.labels_only).with_area(entry.monitor.logical());
-    session.generation = generation;
-    if session.targets.is_empty() {
-        session.open_grid();
+    sources::finish_visible_targets(&mut targets, visible_windows);
+    entry.session.merge_targets_preserving_labels(targets);
+    if entry.session.targets.is_empty() {
+        entry.session.open_grid();
     }
     let primary_status = entry
         .status
         .strip_suffix("; collecting visual targets")
         .unwrap_or(&entry.status);
     entry.status = format!("{primary_status}; {}", fallback.status.join("; "));
-    entry.status = with_grid_note(entry.status.clone(), &session, false);
-    entry.session = session;
+    entry.status = with_grid_note(entry.status.clone(), &entry.session, false);
     entry.collecting = false;
     true
 }
@@ -1100,14 +1101,8 @@ fn restart_address(named: bool, scope: &str, windows: &[Window]) -> Option<Strin
     }
 }
 
-fn visible_target_owner_changed(
-    target: &Target,
-    refetch_address: Option<&str>,
-    current_owner: Option<&str>,
-) -> bool {
-    !target.window.is_empty()
-        && refetch_address.is_none()
-        && current_owner != Some(target.window.as_str())
+fn visible_target_owner_changed(target: &Target, current_owner: Option<&str>) -> bool {
+    !target.window.is_empty() && current_owner != Some(target.window.as_str())
 }
 
 fn scoped_windows(
@@ -1519,7 +1514,9 @@ mod tests {
             window: second.address.clone(),
         };
         let mut entry = Entry {
-            session: Session::new(vec![primary], false).with_area(monitor.logical()),
+            session: Session::new(vec![primary], false)
+                .reserving_label_prefix('z')
+                .with_area(monitor.logical()),
             window: None,
             monitor,
             status: "primary targets; collecting visual targets".into(),
@@ -1959,14 +1956,10 @@ mod tests {
             window: "0x1".into(),
         };
 
-        assert!(!visible_target_owner_changed(&target, None, Some("0x1")));
-        assert!(visible_target_owner_changed(&target, None, Some("0x2")));
-        assert!(visible_target_owner_changed(&target, None, None));
-        assert!(!visible_target_owner_changed(
-            &target,
-            Some("0x1"),
-            Some("0x2")
-        ));
+        assert!(!visible_target_owner_changed(&target, Some("0x1")));
+        assert!(visible_target_owner_changed(&target, Some("0x2")));
+        assert!(visible_target_owner_changed(&target, None));
+        assert!(visible_target_owner_changed(&target, Some("0x2")));
     }
 
     // REQ-SRC-07: defaults include every visible window; focused and named

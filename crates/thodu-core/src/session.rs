@@ -102,6 +102,8 @@ pub struct Session {
     pub grid: Vec<Rect>,
     /// Bumped whenever the targets change, so the overlay fetches them.
     pub generation: u32,
+    /// A disjoint label namespace for targets added after the first draw.
+    reserved_label_prefix: Option<char>,
 }
 
 /// Lower case with every space removed, for matching typed text.
@@ -132,7 +134,57 @@ impl Session {
             area: None,
             grid: Vec::new(),
             generation: 0,
+            reserved_label_prefix: None,
         }
+    }
+
+    /// Keep `prefix` free for targets that may arrive in a later generation.
+    pub fn reserving_label_prefix(mut self, prefix: char) -> Self {
+        self.labels = labels::assign_reserving(self.targets.len(), prefix);
+        self.reserved_label_prefix = Some(prefix);
+        self
+    }
+
+    /// Replace targets while retaining labels for every target already shown.
+    /// New targets receive labels below the reserved prefix.
+    pub fn merge_targets_preserving_labels(&mut self, mut targets: Vec<Target>) {
+        let mut ids = std::collections::HashSet::new();
+        targets.retain(|target| ids.insert(target.id.clone()));
+        labels::reading_order(&mut targets);
+        let mut existing: std::collections::HashMap<String, String> = self
+            .targets
+            .iter()
+            .zip(&self.labels)
+            .map(|(target, label)| (target.id.clone(), label.clone()))
+            .collect();
+        let added_count = targets
+            .iter()
+            .filter(|target| !existing.contains_key(&target.id))
+            .count();
+        let added_labels = if existing.is_empty() {
+            labels::assign(added_count)
+        } else {
+            labels::assign_beneath(added_count, self.reserved_label_prefix.unwrap_or('z'))
+        };
+        let mut added_labels = added_labels.into_iter();
+        self.labels = targets
+            .iter()
+            .map(|target| {
+                existing
+                    .remove(&target.id)
+                    .unwrap_or_else(|| added_labels.next().expect("one label per new target"))
+            })
+            .collect();
+        self.targets = targets;
+        self.search.clear();
+        self.label_prefix.clear();
+        self.prefix_origin = None;
+        self.focused = None;
+        self.label_selected = false;
+        self.searching = false;
+        self.act = None;
+        self.reserved_label_prefix = None;
+        self.generation = self.generation.wrapping_add(1);
     }
 
     /// REQ-SESSION-04: a session on `targets` over the monitor's `area`,
@@ -157,6 +209,7 @@ impl Session {
         self.grid.push(area);
         self.targets = grid::targets(&area);
         self.labels = labels::assign(self.targets.len());
+        self.reserved_label_prefix = None;
         self.search.clear();
         self.searching = false;
         self.label_prefix.clear();

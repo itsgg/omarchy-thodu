@@ -10,10 +10,29 @@ pub const ALPHABET: &str = "asdfghjklqwertyuiopzxcvbnm";
 /// label is replaced by itself plus each letter until there are enough, so
 /// every label left is a leaf and the shortest ones come first.
 pub fn assign(n: usize) -> Vec<String> {
+    assign_from(n, ALPHABET)
+}
+
+/// Assign primary labels without using a reserved leading key, leaving its
+/// prefix tree available for targets that arrive in a later generation.
+pub fn assign_reserving(n: usize, reserved: char) -> Vec<String> {
+    let alphabet: String = ALPHABET.chars().filter(|&c| c != reserved).collect();
+    assign_from(n, &alphabet)
+}
+
+/// Labels beneath a reserved prefix. The returned code remains prefix-free.
+pub fn assign_beneath(n: usize, prefix: char) -> Vec<String> {
+    assign(n)
+        .into_iter()
+        .map(|label| format!("{prefix}{label}"))
+        .collect()
+}
+
+fn assign_from(n: usize, alphabet: &str) -> Vec<String> {
     if n == 0 {
         return Vec::new();
     }
-    let letters: Vec<char> = ALPHABET.chars().collect();
+    let letters: Vec<char> = alphabet.chars().collect();
     let mut labels = vec![String::new()];
     let mut offset = 0;
     while labels.len() - offset < n || labels.len() == 1 {

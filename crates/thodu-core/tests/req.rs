@@ -401,6 +401,64 @@ fn req_label_01_image_targets_sort_by_position_with_accessible_targets() {
     assert_eq!(targets[1].bounds.x, 200);
 }
 
+// REQ-SRC-06 and REQ-SESSION-06: image targets arriving after first draw do not relabel
+// primary targets whose hints the user has already seen.
+#[test]
+fn req_session_06_fallback_keeps_displayed_labels() {
+    let mut first = target("First", Rect::new(0, 100, 40, 20));
+    first.id = "first".into();
+    let mut second = target("Second", Rect::new(0, 300, 40, 20));
+    second.id = "second".into();
+    let mut session =
+        Session::new(vec![first.clone(), second.clone()], true).reserving_label_prefix('z');
+    let first_label = session.labels[session
+        .targets
+        .iter()
+        .position(|item| item.id == "first")
+        .unwrap()]
+    .clone();
+    let second_label = session.labels[session
+        .targets
+        .iter()
+        .position(|item| item.id == "second")
+        .unwrap()]
+    .clone();
+
+    let mut visual = target("", Rect::new(0, 200, 40, 20));
+    visual.id = "visual".into();
+    visual.source = Source::Image;
+    session.merge_targets_preserving_labels(vec![first, visual, second]);
+
+    let label_for = |id: &str| {
+        let index = session
+            .targets
+            .iter()
+            .position(|item| item.id == id)
+            .unwrap();
+        &session.labels[index]
+    };
+    assert_eq!(label_for("first"), &first_label);
+    assert_eq!(label_for("second"), &second_label);
+    assert!(label_for("visual").starts_with('z'));
+    for (i, label) in session.labels.iter().enumerate() {
+        assert!(
+            !session
+                .labels
+                .iter()
+                .enumerate()
+                .any(|(j, other)| { i != j && other.starts_with(label) })
+        );
+    }
+
+    let visual_label = label_for("visual").clone();
+    for (i, c) in visual_label.chars().enumerate() {
+        let action = session.key(Key::Upper { c });
+        if i + 1 == visual_label.len() {
+            assert_eq!(action.map(|act| act.target), Some(1));
+        }
+    }
+}
+
 proptest! {
     #![proptest_config(ProptestConfig { cases: 256, rng_seed: proptest::test_runner::RngSeed::Fixed(1), ..ProptestConfig::default() })]
 

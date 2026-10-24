@@ -290,7 +290,12 @@ impl Tree for Bus {
         // GTK4's cache returns the entire tree, including its parent links,
         // roles, names and states, in one D-Bus call. Query geometry only for
         // targets, frame roots, document scaling and covered layers.
-        let entries = futures_lite::future::block_on(async {
+        let remaining = walk.deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            walk.truncated = true;
+            return None;
+        }
+        let request = async {
             let cache = (app.0.clone(), OwnedObjectPath::try_from(CACHE_PATH).ok()?);
             let records: Vec<CacheRecord> = self.call(&cache, CACHE, "GetItems", &()).await?;
             if records.is_empty() || records.len() > MAX_NODES {
@@ -397,7 +402,11 @@ impl Tree for Bus {
                 }
             }
             Some(nodes)
-        })?;
+        };
+        let entries = futures_lite::future::block_on(futures_lite::future::race(request, async {
+            async_io::Timer::after(remaining).await;
+            None
+        }))?;
         build_cached_frames(app, &entries, walk)
     }
 }
@@ -576,23 +585,42 @@ pub fn snapshot_many(
         return Vec::new();
     }
     let pids: HashSet<u32> = windows.iter().map(|window| window.pid).collect();
+    let focused_pid = windows
+        .iter()
+        .find(|window| window.focused)
+        .or_else(|| windows.first())
+        .map(|window| window.pid);
+    let mut app_refs: Vec<(Ref, u32)> = bus
+        .apps()
+        .into_iter()
+        .filter_map(|app| bus.pid(&app).map(|pid| (app, pid)))
+        .filter(|(_, pid)| pids.contains(pid))
+        .collect();
+    prioritize_applications(&mut app_refs, focused_pid);
     let mut apps = Vec::new();
     let mut frame_refs = Vec::new();
     let mut cached_apps = Vec::new();
-    for app in bus.apps() {
-        let Some(pid) = bus.pid(&app).filter(|pid| pids.contains(pid)) else {
-            continue;
-        };
+    for (app, pid) in app_refs {
+        if Instant::now() >= walk.deadline {
+            walk.truncated = true;
+            break;
+        }
         let gtk4 = uses_gtk4(pid);
-        if gtk4 && let Some(frames) = bus.cache_frames(&app, walk) {
-            apps.push(App {
-                name: String::new(),
-                pid,
-                frames,
-            });
-            frame_refs.push(Vec::new());
-            cached_apps.push(true);
-            continue;
+        if gtk4 {
+            if let Some(frames) = bus.cache_frames(&app, walk) {
+                apps.push(App {
+                    name: String::new(),
+                    pid,
+                    frames,
+                });
+                frame_refs.push(Vec::new());
+                cached_apps.push(true);
+                continue;
+            }
+            if Instant::now() >= walk.deadline {
+                walk.truncated = true;
+                break;
+            }
         }
         let refs: Vec<Ref> = bus
             .children(&app)
@@ -646,6 +674,12 @@ pub fn snapshot_many(
             apps: apps.clone(),
         })
         .collect()
+}
+
+fn prioritize_applications(apps: &mut [(Ref, u32)], focused_pid: Option<u32>) {
+    if let Some(focused_pid) = focused_pid {
+        apps.sort_by_key(|(_, pid)| *pid != focused_pid);
+    }
 }
 
 /// Every frame of `window`'s process walked in full, for record-tree.
@@ -993,5 +1027,31 @@ mod tests {
             assert_eq!(targets[0].text, expected);
             assert_eq!(targets[0].window, window.address);
         }
+    }
+
+    // REQ-SRC-02: process cache work starts with the focused window so other
+    // GTK4 applications cannot consume the walk budget first.
+    #[test]
+    fn req_src_02_focused_application_is_prioritized() {
+        let mut apps = vec![(r("/background"), 11), (r("/focused"), 12)];
+
+        prioritize_applications(&mut apps, Some(12));
+
+        assert_eq!(apps[0].1, 12);
+        assert_eq!(apps[1].1, 11);
+    }
+
+    // REQ-SRC-02: an expired shared walk budget does not read app frames.
+    #[test]
+    fn req_src_02_snapshot_respects_an_expired_walk_deadline() {
+        let bus = Fake::new();
+        let mut walk = Walk::new(Duration::ZERO);
+        let mut woken = HashSet::new();
+
+        let snapshots = snapshot_many(&bus, &[window()], &monitor(), &mut walk, &mut woken);
+
+        assert!(walk.truncated);
+        assert!(snapshots.iter().all(|snapshot| snapshot.apps.is_empty()));
+        assert!(bus.reads.borrow().is_empty());
     }
 }

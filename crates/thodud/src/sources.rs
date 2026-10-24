@@ -123,7 +123,7 @@ pub fn collect_visible_scoped(
         got.targets.extend(fallback.targets);
         got.status.extend(fallback.status);
     }
-    finish_visible_targets(&mut got.targets, windows);
+    finish_visible_targets(&mut got.targets, visible_windows);
     got.fallback_requested = false;
     got
 }
@@ -150,7 +150,7 @@ pub fn collect_primary_visible_scoped(
     let got = collect_phase(&primary, windows, visible_windows, monitor, &[]);
     let fallback_requested = got.request_fallback && !fallback.is_empty();
     let mut targets = got.targets;
-    finish_visible_targets(&mut targets, windows);
+    finish_visible_targets(&mut targets, visible_windows);
     Collected {
         targets,
         status: got.status,
@@ -180,7 +180,7 @@ pub fn collect_fallback_visible_scoped(
     let (_, fallback): (Vec<_>, Vec<_>) = sources.iter().partition(|source| !source.is_fallback());
     let got = collect_phase(&fallback, windows, visible_windows, monitor, excluded);
     let mut targets = got.targets;
-    finish_visible_targets(&mut targets, windows);
+    finish_visible_targets(&mut targets, visible_windows);
     Collected {
         targets,
         status: got.status,
@@ -791,6 +791,27 @@ mod tests {
         assert_eq!(got.targets.len(), 2);
         assert_eq!(got.targets[0].window, first.address);
         assert_eq!(got.targets[1].window, second.address);
+    }
+
+    // REQ-SRC-07: a scoped target covered by a visible window is not offered,
+    // even though AT-SPI only collected the selected window.
+    #[test]
+    fn req_src_07_single_window_scope_drops_atspi_targets_under_occluders() {
+        let selected = window();
+        let mut occluder = window();
+        occluder.address = "0x2".into();
+        occluder.size = (50, 50);
+        occluder.floating = true;
+        let sources: Vec<Arc<dyn Source>> = vec![Arc::new(EveryWindow)];
+
+        let got = collect_visible_scoped(
+            &sources,
+            std::slice::from_ref(&selected),
+            &[selected.clone(), occluder],
+            &monitor(),
+        );
+
+        assert!(got.targets.is_empty());
     }
 
     // REQ-SESSION-01: the default session labels targets from every visible

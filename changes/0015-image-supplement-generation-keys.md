@@ -17,6 +17,8 @@ Acceptance:
 - scenario: a key request carrying an old generation returns current labels without changing focus or queuing an action.
 - scenario: Escape with an old generation still closes the session.
 - scenario: the overlay suppresses key input while fetching a new generation and includes the loaded generation in subsequent requests.
+- scenario: an image update keeps every previously displayed primary target label and assigns added targets labels from a reserved prefix-free namespace.
+- scenario: one image detection spanning several adjacent accessible controls is not added as a duplicate target.
 
 ## Removed
 
@@ -26,7 +28,8 @@ None
 
 - Remove the obsolete tree-shape heuristic and its core tests; the daemon no longer consults it after image supplementation became unconditional.
 - Extend the production AT-SPI result-builder test to cover both empty and populated results.
-- Keep the full visible-window set available for image ownership when focused or explicit-window scope selects one target window.
+- Use the full visible-window set to reject covered AT-SPI and image targets in focused or explicit-window scope, and recheck target ownership before activation in every scope.
 - Add a daemon regression proving stale-generation activation returns current targets without queuing an action.
 - Extend the QML test to hold labels while fetching a new generation and send the loaded generation with each key request.
+- Preserve the labels shown before the image update and suppress detections covered by the union of accessible bounds.
 - Update task 0012 acceptance to reflect the later REQ-SRC-06 policy.

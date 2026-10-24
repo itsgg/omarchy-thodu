@@ -127,17 +127,20 @@ Acceptance:
 - scenario: a key request carrying an old generation returns current labels without changing focus or queuing an action.
 - scenario: Escape with an old generation still closes the session.
 - scenario: the overlay suppresses key input while fetching a new generation and includes the loaded generation in subsequent requests.
+- scenario: an image update keeps every previously displayed primary target label and assigns added targets labels from a reserved prefix-free namespace.
+- scenario: one image detection spanning several adjacent accessible controls is not added as a duplicate target.
 - scenario: a QML test checks that an image target's label chip uses the image-source style.
 - measured: the supplied Flea screenshot's visible file rows receive image labels within the 180 ms image-source budget, and `thodu bench --sessions 50` remains within REQ-PERF-01 on the GTK3 reference window and Slack.
 
 ### REQ-SRC-07: Targets from every visible window
-In default hints mode, the system shall collect targets from each visible window. It shall exclude windows on inactive workspaces and other monitors. One session shall assign labels across those windows and the bar. Every target shall retain its own Hyprland window address for stale checks and activation. Where windows overlap, it shall omit a target whose click point belongs to a different topmost visible window. Before activation in the default visible scope, it shall verify that the target's window is still topmost at that point and refresh if ownership changed. If multiple same-process frames cannot be matched to a non-focused window unambiguously, the system shall omit that window's AT-SPI targets rather than use another window's frame.
+In default hints mode, the system shall collect targets from each visible window. It shall exclude windows on inactive workspaces and other monitors. One session shall assign labels across those windows and the bar. Every target shall retain its own Hyprland window address for stale checks and activation. In every hints scope, it shall omit a target whose click point belongs to a different topmost visible window. Before activation in any scope, it shall verify that the target's window is still topmost at that point and refresh if ownership changed. If multiple same-process frames cannot be matched to a non-focused window unambiguously, the system shall omit that window's AT-SPI targets rather than use another window's frame.
 Acceptance:
 - scenario: Hyprland client fixtures include active-workspace, pinned, shown-special, inactive-workspace, hidden, unmapped, and other-monitor windows; only the visible windows enter the session.
 - scenario: two visible windows from different processes produce address-scoped targets in one session; acting on either target checks and uses its own window address.
 - scenario: two same-process frames with distinct sizes match their corresponding windows; equal-size ambiguous background frames are omitted, while the focused window may use its ACTIVE frame.
 - scenario: monitor image detections belong only to the topmost visible window at their click point; accessible coverage suppresses duplicates.
 - scenario: a floating window owns overlap with a tiled window even when the tiled window has a more recent focus history; if another window moves over a target before activation, the session refreshes instead of clicking the occluder.
+- scenario: in focused or explicit-window scope, AT-SPI targets covered by another visible window are omitted, and activation rechecks ownership before clicking.
 - live: default hints on a monitor with two visible apps reports targets from both window addresses; `--window` remains scoped to that window.
 
 ### Labels

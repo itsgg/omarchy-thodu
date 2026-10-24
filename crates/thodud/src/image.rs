@@ -244,18 +244,64 @@ fn targets_from_monitor_detections(
 
 pub(super) fn covered_by_accessible(bounds: Rect, window: &str, accessible: &[Target]) -> bool {
     let area = i64::from(bounds.w) * i64::from(bounds.h);
-    area > 0
-        && accessible.iter().any(|target| {
-            if target.source == From::Image
-                || (!target.window.is_empty() && target.window != window)
-            {
-                return false;
-            }
-            target
-                .bounds
-                .intersect(&bounds)
-                .is_some_and(|overlap| i64::from(overlap.w) * i64::from(overlap.h) * 4 >= area * 3)
+    if area <= 0 {
+        return false;
+    }
+    let covered: Vec<Rect> = accessible
+        .iter()
+        .filter(|target| {
+            target.source != From::Image && (target.window.is_empty() || target.window == window)
         })
+        .filter_map(|target| target.bounds.intersect(&bounds))
+        .collect();
+    if covered.is_empty() {
+        return false;
+    }
+    let center = bounds.center();
+    if covered
+        .iter()
+        .any(|rect| rect.contains_point(center.0, center.1))
+    {
+        return true;
+    }
+
+    let mut ys = vec![bounds.y, bounds.bottom()];
+    for rect in &covered {
+        ys.push(rect.y);
+        ys.push(rect.bottom());
+    }
+    ys.sort_unstable();
+    ys.dedup();
+    let mut covered_area = 0_i64;
+    for band in ys.windows(2) {
+        let (top, bottom) = (band[0], band[1]);
+        if bottom <= top {
+            continue;
+        }
+        let mut intervals: Vec<(i32, i32)> = covered
+            .iter()
+            .filter(|rect| rect.y < bottom && rect.bottom() > top)
+            .map(|rect| (rect.x, rect.right()))
+            .collect();
+        intervals.sort_unstable();
+        let mut merged: Option<(i32, i32)> = None;
+        let mut width = 0_i64;
+        for (left, right) in intervals {
+            match merged {
+                Some((start, end)) if left <= end => merged = Some((start, end.max(right))),
+                Some((start, end)) => {
+                    width += i64::from(end - start);
+                    merged = Some((left, right));
+                }
+                None => merged = Some((left, right)),
+            }
+        }
+        if let Some((start, end)) = merged {
+            width += i64::from(end - start);
+        }
+        covered_area += width * i64::from(bottom - top);
+    }
+    covered_area * 4 >= area * 3
 }
 
 fn decode_png(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
@@ -302,7 +348,9 @@ fn decode_png(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DetectionBox, DetectionKind, targets_from_monitor_detections};
+    use super::{
+        DetectionBox, DetectionKind, covered_by_accessible, targets_from_monitor_detections,
+    };
     use std::time::{Duration, Instant};
     use thodu_core::model::{ActionKind, Rect, Role, Source, Target, Window};
 
@@ -362,6 +410,26 @@ mod tests {
         assert!(found[0].text.is_empty());
         assert_eq!(found[0].actions, [ActionKind::Click]);
         assert_eq!(found[0].window, "0x1");
+    }
+
+    // REQ-SRC-06: accessible controls collectively covering a detection
+    // suppress the duplicate even when no single control covers most of it.
+    #[test]
+    fn req_src_06_combined_accessible_controls_cover_image_detection() {
+        let detection = Rect::new(0, 0, 120, 20);
+        let accessible: Vec<Target> = (0..3)
+            .map(|i| Target {
+                id: format!("a{i}"),
+                bounds: Rect::new(i * 40, 0, 40, 20),
+                role: Role::Button,
+                text: format!("item {i}"),
+                source: Source::Atspi,
+                actions: vec![ActionKind::Click],
+                window: "0x1".into(),
+            })
+            .collect();
+
+        assert!(covered_by_accessible(detection, "0x1", &accessible));
     }
 
     // REQ-SRC-06: detections inside overlay labels and the toast are discarded
