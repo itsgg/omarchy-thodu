@@ -8,7 +8,7 @@ Every visible-window collection also runs a bounded monitor screenshot detector 
 
 When no app window is focused, Thodu uses the focused monitor and still labels the Omarchy bar. If no source finds targets, it opens the grid.
 
-In an interactive session, primary hints appear first and visual hints arrive in a second update. Labels already on screen stay attached to their targets, keys are held until new targets load, and `Escape` remains available.
+In an interactive session, primary hints appear first and visual hints arrive in a second update. Labels already on screen stay attached to their targets. Thodu ignores label keys while visual hints load; `Escape` remains available.
 
 ## Install
 
@@ -17,13 +17,16 @@ Requirements:
 - Omarchy with Hyprland using the Lua configuration.
 - `grim`, for screenshot-based visual supplementation of visible windows.
 - The Rust toolchain pinned in `rust-toolchain.toml` to build from source.
+- `python3`, to read Cargo's configured target directory in the install commands below.
 - An active graphical session. Installation configures accessibility, the virtual input device rule, the Omarchy plugin, a user service and Hyprland bindings.
 
 Build and install the executables side by side. The `thodu install` command uses the `thodud` executable beside it:
 
 ```sh
+set -eu
 cargo build --release
 target_dir="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
+: "${target_dir:?ERROR could not determine Cargo target directory}"
 install -Dm755 "$target_dir/release/thodu" "$HOME/.local/bin/thodu"
 install -Dm755 "$target_dir/release/thodud" "$HOME/.local/bin/thodud"
 thodu install
