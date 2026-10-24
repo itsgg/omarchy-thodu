@@ -40,16 +40,25 @@ impl Source for ImageSource {
     }
 
     fn collect(&self, window: &Window, monitor: &Monitor) -> Found {
-        self.collect_windows(std::slice::from_ref(window), monitor)
+        self.collect_windows(std::slice::from_ref(window), monitor, &[])
     }
 
     fn collect_many(&self, windows: &[Window], monitor: &Monitor) -> Found {
-        self.collect_windows(windows, monitor)
+        self.collect_windows(windows, monitor, &[])
+    }
+
+    fn collect_many_excluding(
+        &self,
+        windows: &[Window],
+        monitor: &Monitor,
+        excluded: &[Target],
+    ) -> Found {
+        self.collect_windows(windows, monitor, excluded)
     }
 }
 
 impl ImageSource {
-    fn collect_windows(&self, windows: &[Window], monitor: &Monitor) -> Found {
+    fn collect_windows(&self, windows: &[Window], monitor: &Monitor, excluded: &[Target]) -> Found {
         let started = Instant::now();
         if windows.is_empty() {
             return Ok(SourceTargets::new(
@@ -112,7 +121,8 @@ impl ImageSource {
                 })
             })
             .collect();
-        let targets = targets_from_monitor_detections(windows, visible, monitor.scale, &boxes, &[]);
+        let targets =
+            targets_from_monitor_detections(windows, visible, monitor.scale, &boxes, excluded);
         let took = started.elapsed().as_millis();
         let count = targets.len();
         Ok(SourceTargets::new(
@@ -321,6 +331,55 @@ mod tests {
         assert!(found[0].text.is_empty());
         assert_eq!(found[0].actions, [ActionKind::Click]);
         assert_eq!(found[0].window, "0x1");
+    }
+
+    // REQ-SRC-06: detections inside overlay labels and the toast are discarded
+    // by the same mapper used for live monitor screenshots.
+    #[test]
+    fn req_src_06_image_mapper_omits_overlay_detections() {
+        let mut app = window();
+        app.at = (0, 0);
+        app.size = (400, 300);
+        let overlay = |id: &str, bounds| Target {
+            id: id.into(),
+            bounds,
+            role: Role::Unknown,
+            text: String::new(),
+            source: Source::Shell,
+            actions: Vec::new(),
+            window: String::new(),
+        };
+        let exclusions = [
+            overlay("overlay:label", Rect::new(108, 58, 24, 18)),
+            overlay("overlay:status", Rect::new(100, 245, 200, 45)),
+        ];
+        let detections = [
+            DetectionBox {
+                bounds: Rect::new(110, 60, 18, 12),
+                kind: DetectionKind::TextLine,
+                confidence: 0.8,
+            },
+            DetectionBox {
+                bounds: Rect::new(170, 260, 30, 20),
+                kind: DetectionKind::TextLine,
+                confidence: 0.8,
+            },
+            DetectionBox {
+                bounds: Rect::new(250, 100, 20, 12),
+                kind: DetectionKind::TextLine,
+                confidence: 0.8,
+            },
+        ];
+
+        let found = targets_from_monitor_detections(
+            &[app],
+            Rect::new(0, 0, 400, 300),
+            1.0,
+            &detections,
+            &exclusions,
+        );
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].bounds, Rect::new(250, 100, 20, 12));
     }
 
     // REQ-SRC-06: the classical detector can turn a synthetic line of glyph

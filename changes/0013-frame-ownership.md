@@ -1,7 +1,7 @@
 # 0013: Keep accessibility frames with their windows
 
 Status: merged
-Why: Claude's review of task 0013 found that a same-process background window could reuse the focused sibling's ACTIVE frame when their sizes matched, and an explicitly selected background window could be treated as focused because it was first in the request. Frame matching needs to use actual focus and prevent one frame from serving multiple windows.
+Why: Reviewing multi-window matching found that a same-process background window could reuse the focused sibling's ACTIVE frame when their sizes matched, and an explicitly selected background window could be treated as focused because it was first in the request. Frame matching needs to use actual focus and prevent one frame from serving multiple windows.
 
 ## Added
 

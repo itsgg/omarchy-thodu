@@ -60,6 +60,15 @@ pub trait Source: Send + Sync {
             None => Ok(SourceTargets::new(Vec::new(), "0 targets")),
         }
     }
+    /// Collect a fallback while omitting content the overlay already draws.
+    fn collect_many_excluding(
+        &self,
+        windows: &[Window],
+        monitor: &Monitor,
+        _excluded: &[Target],
+    ) -> Found {
+        self.collect_many(windows, monitor)
+    }
 }
 
 pub struct Collected {
@@ -82,7 +91,7 @@ pub fn collect_visible(
 ) -> Collected {
     let mut got = collect_primary_visible(sources, windows, monitor);
     if got.fallback_requested {
-        let fallback = collect_fallback_visible(sources, windows, monitor);
+        let fallback = collect_fallback_visible(sources, windows, monitor, &got.targets);
         got.targets.extend(fallback.targets);
         got.status.extend(fallback.status);
     }
@@ -100,7 +109,7 @@ pub fn collect_primary_visible(
 ) -> Collected {
     let (primary, fallback): (Vec<_>, Vec<_>) =
         sources.iter().partition(|source| !source.is_fallback());
-    let got = collect_phase(&primary, windows, monitor);
+    let got = collect_phase(&primary, windows, monitor, &[]);
     let fallback_requested = got.request_fallback && !fallback.is_empty();
     let mut targets = got.targets;
     finish_visible_targets(&mut targets, windows);
@@ -117,9 +126,10 @@ pub fn collect_fallback_visible(
     sources: &[Arc<dyn Source>],
     windows: &[Window],
     monitor: &Monitor,
+    excluded: &[Target],
 ) -> Collected {
     let (_, fallback): (Vec<_>, Vec<_>) = sources.iter().partition(|source| !source.is_fallback());
-    let got = collect_phase(&fallback, windows, monitor);
+    let got = collect_phase(&fallback, windows, monitor, excluded);
     let mut targets = got.targets;
     finish_visible_targets(&mut targets, windows);
     Collected {
@@ -141,15 +151,24 @@ struct Phase {
     request_fallback: bool,
 }
 
-fn collect_phase(sources: &[&Arc<dyn Source>], windows: &[Window], monitor: &Monitor) -> Phase {
+fn collect_phase(
+    sources: &[&Arc<dyn Source>],
+    windows: &[Window],
+    monitor: &Monitor,
+    excluded: &[Target],
+) -> Phase {
     let started = Instant::now();
     let (tx, rx) = mpsc::channel();
     for (i, source) in sources.iter().enumerate() {
         let source = Arc::clone(source);
         let tx = tx.clone();
         let (windows, monitor) = (windows.to_vec(), monitor.clone());
+        let excluded = excluded.to_vec();
         thread::spawn(move || {
-            let _ = tx.send((i, source.collect_many(&windows, &monitor)));
+            let _ = tx.send((
+                i,
+                source.collect_many_excluding(&windows, &monitor, &excluded),
+            ));
         });
     }
     drop(tx);
@@ -308,7 +327,6 @@ impl Atspi {
         let snapshots = atspi::snapshot_many(reader, windows, monitor, &mut walk, &mut woken);
         let took = started.elapsed().as_millis();
         let mut targets = Vec::new();
-        let mut fallback = false;
         let mut unavailable = Vec::new();
         let frame_indices = tree::match_frame_indices(&snapshots);
         for ((window, snapshot), frame_index) in
@@ -316,14 +334,12 @@ impl Atspi {
         {
             if !snapshot.apps.iter().any(|app| app.pid == window.pid) {
                 unavailable.push(unregistered_status(window));
-                fallback = true;
                 continue;
             }
             let frame = frame_index.map(|(app, frame)| &snapshot.apps[app].frames[frame]);
             let found = frame
                 .map(|frame| tree::targets(frame, window, monitor))
                 .unwrap_or_default();
-            fallback |= found.is_empty() || frame.is_none_or(tree::needs_image_fallback);
             targets.extend(found.into_iter().map(|mut target| {
                 target.id = format!("{}:{}", target.window, target.id);
                 target
@@ -352,13 +368,18 @@ impl Atspi {
                     .join("; ")
             )
         };
-        let result = SourceTargets::new(targets, said);
-        Ok(if fallback {
-            result.with_fallback()
-        } else {
-            result
-        })
+        // AT-SPI does not report controls that apps paint themselves. Run a
+        // bounded visual supplement for every visible-window collection;
+        // interactive hints draw these primary targets before it completes.
+        Ok(atspi_targets_with_visual_supplement(targets, said))
     }
+}
+
+fn atspi_targets_with_visual_supplement(
+    targets: Vec<Target>,
+    status: impl Into<String>,
+) -> SourceTargets {
+    SourceTargets::new(targets, status).with_fallback()
 }
 
 /// The Omarchy bar's clickable items, as the overlay plugin's bar widget
@@ -481,6 +502,32 @@ mod tests {
     }
 
     struct SlowFallback;
+
+    struct ExclusionProbe(Arc<Mutex<Vec<String>>>);
+
+    impl Source for ExclusionProbe {
+        fn name(&self) -> &'static str {
+            "image"
+        }
+
+        fn budget(&self) -> Duration {
+            Duration::from_millis(100)
+        }
+
+        fn is_fallback(&self) -> bool {
+            true
+        }
+
+        fn collect(&self, _: &Window, _: &Monitor) -> Found {
+            Ok(SourceTargets::new(Vec::new(), "image"))
+        }
+
+        fn collect_many_excluding(&self, _: &[Window], _: &Monitor, excluded: &[Target]) -> Found {
+            *self.0.lock().expect("probe lock") =
+                excluded.iter().map(|target| target.id.clone()).collect();
+            Ok(SourceTargets::new(Vec::new(), "image"))
+        }
+    }
 
     impl Source for SlowFallback {
         fn name(&self) -> &'static str {
@@ -852,9 +899,9 @@ mod tests {
         );
     }
 
-    // REQ-SRC-06: ordinary windows do not pay for image capture and detection.
+    // REQ-SRC-06: a source can opt out of requesting the image fallback.
     #[test]
-    fn req_src_06_image_fallback_is_skipped_for_complete_primary_sources() {
+    fn req_src_06_unrequested_image_fallback_is_skipped() {
         let primary_calls = Arc::new(AtomicUsize::new(0));
         let image_calls = Arc::new(AtomicUsize::new(0));
         let sources: Vec<Arc<dyn Source>> = vec![
@@ -924,6 +971,87 @@ mod tests {
         }
     }
 
+    // REQ-SRC-06: visual detection supplements valid accessible targets so
+    // custom-painted controls are not missed just because a tree is populated.
+    #[test]
+    fn req_src_06_visual_supplement_runs_with_accessible_targets() {
+        let primary_calls = Arc::new(AtomicUsize::new(0));
+        let image_calls = Arc::new(AtomicUsize::new(0));
+        let sources: Vec<Arc<dyn Source>> = vec![
+            Arc::new(Conditional {
+                name: "atspi",
+                is_fallback: false,
+                fallback_on_error: true,
+                request_fallback: true,
+                fail: false,
+                source: From::Atspi,
+                calls: Arc::clone(&primary_calls),
+            }),
+            Arc::new(Conditional {
+                name: "image",
+                is_fallback: true,
+                fallback_on_error: false,
+                request_fallback: false,
+                fail: false,
+                source: From::Image,
+                calls: Arc::clone(&image_calls),
+            }),
+        ];
+
+        let got = collect(&sources, &window(), &monitor());
+        assert_eq!(primary_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(image_calls.load(Ordering::Relaxed), 1);
+        assert!(
+            got.targets
+                .iter()
+                .any(|target| target.source == From::Atspi)
+        );
+        assert!(
+            got.targets
+                .iter()
+                .any(|target| target.source == From::Image)
+        );
+    }
+
+    // REQ-SRC-06: populated AT-SPI results from the production result builder
+    // request the visual supplement too.
+    #[test]
+    fn req_src_06_populated_atspi_results_request_visual_supplement() {
+        let accessible = Target {
+            id: "button".into(),
+            bounds: Rect::new(10, 10, 20, 20),
+            role: Role::Button,
+            text: "Open".into(),
+            source: From::Atspi,
+            actions: vec![ActionKind::Click],
+            window: "0x1".into(),
+        };
+        let found = atspi_targets_with_visual_supplement(vec![accessible], "20 targets from atspi");
+        assert_eq!(found.targets.len(), 1);
+        assert!(found.request_fallback);
+    }
+
+    // REQ-SRC-06: the asynchronous fallback receives the initial targets and
+    // overlay rectangles so image detections cannot label Thodu's own UI.
+    #[test]
+    fn req_src_06_fallback_receives_overlay_exclusions() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sources: Vec<Arc<dyn Source>> = vec![Arc::new(ExclusionProbe(Arc::clone(&seen)))];
+        let excluded = vec![Target {
+            id: "overlay:status-line".into(),
+            bounds: Rect::new(20, 30, 60, 18),
+            role: Role::Unknown,
+            text: String::new(),
+            source: From::Shell,
+            actions: Vec::new(),
+            window: String::new(),
+        }];
+
+        let got = collect_fallback_visible(&sources, &[window()], &monitor(), &excluded);
+        assert_eq!(*seen.lock().expect("probe lock"), ["overlay:status-line"]);
+        assert_eq!(got.status, ["image"]);
+    }
+
     // REQ-SRC-06: a hints session can draw primary results before it starts
     // the requested visual fallback.
     #[test]
@@ -957,7 +1085,7 @@ mod tests {
         assert_eq!(primary_calls.load(Ordering::Relaxed), 1);
         assert_eq!(fallback_calls.load(Ordering::Relaxed), 0);
 
-        let fallback = collect_fallback_visible(&sources, &[window()], &monitor());
+        let fallback = collect_fallback_visible(&sources, &[window()], &monitor(), &[]);
         assert_eq!(fallback.targets.len(), 1);
         assert_eq!(fallback_calls.load(Ordering::Relaxed), 1);
     }

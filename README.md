@@ -2,16 +2,18 @@
 
 Thodu is a keyboard hint picker for Omarchy. It labels clickable controls in every visible window on the focused monitor and in the Omarchy bar, so you can choose them without reaching for the pointer. Thodu means "touch" in Tamil.
 
-This is an early, Omarchy-only milestone. It uses accessibility trees for GTK 3, GTK 4, Qt Widgets, Chromium controls and Electron controls, plus clickable items in the Omarchy bar. When a visible list row or a large content panel is missing from an accessibility tree, a bounded monitor screenshot detector can add click hints for text and box-like controls. Those image hints have no searchable text and use an amber style. They can miss icons and controls without useful accessibility data or visible text. A grid remains available for choosing any point on the focused monitor. Web page content, scrolling, dragging and hovering are not supported yet.
+This is an early, Omarchy-only milestone. It uses accessibility trees for GTK 3, GTK 4, Qt Widgets, Chromium controls and Electron controls, plus clickable items in the Omarchy bar. Default hints cover mapped windows on the focused monitor's active workspace, shown special workspace and pinned clients. One label sequence spans those windows, with the shortest labels placed near the top-left. `--scope focused` and `--window` restrict collection to one window.
 
-When image hints are needed in an interactive session, primary hints appear first and visual hints arrive in a second update. Thodu holds label keys until that update so labels cannot shift during selection; `Escape` still closes the session.
+Every visible-window collection also runs a bounded monitor screenshot detector after primary targets draw. It can add click hints for visible text lines and box-like controls that apps do not expose in their accessibility trees, even when other controls are accessible. These image hints have no searchable text and use an amber style. They can miss controls, and may label visible text that is not interactive. A grid remains available for choosing any point on the focused monitor. Web page content, scrolling, dragging and hovering are not supported yet.
+
+In an interactive session, primary hints appear first and visual hints arrive in a second update. Thodu holds label keys until that update so labels cannot shift during selection; `Escape` still closes the session.
 
 ## Install
 
 Requirements:
 
 - Omarchy with Hyprland using the Lua configuration.
-- `grim`, for the screenshot fallback when an accessibility tree is incomplete.
+- `grim`, for screenshot-based visual supplementation of visible windows.
 - The Rust toolchain pinned in `rust-toolchain.toml` to build from source.
 - An active graphical session. Installation configures accessibility, the virtual input device rule, the Omarchy plugin, a user service and Hyprland bindings.
 
@@ -37,7 +39,7 @@ Installation may ask for authorization to add the `/dev/uinput` rule. `thodu doc
 
 ## Use
 
-- Press the hints binding to show labels for targets in every visible window on the focused monitor and the bar.
+- Press the hints binding to show labels across every visible window on the focused monitor and the bar. Primary targets appear first; visual candidates arrive in a second pass.
 - Add `--scope focused` to `thodu hints` or `thodu targets` to restrict a request to the focused window. `--window ADDRESS` selects one specific window.
 - In the default search-first mode, type text to narrow targets. Use `Shift` with a label letter to enter a label. In labels-only mode, type a label directly; press `/` to search by text.
 - Completing a label in lowercase focuses it. Making the label's final letter uppercase activates it immediately. `Return` activates the focused target.

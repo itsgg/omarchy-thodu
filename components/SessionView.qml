@@ -236,6 +236,46 @@ FocusScope {
         return "type to search | Shift+hint activates | Tab cycles hints";
     }
 
+    // Send the exact geometry Thodu paints so the screenshot detector can
+    // ignore hint chips and the status toast without estimating QML layout.
+    function overlayRects() {
+        const rects = [];
+        for (const target of view.targets) {
+            if (view.kept[target.id] === true && !view.lingering &&
+                    !(view.zoomed && target.source === "grid"))
+                rects.push(target.placed);
+        }
+        if (focusRing.visible) {
+            const x = view.area.x + focusRing.x;
+            const y = view.area.y + focusRing.y;
+            const right = x + focusRing.width;
+            const bottom = y + focusRing.height;
+            rects.push({
+                x: Math.floor(x),
+                y: Math.floor(y),
+                w: Math.ceil(right) - Math.floor(x),
+                h: Math.ceil(bottom) - Math.floor(y)
+            });
+        }
+        if (statusLine.visible) {
+            const x = view.area.x + statusLine.x;
+            const y = view.area.y + statusLine.y;
+            const right = x + statusLine.width;
+            const bottom = y + statusLine.height;
+            rects.push({
+                x: Math.floor(x),
+                y: Math.floor(y),
+                w: Math.ceil(right) - Math.floor(x),
+                h: Math.ceil(bottom) - Math.floor(y)
+            });
+        }
+        return rects;
+    }
+
+    function drawnMessage() {
+        return { op: "drawn", session: view.session, overlays: view.overlayRects() };
+    }
+
     Keys.onPressed: event => {
         event.accepted = true;
         if (!view.active)

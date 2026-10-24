@@ -20,6 +20,7 @@ Item {
     property bool nextLinger: false
     // Targets the fake sends with the next key reply, as the grid does.
     property var nextTargets: null
+    property var fallbackReply: null
     property var shownView: ({ state: "showing", visible: ["a0", "a1"], focused: null, search: "", label_prefix: "", collecting: false })
 
     readonly property var fullReply: ({
@@ -40,7 +41,7 @@ Item {
             return;
         let reply;
         if (request.op === "session" && !request.brief) {
-            reply = top.fullReply;
+            reply = top.fallbackReply || top.fullReply;
         } else if (request.op === "session") {
             reply = { v: 1, ok: true, session: "s1", view: top.shownView };
         } else if (request.op === "key") {
@@ -87,6 +88,7 @@ Item {
             top.nextState = "showing";
             top.nextLinger = false;
             top.nextTargets = null;
+            top.fallbackReply = null;
             top.shownView = { state: "showing", visible: ["a0", "a1"], focused: null, search: "", label_prefix: "", collecting: false };
             view.begin("s1");
             view.forceActiveFocus();
@@ -115,6 +117,7 @@ Item {
                 status: "collecting visual targets",
                 view: Object.assign({}, top.fullReply.view, { collecting: true })
             });
+            top.shownView = pending.view;
             view.apply(pending);
             verify(view.collecting);
             compare(view.hintCue(), "visual targets loading | Esc cancels");
@@ -124,14 +127,54 @@ Item {
             const moreTargets = top.fullReply.targets.concat([
                 { id: "i0", bounds: { x: 320, y: 80, w: 60, h: 30 }, role: "text", text: "", source: "image", actions: ["click"], window: "0x2", label: "d", placed: { x: 313, y: 86, w: 17, h: 18 } }
             ]);
-            view.apply(Object.assign({}, top.fullReply, {
+            top.fallbackReply = Object.assign({}, top.fullReply, {
                 targets: moreTargets,
                 view: Object.assign({}, top.fullReply.view, { generation: 1, collecting: false })
-            }));
+            });
+            top.shownView = Object.assign({}, top.fullReply.view, { generation: 1, collecting: false });
+            tryVerify(() => !view.collecting && view.targets.length === 3, 1000,
+                      "heartbeat detects the fallback generation and fetches its targets");
             verify(!view.collecting);
             compare(view.targets.length, 3);
             keyClick(Qt.Key_A);
             compare(top.keysSent().length, 1, "keys resume after the fallback result arrives");
+        }
+
+        function test_req_session_01_drawn_event_reports_rendered_overlay_bounds() {
+            view.area = { x: 100.5, y: 50.25, w: 800, h: 600 };
+            const message = view.drawnMessage();
+            const rects = message.overlays;
+            const firstChip = findChild(view, "label-a");
+            const secondChip = findChild(view, "label-s");
+            const status = findChild(view, "status-line");
+            verify(firstChip !== null && firstChip.visible);
+            verify(secondChip !== null && secondChip.visible);
+            verify(status !== null && status.visible);
+            compare(message.op, "drawn");
+            compare(message.session, "s1");
+            compare(rects.length, 3, "two chips and the status toast are reported");
+            compare(rects[0].x, Math.floor(view.area.x + firstChip.x));
+            compare(rects[0].y, Math.floor(view.area.y + firstChip.y));
+            compare(rects[0].w, Math.ceil(view.area.x + firstChip.x + firstChip.width) - rects[0].x);
+            compare(rects[0].h, Math.ceil(view.area.y + firstChip.y + firstChip.height) - rects[0].y);
+            compare(rects[1].x, Math.floor(view.area.x + secondChip.x));
+            compare(rects[1].y, Math.floor(view.area.y + secondChip.y));
+            const x = view.area.x + status.x;
+            const y = view.area.y + status.y;
+            compare(rects[2].x, Math.floor(x));
+            compare(rects[2].y, Math.floor(y));
+            compare(rects[2].w, Math.ceil(x + status.width) - Math.floor(x));
+            compare(rects[2].h, Math.ceil(y + status.height) - Math.floor(y));
+
+            view.focusedId = "a0";
+            const focus = findChild(view, "focus-ring");
+            verify(focus !== null && focus.visible);
+            const focusedRects = view.overlayRects();
+            compare(focusedRects.length, 4, "the focus ring is also reported");
+            compare(focusedRects[2].x, Math.floor(view.area.x + focus.x));
+            compare(focusedRects[2].y, Math.floor(view.area.y + focus.y));
+            compare(focusedRects[2].w, Math.ceil(view.area.x + focus.x + focus.width) - focusedRects[2].x);
+            compare(focusedRects[2].h, Math.ceil(view.area.y + focus.y + focus.height) - focusedRects[2].y);
         }
 
         // Escape gives the keyboard back at once, before and without any

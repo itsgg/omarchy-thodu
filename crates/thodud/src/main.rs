@@ -24,7 +24,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thodu_core::config::{self, Config};
 use thodu_core::input;
 use thodu_core::labels;
-use thodu_core::model::{Monitor, Source, Target, Window};
+use thodu_core::model::{Monitor, Rect, Source, Target, Window};
 use thodu_core::protocol::{
     self, Envelope, ErrorKind, LabeledTarget, MonitorInfo, OpenEvent, Reply, Request, Timing, View,
 };
@@ -37,6 +37,8 @@ const ATSPI_BUDGET: Duration = Duration::from_millis(80);
 const SHELL_BUDGET: Duration = Duration::from_millis(40);
 /// How long screen capture and visual detection may take (REQ-SRC-05).
 const IMAGE_BUDGET: Duration = Duration::from_millis(180);
+/// How long the visual source waits for the overlay's first drawn frame.
+const FALLBACK_DRAW_WAIT: Duration = Duration::from_millis(500);
 /// How long record-tree may walk.
 const RECORD_BUDGET: Duration = Duration::from_secs(5);
 /// How long an action waits for the overlay to say it is gone.
@@ -65,6 +67,7 @@ struct Entry {
     monitor: Monitor,
     status: String,
     collecting: bool,
+    overlay_bounds: Option<Vec<Rect>>,
     test: bool,
     hidden: bool,
     created: Instant,
@@ -85,8 +88,8 @@ struct Daemon {
     socket: PathBuf,
     shutdown: AtomicBool,
     sessions: Mutex<HashMap<String, Entry>>,
-    /// Signalled whenever a session's hidden, clicked, pending or closing
-    /// changes, or it ends.
+    /// Signalled when a session's first draw or hidden, clicked, pending or
+    /// closing state changes, or it ends.
     changed: Condvar,
     next: AtomicU64,
     atspi: Arc<sources::Atspi>,
@@ -303,6 +306,7 @@ impl Daemon {
                     monitor,
                     status: status.clone(),
                     collecting,
+                    overlay_bounds: None,
                     test,
                     hidden: false,
                     created: Instant::now(),
@@ -335,7 +339,19 @@ impl Daemon {
             let monitor = fallback_monitor;
             let fallback_id = id.clone();
             thread::spawn(move || {
-                let fallback = sources::collect_fallback_visible(&sources, &windows, &monitor);
+                if overlay {
+                    daemon.wait_for_first_draw(&fallback_id, FALLBACK_DRAW_WAIT);
+                }
+                let Some(visual_exclusions) = daemon.fallback_exclusions(&fallback_id, overlay)
+                else {
+                    return;
+                };
+                let fallback = sources::collect_fallback_visible(
+                    &sources,
+                    &windows,
+                    &monitor,
+                    &visual_exclusions,
+                );
                 daemon.finish_fallback(&fallback_id, fallback, &windows);
             });
         }
@@ -368,12 +384,66 @@ impl Daemon {
             .is_ok_and(|mut l| l.push(line.as_bytes()))
     }
 
-    fn drawn(&self, id: &str) -> Res<Reply> {
+    fn drawn(&self, id: &str, overlays: Option<Vec<Rect>>) -> Res<Reply> {
         let mut sessions = self.sessions.lock().map_err(|_| internal("session lock"))?;
         if let Some(entry) = sessions.get_mut(id) {
             entry.timing.drawn_at_us.get_or_insert_with(now_us);
+            entry.overlay_bounds = overlays;
         }
+        self.changed.notify_all();
         Ok(Reply::ok())
+    }
+
+    fn wait_for_first_draw(&self, id: &str, wait: Duration) -> bool {
+        let deadline = Instant::now() + wait;
+        let Ok(mut sessions) = self.sessions.lock() else {
+            return false;
+        };
+        loop {
+            let Some(entry) = sessions.get(id) else {
+                return false;
+            };
+            if !entry.collecting || entry.closing || entry.session.state != State::Showing {
+                return false;
+            }
+            if entry.timing.drawn_at_us.is_some() {
+                return true;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            let Ok((next, result)) = self.changed.wait_timeout(sessions, remaining) else {
+                return false;
+            };
+            sessions = next;
+            if result.timed_out() {
+                return false;
+            }
+        }
+    }
+
+    fn fallback_exclusions(&self, id: &str, overlay_expected: bool) -> Option<Vec<Target>> {
+        let mut sessions = self.sessions.lock().ok()?;
+        let entry = sessions.get_mut(id)?;
+        if !entry.collecting {
+            return None;
+        }
+        if entry.closing || entry.session.state != State::Showing {
+            stop_collecting(entry);
+            return None;
+        }
+        let overlay_bounds = if !overlay_expected {
+            Some(&[][..])
+        } else {
+            entry.overlay_bounds.as_deref()
+        };
+        Some(image_fallback_exclusions(
+            &entry.session,
+            &entry.monitor,
+            &entry.status,
+            overlay_bounds,
+        ))
     }
 
     fn finish_fallback(&self, id: &str, fallback: sources::Collected, windows: &[Window]) {
@@ -461,12 +531,7 @@ impl Daemon {
             .get_mut(id)
             .ok_or_else(|| fail(ErrorKind::BadRequest, format!("no session {id}")))?;
         if entry.collecting && key != Key::Escape {
-            return Ok(Reply {
-                session: Some(id.to_string()),
-                view: Some(Self::view(entry)),
-                status: Some(entry.status.clone()),
-                ..Reply::ok()
-            });
+            return Err(fail(ErrorKind::Busy, "visual targets are still collecting"));
         }
         let generation = entry.session.generation;
         let at = entry.created.elapsed().as_millis() as u64;
@@ -797,7 +862,7 @@ impl Daemon {
                 ctrl,
             } => self.key(&session, &key, shift, ctrl),
             Request::Hidden { session } => self.hidden(&session),
-            Request::Drawn { session } => self.drawn(&session),
+            Request::Drawn { session, overlays } => self.drawn(&session, overlays),
             // serve() registers the connection once the reply is written.
             Request::Listen => Ok(Reply::ok()),
             Request::Targets { window, scope } => self.targets(window, &scope),
@@ -828,8 +893,111 @@ fn with_grid_note(status: String, session: &Session, asked: bool) -> String {
     }
 }
 
+/// Rectangles rendered by the overlay are not app controls. The image pass
+/// runs after the first draw, so it removes every label chip and the status
+/// toast before treating screen detections as app targets.
+fn image_fallback_exclusions(
+    session: &Session,
+    monitor: &Monitor,
+    status: &str,
+    overlay_bounds: Option<&[Rect]>,
+) -> Vec<Target> {
+    let area = monitor.logical();
+    let mut excluded = session.targets.clone();
+    if let Some(overlays) = overlay_bounds {
+        for (index, rect) in overlays.iter().enumerate() {
+            if let Some(bounds) = rect.intersect(&area) {
+                excluded.push(overlay_exclusion(format!("overlay:{index}"), bounds));
+            }
+        }
+        return excluded;
+    }
+
+    // When the overlay does not report its first frame, conservatively
+    // estimate its geometry so a slow or absent overlay does not block this session.
+    for (index, (target, label)) in session.targets.iter().zip(&session.labels).enumerate() {
+        excluded.push(overlay_exclusion(
+            format!("overlay:label:{index}"),
+            labels::place(&target.bounds, protocol::label_size(label.len()), &area),
+        ));
+    }
+    if !session.label_selected
+        && let Some(target) = session.focused.and_then(|index| session.targets.get(index))
+    {
+        let ring = Rect::new(
+            target.bounds.x - 2,
+            target.bounds.y - 2,
+            target.bounds.w + 4,
+            target.bounds.h + 4,
+        );
+        if let Some(ring) = ring.intersect(&area) {
+            excluded.push(overlay_exclusion("overlay:focus-ring".into(), ring));
+        }
+    }
+    if !status.is_empty() && !area.is_empty() {
+        let max_width = (area.w - 32).clamp(1, 640);
+        let cue = "visual targets loading | Esc cancels";
+        let width = (status.chars().count() as i32 * 8)
+            .max(cue.chars().count() as i32 * 7)
+            .saturating_add(24)
+            .min(max_width);
+        let text_width = (width - 24).max(1);
+        let status_lines = wrapped_line_count(status, text_width, 8);
+        let cue_lines = wrapped_line_count(cue, text_width, 7);
+        // Include padding, line spacing and a little layout slack so antialiased
+        // text and borders in the toast never become image-derived targets.
+        let height = (16 + status_lines * 16 + 3 + cue_lines * 14 + 16).min(area.h);
+        let toast = Rect::new(
+            area.x + (area.w - width) / 2,
+            area.bottom() - 24 - height - 3,
+            width,
+            height + 6,
+        );
+        if let Some(toast) = toast.intersect(&area) {
+            excluded.push(overlay_exclusion("overlay:status-line".into(), toast));
+        }
+    }
+    excluded
+}
+
+fn overlay_exclusion(id: String, bounds: Rect) -> Target {
+    Target {
+        id,
+        bounds,
+        role: thodu_core::model::Role::Unknown,
+        text: String::new(),
+        source: Source::Shell,
+        actions: Vec::new(),
+        window: String::new(),
+    }
+}
+
+fn wrapped_line_count(text: &str, width: i32, char_width: i32) -> i32 {
+    let per_line = (width / char_width.max(1)).max(1) as usize;
+    let mut lines = 1_usize;
+    let mut current = 0;
+    for word in text.split_whitespace() {
+        let chars = word.chars().count();
+        let chunks = chars.div_ceil(per_line);
+        if current > 0 && current + 1 + chars > per_line {
+            lines += chunks;
+            current = chars % per_line;
+        } else if chunks > 1 {
+            lines += chunks - 1;
+            current = chars % per_line;
+        } else {
+            current += usize::from(current > 0) + chars;
+        }
+    }
+    lines as i32
+}
+
 fn merge_fallback(entry: &mut Entry, fallback: sources::Collected, windows: &[Window]) -> bool {
-    if !entry.collecting || entry.session.state != State::Showing {
+    if !entry.collecting {
+        return false;
+    }
+    if entry.closing || entry.session.state != State::Showing {
+        stop_collecting(entry);
         return false;
     }
     let generation = entry.session.generation.wrapping_add(1);
@@ -851,6 +1019,15 @@ fn merge_fallback(entry: &mut Entry, fallback: sources::Collected, windows: &[Wi
     entry.session = session;
     entry.collecting = false;
     true
+}
+
+fn stop_collecting(entry: &mut Entry) {
+    entry.collecting = false;
+    entry.status = entry
+        .status
+        .strip_suffix("; collecting visual targets")
+        .unwrap_or(&entry.status)
+        .to_string();
 }
 
 fn window_for_target<'a>(scope: Option<&'a WindowScope>, target: &Target) -> Option<&'a Window> {
@@ -1093,15 +1270,38 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use thodu_core::model::{ActionKind, Monitor, Rect, Role, Source as TargetSource, Target};
-    use thodu_core::protocol::Timing;
-    use thodu_core::session::{Key, Session};
+    use thodu_core::protocol::{ErrorKind, Timing};
+    use thodu_core::session::{Key, Session, State};
+    use thodu_core::{labels, protocol};
 
     use super::{
-        Daemon, Entry, WORKSPACE_CHANGE_WAIT, WindowScope, grid_window, merge_fallback, parse_key,
-        restart_address, scoped_windows, visible_target_owner_changed, wait_for_workspace_change,
-        window_for_target, with_grid_note,
+        Daemon, Entry, WORKSPACE_CHANGE_WAIT, WindowScope, grid_window, image_fallback_exclusions,
+        merge_fallback, parse_key, restart_address, scoped_windows, visible_target_owner_changed,
+        wait_for_workspace_change, window_for_target, with_grid_note,
     };
     use crate::sources::{self, Found, Source};
+
+    fn daemon_with_entry(entry: Entry) -> Arc<Daemon> {
+        Arc::new(Daemon {
+            socket: PathBuf::new(),
+            shutdown: AtomicBool::new(false),
+            sessions: Mutex::new(HashMap::from([("s1".into(), entry)])),
+            changed: Condvar::new(),
+            next: AtomicU64::new(0),
+            atspi: Arc::new(sources::Atspi {
+                bus: Mutex::new(None),
+                woken: Mutex::new(HashSet::new()),
+                budget: Duration::ZERO,
+            }),
+            shell: Arc::new(sources::Shell {
+                items: Mutex::new(HashMap::new()),
+                budget: Duration::ZERO,
+            }),
+            sources: Vec::new(),
+            listeners: Mutex::new(crate::listeners::Listeners::new()),
+            keyboard: Mutex::new(None),
+        })
+    }
 
     // REQ-ACT-02: the shell workspace guard checks at a bounded rate and
     // still notices a workspace update before the wait expires.
@@ -1212,6 +1412,7 @@ mod tests {
             monitor,
             status: "primary targets; collecting visual targets".into(),
             collecting: true,
+            overlay_bounds: None,
             test: true,
             hidden: false,
             created: Instant::now(),
@@ -1239,6 +1440,263 @@ mod tests {
         assert_eq!(entry.session.targets[1].source, TargetSource::Image);
         assert!(entry.status.contains("1 visual candidate from image"));
         assert!(!entry.status.contains("collecting visual targets"));
+
+        entry.collecting = true;
+        entry.session.state = State::Acting;
+        assert!(!merge_fallback(
+            &mut entry,
+            sources::Collected {
+                targets: Vec::new(),
+                status: vec!["late fallback".into()],
+                fallback_requested: false,
+            },
+            &[],
+        ));
+        assert!(
+            !entry.collecting,
+            "a non-showing session is no longer locked"
+        );
+        assert!(!entry.status.contains("collecting visual targets"));
+        assert_eq!(entry.session.state, State::Acting);
+    }
+
+    // REQ-SRC-06: the image source omits visible hint chips and the status
+    // toast that are drawn over the app after primary targets arrive.
+    #[test]
+    fn req_src_06_fallback_excludes_overlay_labels_focus_ring_and_status() {
+        let monitor = Monitor {
+            name: "M".into(),
+            x: 100,
+            y: 50,
+            width: 1200,
+            height: 900,
+            scale: 1.0,
+        };
+        let target = Target {
+            id: "a0".into(),
+            bounds: Rect::new(120, 80, 30, 24),
+            role: Role::Button,
+            text: "Open".into(),
+            source: TargetSource::Atspi,
+            actions: vec![ActionKind::Click],
+            window: "0x1".into(),
+        };
+        let mut session = Session::new(vec![target.clone()], false).with_area(monitor.logical());
+        session.focused = Some(0);
+        let exclusions = image_fallback_exclusions(
+            &session,
+            &monitor,
+            "20 targets from atspi across 2 windows in 14 ms; collecting visual targets",
+            None,
+        );
+
+        assert!(exclusions.iter().any(|item| item.id == target.id));
+        let chip = labels::place(&target.bounds, protocol::label_size(1), &monitor.logical());
+        assert!(
+            exclusions
+                .iter()
+                .any(|item| item.id == "overlay:label:0" && item.bounds == chip)
+        );
+        assert!(
+            exclusions
+                .iter()
+                .any(|item| item.id == "overlay:focus-ring")
+        );
+        let toast = exclusions
+            .iter()
+            .find(|item| item.id == "overlay:status-line")
+            .expect("status toast is excluded");
+        assert!(toast.bounds.w <= 640);
+        assert!(toast.bounds.bottom() <= monitor.logical().bottom());
+        assert_eq!(toast.source, TargetSource::Shell);
+        assert!(toast.window.is_empty());
+
+        let short = image_fallback_exclusions(&session, &monitor, "3 targets", None);
+        let short_toast = short
+            .iter()
+            .find(|item| item.id == "overlay:status-line")
+            .expect("short status toast is excluded");
+        assert!(short_toast.bounds.w < toast.bounds.w);
+
+        let rendered = [chip, Rect::new(700, 820, 320, 45)];
+        let exact = image_fallback_exclusions(&session, &monitor, "3 targets", Some(&rendered));
+        assert!(exact.iter().any(|item| {
+            item.id == "overlay:0" && item.bounds == rendered[0] && item.window.is_empty()
+        }));
+        assert!(exact.iter().any(|item| {
+            item.id == "overlay:1" && item.bounds == rendered[1] && item.window.is_empty()
+        }));
+        assert!(!exact.iter().any(|item| item.id == "overlay:status-line"));
+    }
+
+    // REQ-SESSION-01: image capture starts after the overlay reports its
+    // first frame, and the source receives those rendered rectangles.
+    #[test]
+    fn req_session_01_drawn_overlay_geometry_releases_visual_fallback() {
+        let monitor = Monitor {
+            name: "M".into(),
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+            scale: 1.0,
+        };
+        let target = Target {
+            id: "a0".into(),
+            bounds: Rect::new(10, 10, 20, 20),
+            role: Role::Button,
+            text: "Open".into(),
+            source: TargetSource::Atspi,
+            actions: vec![ActionKind::Click],
+            window: "0x1".into(),
+        };
+        let daemon = daemon_with_entry(Entry {
+            session: Session::new(vec![target], false).with_area(monitor.logical()),
+            window: None,
+            monitor,
+            status: "1 target; collecting visual targets".into(),
+            collecting: true,
+            overlay_bounds: None,
+            test: false,
+            hidden: false,
+            created: Instant::now(),
+            timing: Timing::default(),
+            pending: 0,
+            clicked: false,
+            workspace_changed: false,
+            closing: false,
+            restore: None,
+        });
+        let worker = Arc::clone(&daemon);
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            tx.send(worker.wait_for_first_draw("s1", Duration::from_secs(1)))
+                .unwrap();
+        });
+
+        let rendered = [Rect::new(7, 16, 26, 18), Rect::new(20, 70, 60, 26)];
+        daemon.drawn("s1", Some(rendered.to_vec())).unwrap();
+        assert!(rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        let exclusions = daemon.fallback_exclusions("s1", true).unwrap();
+        assert!(
+            exclusions
+                .iter()
+                .any(|item| { item.id == "overlay:0" && item.bounds == rendered[0] })
+        );
+        assert!(
+            exclusions
+                .iter()
+                .any(|item| { item.id == "overlay:1" && item.bounds == rendered[1] })
+        );
+    }
+
+    // REQ-SESSION-01: timeout keeps the fallback bounded, legacy overlay
+    // geometry gets a conservative estimate, and ended sessions do no work.
+    #[test]
+    fn req_session_01_draw_timeout_and_no_overlay_use_safe_exclusions() {
+        let monitor = Monitor {
+            name: "M".into(),
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+            scale: 1.0,
+        };
+        let target = Target {
+            id: "a0".into(),
+            bounds: Rect::new(10, 10, 20, 20),
+            role: Role::Button,
+            text: "Open".into(),
+            source: TargetSource::Atspi,
+            actions: vec![ActionKind::Click],
+            window: "0x1".into(),
+        };
+        let entry = || Entry {
+            session: Session::new(vec![target.clone()], false).with_area(monitor.logical()),
+            window: None,
+            monitor: monitor.clone(),
+            status: "1 target; collecting visual targets".into(),
+            collecting: true,
+            overlay_bounds: None,
+            test: true,
+            hidden: false,
+            created: Instant::now(),
+            timing: Timing::default(),
+            pending: 0,
+            clicked: false,
+            workspace_changed: false,
+            closing: false,
+            restore: None,
+        };
+
+        let active = daemon_with_entry(entry());
+        assert!(!active.wait_for_first_draw("s1", Duration::ZERO));
+        let estimated = active.fallback_exclusions("s1", true).unwrap();
+        assert!(
+            estimated
+                .iter()
+                .any(|item| item.id == "overlay:status-line")
+        );
+        let no_overlay = active.fallback_exclusions("s1", false).unwrap();
+        assert_eq!(no_overlay.len(), 1, "no overlay geometry is excluded");
+
+        let mut ended = entry();
+        ended.session.state = State::Closed;
+        let ended = daemon_with_entry(ended);
+        assert!(!ended.wait_for_first_draw("s1", Duration::from_millis(10)));
+        assert!(ended.fallback_exclusions("s1", true).is_none());
+        let sessions = ended.sessions.lock().unwrap();
+        let ended_entry = sessions.get("s1").unwrap();
+        assert!(!ended_entry.collecting);
+        assert!(!ended_entry.status.contains("collecting visual targets"));
+    }
+
+    // REQ-SESSION-01: labels cannot act on a generation while image targets
+    // are pending, but Escape still closes the session immediately.
+    #[test]
+    fn req_session_01_collecting_session_rejects_labels_and_allows_escape() {
+        let monitor = Monitor {
+            name: "M".into(),
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+            scale: 1.0,
+        };
+        let target = Target {
+            id: "a0".into(),
+            bounds: Rect::new(10, 10, 20, 20),
+            role: Role::Button,
+            text: "Open".into(),
+            source: TargetSource::Atspi,
+            actions: vec![ActionKind::Click],
+            window: "0x1".into(),
+        };
+        let daemon = daemon_with_entry(Entry {
+            session: Session::new(vec![target], false).with_area(monitor.logical()),
+            window: None,
+            monitor,
+            status: "1 target; collecting visual targets".into(),
+            collecting: true,
+            overlay_bounds: None,
+            test: true,
+            hidden: false,
+            created: Instant::now(),
+            timing: Timing::default(),
+            pending: 0,
+            clicked: false,
+            workspace_changed: false,
+            closing: false,
+            restore: None,
+        });
+
+        let busy = daemon.key("s1", "A", false, false).unwrap_err();
+        assert_eq!(busy.error, Some(ErrorKind::Busy));
+        let escape = daemon.key("s1", "Escape", false, false).unwrap();
+        assert_eq!(
+            escape.view.expect("escape returns a view").state,
+            State::Closed
+        );
     }
 
     fn on(monitor: i64) -> Window {
@@ -1399,49 +1857,29 @@ mod tests {
                 )
                 .is_some()
         );
-        let daemon = Arc::new(Daemon {
-            socket: PathBuf::new(),
-            shutdown: AtomicBool::new(false),
-            sessions: Mutex::new(HashMap::from([(
-                "s1".into(),
-                Entry {
-                    session,
-                    window: None,
-                    monitor: Monitor {
-                        name: "M".into(),
-                        x: 0,
-                        y: 0,
-                        width: 100,
-                        height: 100,
-                        scale: 1.0,
-                    },
-                    status: String::new(),
-                    collecting: false,
-                    test: false,
-                    hidden: false,
-                    created: Instant::now(),
-                    timing: Timing::default(),
-                    pending: 1,
-                    clicked: false,
-                    workspace_changed: true,
-                    closing: false,
-                    restore: None,
-                },
-            )])),
-            changed: Condvar::new(),
-            next: AtomicU64::new(0),
-            atspi: Arc::new(sources::Atspi {
-                bus: Mutex::new(None),
-                woken: Mutex::new(HashSet::new()),
-                budget: Duration::ZERO,
-            }),
-            shell: Arc::new(sources::Shell {
-                items: Mutex::new(HashMap::new()),
-                budget: Duration::ZERO,
-            }),
-            sources: Vec::new(),
-            listeners: Mutex::new(crate::listeners::Listeners::new()),
-            keyboard: Mutex::new(None),
+        let daemon = daemon_with_entry(Entry {
+            session,
+            window: None,
+            monitor: Monitor {
+                name: "M".into(),
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+                scale: 1.0,
+            },
+            status: String::new(),
+            collecting: false,
+            overlay_bounds: None,
+            test: false,
+            hidden: false,
+            created: Instant::now(),
+            timing: Timing::default(),
+            pending: 1,
+            clicked: false,
+            workspace_changed: true,
+            closing: false,
+            restore: None,
         });
         let worker = Arc::clone(&daemon);
         let (tx, rx) = mpsc::channel();

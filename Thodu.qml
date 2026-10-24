@@ -132,7 +132,7 @@ Item {
             if (!root.opened || !view.loaded || root.drawnSent)
                 return;
             root.drawnSent = true;
-            client.send({ op: "drawn", session: view.session });
+            client.send(view.drawnMessage());
         }
     }
 

@@ -60,6 +60,9 @@ pub enum Request {
     /// The overlay drew the session's labels for the first time.
     Drawn {
         session: String,
+        /// Exact screen-logical UI rectangles, in compositor coordinates.
+        #[serde(default)]
+        overlays: Option<Vec<Rect>>,
     },
     /// The overlay's standing connection: `thodud` pushes each new session
     /// down it as an [`OpenEvent`] instead of summoning the overlay.

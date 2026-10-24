@@ -1070,7 +1070,19 @@ fn open_event_round_trips() {
             .expect("drawn")
             .request,
         Request::Drawn {
-            session: "s1".into()
+            session: "s1".into(),
+            overlays: None,
+        }
+    );
+    assert_eq!(
+        serde_json::from_str::<Envelope>(
+            r#"{"v":1,"op":"drawn","session":"s1","overlays":[{"x":10,"y":20,"w":30,"h":40}]}"#
+        )
+        .expect("drawn geometry parses")
+        .request,
+        Request::Drawn {
+            session: "s1".into(),
+            overlays: Some(vec![Rect::new(10, 20, 30, 40)]),
         }
     );
 }
