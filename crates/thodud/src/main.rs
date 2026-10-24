@@ -100,6 +100,14 @@ fn refresh_options(entry: &Entry) -> SessionOptions {
     }
 }
 
+fn start_refreshed_session<R>(
+    options: SessionOptions,
+    refetch: Option<String>,
+    start: impl FnOnce(Option<String>, &str, &str, bool, bool) -> R,
+) -> R {
+    start(refetch, "visible", "hints", options.overlay, options.test)
+}
+
 struct Daemon {
     socket: PathBuf,
     shutdown: AtomicBool,
@@ -694,9 +702,14 @@ impl Daemon {
             if target_is_stale(&target, &window, now.as_ref()) || newly_covered {
                 eprintln!("thodud: {id}: the target changed or became covered; collecting again");
                 self.remove(id);
-                if let Err(e) =
-                    self.start(refetch, "visible", "hints", options.overlay, options.test)
-                {
+                let result = start_refreshed_session(
+                    options,
+                    refetch,
+                    |window, scope, mode, overlay, test| {
+                        self.start(window, scope, mode, overlay, test)
+                    },
+                );
+                if let Err(e) = result {
                     eprintln!("thodud: {id}: {}", e.message.unwrap_or_default());
                 }
                 return;
@@ -1347,9 +1360,9 @@ mod tests {
     use thodu_core::{labels, protocol};
 
     use super::{
-        Daemon, Entry, SessionOptions, WORKSPACE_CHANGE_WAIT, WindowScope, grid_window,
-        image_fallback_exclusions, merge_fallback, no_active_window_scope, parse_key,
-        refresh_options, restart_address, scoped_windows, visible_target_owner_changed,
+        Daemon, Entry, WORKSPACE_CHANGE_WAIT, WindowScope, grid_window, image_fallback_exclusions,
+        merge_fallback, no_active_window_scope, parse_key, refresh_options, restart_address,
+        scoped_windows, start_refreshed_session, visible_target_owner_changed,
         wait_for_workspace_change, window_for_target, with_grid_note,
     };
     use crate::sources::{self, Found, Source};
@@ -1969,40 +1982,52 @@ mod tests {
     // REQ-SESSION-01: refresh keeps the original overlay and test settings.
     #[test]
     fn req_session_01_refetch_preserves_overlay_setting() {
-        let monitor = Monitor {
-            name: "M".into(),
-            x: 0,
-            y: 0,
-            width: 100,
-            height: 100,
-            scale: 1.0,
-        };
-        let entry = Entry {
-            session: Session::begin(Vec::new(), monitor.logical(), false, false),
-            window: None,
-            monitor,
-            status: String::new(),
-            collecting: false,
-            overlay_bounds: None,
-            overlay: false,
-            test: false,
-            hidden: false,
-            created: Instant::now(),
-            timing: Timing::default(),
-            pending: 0,
-            clicked: false,
-            workspace_changed: false,
-            closing: false,
-            restore: None,
-        };
-
-        assert_eq!(
-            refresh_options(&entry),
-            SessionOptions {
+        for test in [false, true] {
+            let monitor = Monitor {
+                name: "M".into(),
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+                scale: 1.0,
+            };
+            let entry = Entry {
+                session: Session::begin(Vec::new(), monitor.logical(), false, false),
+                window: None,
+                monitor,
+                status: String::new(),
+                collecting: false,
+                overlay_bounds: None,
                 overlay: false,
-                test: false
-            }
-        );
+                test,
+                hidden: false,
+                created: Instant::now(),
+                timing: Timing::default(),
+                pending: 0,
+                clicked: false,
+                workspace_changed: false,
+                closing: false,
+                restore: None,
+            };
+
+            let actual = start_refreshed_session(
+                refresh_options(&entry),
+                Some("0x1".into()),
+                |window, scope, mode, overlay, test| {
+                    (window, scope.to_string(), mode.to_string(), overlay, test)
+                },
+            );
+            assert_eq!(
+                actual,
+                (
+                    Some("0x1".into()),
+                    "visible".into(),
+                    "hints".into(),
+                    false,
+                    test
+                )
+            );
+        }
     }
 
     // REQ-SRC-07: if another visible window moves over a target after
