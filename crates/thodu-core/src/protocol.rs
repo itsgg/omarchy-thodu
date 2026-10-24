@@ -47,6 +47,7 @@ pub enum Request {
     },
     Key {
         session: String,
+        generation: u32,
         key: String,
         #[serde(default)]
         shift: bool,

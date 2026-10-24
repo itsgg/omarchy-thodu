@@ -69,6 +69,16 @@ pub trait Source: Send + Sync {
     ) -> Found {
         self.collect_many(windows, monitor)
     }
+    fn collect_many_excluding_scoped(
+        &self,
+        windows: &[Window],
+        visible_windows: &[Window],
+        monitor: &Monitor,
+        excluded: &[Target],
+    ) -> Found {
+        let _ = visible_windows;
+        self.collect_many_excluding(windows, monitor, excluded)
+    }
 }
 
 pub struct Collected {
@@ -84,14 +94,32 @@ pub fn collect(sources: &[Arc<dyn Source>], window: &Window, monitor: &Monitor) 
 }
 
 /// Collect targets across every window in the session's visible scope.
+#[cfg(test)]
 pub fn collect_visible(
     sources: &[Arc<dyn Source>],
     windows: &[Window],
     monitor: &Monitor,
 ) -> Collected {
-    let mut got = collect_primary_visible(sources, windows, monitor);
+    collect_visible_scoped(sources, windows, windows, monitor)
+}
+
+/// Collect a selected target scope while passing all visible windows to
+/// sources that need the full monitor stacking order.
+pub fn collect_visible_scoped(
+    sources: &[Arc<dyn Source>],
+    windows: &[Window],
+    visible_windows: &[Window],
+    monitor: &Monitor,
+) -> Collected {
+    let mut got = collect_primary_visible_scoped(sources, windows, visible_windows, monitor);
     if got.fallback_requested {
-        let fallback = collect_fallback_visible(sources, windows, monitor, &got.targets);
+        let fallback = collect_fallback_visible_scoped(
+            sources,
+            windows,
+            visible_windows,
+            monitor,
+            &got.targets,
+        );
         got.targets.extend(fallback.targets);
         got.status.extend(fallback.status);
     }
@@ -102,14 +130,24 @@ pub fn collect_visible(
 
 /// Collect primary sources only, so an overlay can draw them while a slower
 /// image fallback runs in the background.
+#[cfg(test)]
 pub fn collect_primary_visible(
     sources: &[Arc<dyn Source>],
     windows: &[Window],
     monitor: &Monitor,
 ) -> Collected {
+    collect_primary_visible_scoped(sources, windows, windows, monitor)
+}
+
+pub fn collect_primary_visible_scoped(
+    sources: &[Arc<dyn Source>],
+    windows: &[Window],
+    visible_windows: &[Window],
+    monitor: &Monitor,
+) -> Collected {
     let (primary, fallback): (Vec<_>, Vec<_>) =
         sources.iter().partition(|source| !source.is_fallback());
-    let got = collect_phase(&primary, windows, monitor, &[]);
+    let got = collect_phase(&primary, windows, visible_windows, monitor, &[]);
     let fallback_requested = got.request_fallback && !fallback.is_empty();
     let mut targets = got.targets;
     finish_visible_targets(&mut targets, windows);
@@ -122,14 +160,25 @@ pub fn collect_primary_visible(
 
 /// Run only fallback sources. The caller can merge these targets into a
 /// session after its first draw, or combine them synchronously for a query.
+#[cfg(test)]
 pub fn collect_fallback_visible(
     sources: &[Arc<dyn Source>],
     windows: &[Window],
     monitor: &Monitor,
     excluded: &[Target],
 ) -> Collected {
+    collect_fallback_visible_scoped(sources, windows, windows, monitor, excluded)
+}
+
+pub fn collect_fallback_visible_scoped(
+    sources: &[Arc<dyn Source>],
+    windows: &[Window],
+    visible_windows: &[Window],
+    monitor: &Monitor,
+    excluded: &[Target],
+) -> Collected {
     let (_, fallback): (Vec<_>, Vec<_>) = sources.iter().partition(|source| !source.is_fallback());
-    let got = collect_phase(&fallback, windows, monitor, excluded);
+    let got = collect_phase(&fallback, windows, visible_windows, monitor, excluded);
     let mut targets = got.targets;
     finish_visible_targets(&mut targets, windows);
     Collected {
@@ -154,6 +203,7 @@ struct Phase {
 fn collect_phase(
     sources: &[&Arc<dyn Source>],
     windows: &[Window],
+    visible_windows: &[Window],
     monitor: &Monitor,
     excluded: &[Target],
 ) -> Phase {
@@ -162,12 +212,18 @@ fn collect_phase(
     for (i, source) in sources.iter().enumerate() {
         let source = Arc::clone(source);
         let tx = tx.clone();
-        let (windows, monitor) = (windows.to_vec(), monitor.clone());
+        let (windows, visible_windows, monitor) =
+            (windows.to_vec(), visible_windows.to_vec(), monitor.clone());
         let excluded = excluded.to_vec();
         thread::spawn(move || {
             let _ = tx.send((
                 i,
-                source.collect_many_excluding(&windows, &monitor, &excluded),
+                source.collect_many_excluding_scoped(
+                    &windows,
+                    &visible_windows,
+                    &monitor,
+                    &excluded,
+                ),
             ));
         });
     }
@@ -387,6 +443,7 @@ fn atspi_targets_with_visual_supplement(
 pub struct Shell {
     pub items: Mutex<std::collections::HashMap<String, Vec<ShellItem>>>,
     pub budget: Duration,
+    pub layer_origin: fn(&str, &str) -> Option<(i32, i32)>,
 }
 
 /// The bar's targets on `monitor`, its items placed at the bar's origin.
@@ -422,6 +479,16 @@ impl Source for Shell {
     }
 
     fn collect(&self, _: &Window, monitor: &Monitor) -> Found {
+        self.collect_monitor(monitor)
+    }
+
+    fn collect_many(&self, _: &[Window], monitor: &Monitor) -> Found {
+        self.collect_monitor(monitor)
+    }
+}
+
+impl Shell {
+    fn collect_monitor(&self, monitor: &Monitor) -> Found {
         let items = self
             .items
             .lock()
@@ -435,7 +502,7 @@ impl Source for Shell {
                 format!("no bar items reported on {}", monitor.name),
             ));
         }
-        let Some(origin) = crate::hypr::layer_origin(&monitor.name, BAR_NAMESPACE) else {
+        let Some(origin) = (self.layer_origin)(&monitor.name, BAR_NAMESPACE) else {
             return Ok(SourceTargets::new(
                 Vec::new(),
                 format!("no bar on {}", monitor.name),
@@ -850,6 +917,41 @@ mod tests {
         );
     }
 
+    // REQ-SHELL-01: bar targets are available by monitor when no app window
+    // is focused, including when the app window list is empty.
+    #[test]
+    fn req_shell_01_bar_targets_are_collected_without_windows() {
+        let monitor = Monitor {
+            name: "M".into(),
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 50,
+            scale: 1.0,
+        };
+        let shell = Shell {
+            items: Mutex::new(std::collections::HashMap::from([(
+                monitor.name.clone(),
+                vec![ShellItem {
+                    x: 10,
+                    y: 2,
+                    w: 20,
+                    h: 20,
+                    text: "workspace".into(),
+                }],
+            )])),
+            budget: Duration::from_millis(40),
+            layer_origin: |_, _| Some((0, 0)),
+        };
+
+        let got = shell.collect_many(&[], &monitor).unwrap();
+        assert_eq!(got.status, "1 targets from the bar");
+        assert_eq!(got.targets.len(), 1);
+        assert_eq!(got.targets[0].source, From::Shell);
+        assert_eq!(got.targets[0].text, "workspace");
+        assert_eq!(got.targets[0].bounds, Rect::new(10, 2, 20, 20));
+    }
+
     // REQ-SRC-05: sources in time all count, and the session waits for
     // nobody once they have answered.
     #[test]
@@ -1013,10 +1115,14 @@ mod tests {
         );
     }
 
-    // REQ-SRC-06: populated AT-SPI results from the production result builder
-    // request the visual supplement too.
+    // REQ-SRC-06: empty and populated AT-SPI results from the production
+    // result builder both request the visual supplement.
     #[test]
     fn req_src_06_populated_atspi_results_request_visual_supplement() {
+        let empty = atspi_targets_with_visual_supplement(Vec::new(), "0 targets from atspi");
+        assert!(empty.targets.is_empty());
+        assert!(empty.request_fallback);
+
         let accessible = Target {
             id: "button".into(),
             bounds: Rect::new(10, 10, 20, 20),

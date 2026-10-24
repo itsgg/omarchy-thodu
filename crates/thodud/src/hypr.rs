@@ -186,17 +186,19 @@ pub fn monitors() -> Result<Vec<MonitorEntry>, String> {
 /// The monitor Hyprland has focused, with its id.
 pub fn focused_monitor() -> Result<MonitorEntry, String> {
     let list = json("monitors")?;
-    let focused = list
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|m| m.get("focused").and_then(Value::as_bool) == Some(true))
-        .and_then(|m| m.get("id").and_then(Value::as_i64))
-        .ok_or("no monitor is focused")?;
+    let focused = focused_monitor_id(&list).ok_or("no monitor is focused")?;
     monitors()?
         .into_iter()
         .find(|m| m.id == focused)
         .ok_or_else(|| format!("no monitor {focused}"))
+}
+
+fn focused_monitor_id(list: &Value) -> Option<i64> {
+    list.as_array()?
+        .iter()
+        .find(|m| m.get("focused").and_then(Value::as_bool) == Some(true))?
+        .get("id")?
+        .as_i64()
 }
 
 /// The active workspace on a monitor, or None when Hyprland has no report.
@@ -401,5 +403,20 @@ mod tests {
             super::window_at_from(&monitors, &clients, 50, 50).as_deref(),
             Some("0xfloating")
         );
+    }
+
+    // REQ-SESSION-06: Hyprland exposes the focused monitor independently of
+    // whether any app window is active.
+    #[test]
+    fn req_session_06_focused_monitor_exists_without_active_window() {
+        let monitors = json!([
+            {
+                "id": 4,
+                "name": "eDP-1",
+                "focused": true,
+                "activeWorkspace": { "id": 2 }
+            }
+        ]);
+        assert_eq!(super::focused_monitor_id(&monitors), Some(4));
     }
 }

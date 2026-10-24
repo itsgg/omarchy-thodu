@@ -12,16 +12,16 @@ Requirement IDs are REQ-<AREA>-<NN>, with these areas: SESSION (starting and end
 
 ## 2. Scope and non-goals
 
-This spec covers SEED section 9's first coherent experience: click mode with search and the grid, across every visible window on the focused window's monitor, on GG's laptop. Targets come from the accessibility tree for GTK3, GTK4, Qt Widgets, Electron apps and Chromium's own controls, the Omarchy bar, and bounded image fallback for visible gaps. Every click action and Escape work.
+This spec covers SEED section 9's first coherent experience: click mode with search and the grid, across every visible window on the focused window's monitor, on GG's laptop. Targets come from the accessibility tree for GTK3, GTK4, Qt Widgets, Electron apps and Chromium's own controls, the Omarchy bar, and a bounded image supplement after primary targets. Every click action and Escape work.
 
-Out of this milestone, and designed for so that no code assumes they never come: scroll mode, web page targets (SEED section 5, source 2), full screen-image coverage for foot and Zed, drag and hover, the agent interface beyond `thodu targets`, more than one monitor. A bounded screen-image fallback for visible gaps in AT-SPI lists and large content regions is included by REQ-SRC-06. Permanently out (SEED section 9): desktops other than Omarchy.
+Out of this milestone, and designed for so that no code assumes they never come: scroll mode, web page targets (SEED section 5, source 2), full screen-image coverage for foot and Zed, drag and hover, the agent interface beyond `thodu targets`, more than one monitor. REQ-SRC-06 adds bounded image targets to every visible-window collection; it does not promise full image coverage. Permanently out (SEED section 9): desktops other than Omarchy.
 
 ## 3. Terms
 
 - Target: something a mouse could act on, with bounds, a role, text and a source (section 5).
 - Label: the letters drawn over a target; typing it with Shift selects the target.
 - Visible window: a mapped, non-hidden client on the focused window's monitor that is on its active workspace, pinned, or on a shown special workspace.
-- Source: where targets come from: `atspi`, `shell`, a bounded `image` fallback for incomplete list rows, and `grid` in this milestone; full `image` coverage and `web` later.
+- Source: where targets come from: `atspi`, `shell`, a bounded `image` supplement for every visible-window collection, and `grid` in this milestone; full `image` coverage and `web` later.
 - Session: one press of the key until an action or Escape.
 - Logical coordinates: Hyprland's layout coordinates, in which a window's `at` and `size` are given; one logical unit is `scale` physical pixels on that monitor (1.25 on eDP-1).
 - Focused window: Hyprland's `activewindow`.
@@ -117,14 +117,16 @@ Acceptance:
 - scenario: WHEN a fake source sleeps past its budget THEN the session shows the other sources' targets and the status line names the slow source, including a requested image fallback.
 
 ### REQ-SRC-06: Fill accessibility gaps from the screen image
-For every visible-window collection, the system shall run the bounded image detector after primary sources, including when AT-SPI found targets, so visually apparent controls omitted from an application's accessibility tree can be added. It shall capture the focused monitor once, map a detection only when its click point belongs to a visible window, assign it to the topmost such window, and discard candidates substantially covered by AT-SPI targets for that window, shell targets, or the overlay's rendered label chips, focus ring and status toast. It shall convert detections to logical coordinates and clip them to that window and monitor. Image targets shall offer click only, have no invented text, and use a visibly different label style. If capture or detection fails, or exceeds the image source's 180 ms budget, it shall contribute no image targets and name the failure or timeout in status. In an interactive hints session, primary targets shall draw before image detection completes; the session shall then update to the image targets in a new generation. While the fallback is pending, hint keys shall not select labels and Escape shall remain available.
+For every visible-window collection, the system shall run the bounded image detector after primary sources, including when AT-SPI found targets, so visually apparent controls omitted from an application's accessibility tree can be added. It shall capture the focused monitor once, map a detection only when its click point belongs to a visible window, assign it to the topmost such window, and discard candidates substantially covered by AT-SPI targets for that window, shell targets, or the overlay's rendered label chips, focus ring and status toast. It shall convert detections to logical coordinates and clip them to that window and monitor. Image targets shall offer click only, have no invented text, and use a visibly different label style. If capture or detection fails, or exceeds the image source's 180 ms budget, it shall contribute no image targets and name the failure or timeout in status. In an interactive hints session, primary targets shall draw before image detection completes; the session shall then update to the image targets in a new generation. While image collection is pending or the overlay has not loaded the current target generation, hint keys shall not select labels and Escape shall remain available. Each key request shall include the generation shown by the overlay. The daemon shall ignore a stale-generation key other than Escape and return the current targets and view for the ignored key.
 Acceptance:
 - scenario: a synthetic monitor frame yields correctly addressed image targets with logical bounds and click-only actions; detections covered by AT-SPI targets or overlay geometry are discarded.
-- scenario: an interactive hints session draws primary targets before a requested image fallback completes, then updates to the image targets in a new generation; keys cannot select labels until that generation is ready, and Escape remains available.
+- scenario: an interactive hints session draws primary targets before image detection completes, then updates to image targets in a new generation; keys cannot select labels until that generation is ready, and Escape remains available.
 - scenario: the overlay reports its rendered chip, focus-ring and toast rectangles on the first-draw event; the fallback waits for that event and uses those exact bounds, while clients without the optional bounds use the conservative estimate.
-- scenario: a complete AT-SPI tree still requests image supplementation; an incomplete visible row, unavailable tree, or AT-SPI error also requests the fallback across the visible-window session.
-- scenario: a large scrollable or panel-like content region with fewer than four targetable descendants requests the image fallback.
+- scenario: empty and populated AT-SPI results request image supplementation; an unavailable tree or AT-SPI error also permits image collection.
 - scenario: a detection outside every visible window is discarded; a detection in an overlap is assigned to the topmost visible window.
+- scenario: a key request carrying an old generation returns current labels without changing focus or queuing an action.
+- scenario: Escape with an old generation still closes the session.
+- scenario: the overlay suppresses key input while fetching a new generation and includes the loaded generation in subsequent requests.
 - scenario: a QML test checks that an image target's label chip uses the image-source style.
 - measured: the supplied Flea screenshot's visible file rows receive image labels within the 180 ms image-source budget, and `thodu bench --sessions 50` remains within REQ-PERF-01 on the GTK3 reference window and Slack.
 
@@ -198,9 +200,10 @@ Acceptance:
 ### The Omarchy shell
 
 ### REQ-SHELL-01: The bar is a source
-When a session starts, the overlay shall report the bar's clickable items on the focused window's monitor, with their bounds in logical coordinates, as `shell` targets.
+When a session starts, the overlay shall report the bar's clickable items on the focused window's monitor, or on Hyprland's focused monitor when no app window is focused, with their bounds in logical coordinates, as `shell` targets.
 Acceptance:
 - scenario: a QML test with a fake bar of three items reports three targets with their bounds.
+- scenario: with no active app window, the source collects cached bar items by monitor even when the app window list is empty.
 
 ### Command line
 
@@ -226,7 +229,7 @@ The IPC is JSON lines over the Unix socket `$XDG_RUNTIME_DIR/thodu.sock`, one re
 
 - `{"v":1,"op":"start","mode":"hints"|"grid","scope":"visible"|"focused"}` returns `{"v":1,"ok":true,"session":ID,"status":TEXT}` and summons the overlay with the session. For hints, omitted `scope` defaults to `visible`; `focused` limits collection to the active window. An optional `window` (a Hyprland address) selects one window, `overlay` false runs the session over the IPC alone, and `test` true summons the overlay without the keyboard, for live checks.
 - `{"v":1,"op":"session","session":ID}` returns the session's monitor, targets and labels and its view for the overlay; with `"brief":true`, the view alone, for the overlay's heartbeat (REQ-SESSION-03). The view's `labels_only` and `label_selected` booleans are additive presentation fields.
-- `{"v":1,"op":"key","session":ID,"key":NAME,"shift":B,"ctrl":B}` returns the session's new view: its state (showing, acting or closed), the targets still kept, the focused target, the search and the typed label.
+- `{"v":1,"op":"key","session":ID,"generation":N,"key":NAME,"shift":B,"ctrl":B}` returns the session's new view: its state (showing, acting or closed), the targets still kept, the focused target, the search and the typed label. The daemon ignores a stale-generation request other than Escape and returns the current targets and view; Escape always ends the session.
 - `{"v":1,"op":"hidden","session":ID}`: the overlay's surface is gone, so a pending action may run (REQ-ACT-01); `thodud` acts anyway 400 ms after the action if none comes.
 - `{"v":1,"op":"targets","scope":"visible"|"focused"}` returns the visible windows' targets without a session; omitted `scope` defaults to `visible`. `focused` or an optional `window` limits collection to one window.
 - `{"v":1,"op":"close","session":ID}`.
@@ -256,6 +259,12 @@ Acceptance:
 If the focused window's process has not registered on the accessibility bus, then the status line shall say which variable or flag the app needs, and the session shall continue with the other sources.
 Acceptance:
 - cases: `spec/cases/atspi/unregistered.jsonl`, an unregistered Chromium and an unregistered GTK3 app with the expected message.
+
+### REQ-SESSION-06: Hints work without an active app window
+When `thodu hints` runs and Hyprland reports no active app window, the system shall use Hyprland's focused monitor and continue collecting targets for the requested scope. If no source finds a target, it shall open the grid as REQ-SESSION-04 specifies.
+Acceptance:
+- scenario: with no active app window and a cached bar item, hints labels the bar item on the focused monitor.
+- scenario: with no active app window and no source targets, hints opens the grid and reports that no targets were found.
 
 ### REQ-CLI-02: No Hyprland
 If Hyprland's request socket cannot be reached, then `thodu` shall print an ERROR line saying so and exit 1, without starting a session.
@@ -302,6 +311,8 @@ Unit tests and properties cover labels, search, the grid, coordinates and the st
 - 2026-10-23: change 0012, hints and target queries cover every visible window on the focused window's monitor, with per-window frame matching and image fallback.
 - 2026-10-24: change 0013, ACTIVE frames belong only to the focused window and a frame cannot be reused across windows.
 - 2026-10-24: change 0014, hints can draw primary labels while the bounded image fallback continues, then update the target generation.
+- 2026-10-24: change 0015, image supplementation applies to every visible-window collection and session keys are generation-checked.
+- 2026-10-24: change 0016, sessions without an active app use Hyprland's focused monitor and can label bar items.
 
 ### Retired
 

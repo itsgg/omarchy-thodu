@@ -16,7 +16,7 @@ Acceptance:
 - scenario: an interactive hints session draws primary targets before a requested image fallback completes, then updates to the image targets in a new generation; keys cannot select labels until that generation is ready, and Escape remains available.
 - scenario: the overlay reports its rendered chip, focus-ring and toast rectangles on the first-draw event; the fallback waits for that event and uses those exact bounds, while clients without the optional bounds use the conservative estimate.
 - scenario: a complete AT-SPI tree still requests image supplementation; an incomplete visible row, unavailable tree, or AT-SPI error also requests the fallback across the visible-window session.
-- scenario: a large visible scrollable or panel-like content region with fewer than four targetable descendants requests the image fallback.
+- scenario: an empty AT-SPI result still requests image supplementation; synthetic image detections remain scoped to their visible window.
 - scenario: a detection outside every visible window is discarded; a detection in an overlap is assigned to the topmost window.
 - scenario: a QML test checks that an image target's label chip uses the image-source style.
 - measured: the supplied Flea screenshot's visible file rows receive image labels within the 180 ms image-source budget, and `thodu bench --sessions 50` remains within REQ-PERF-01 on the GTK3 reference window and Slack.

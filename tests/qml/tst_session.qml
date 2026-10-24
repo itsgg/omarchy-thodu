@@ -132,12 +132,21 @@ Item {
                 view: Object.assign({}, top.fullReply.view, { generation: 1, collecting: false })
             });
             top.shownView = Object.assign({}, top.fullReply.view, { generation: 1, collecting: false });
-            tryVerify(() => !view.collecting && view.targets.length === 3, 1000,
-                      "heartbeat detects the fallback generation and fetches its targets");
+            top.answering = false;
+            view.apply({ v: 1, ok: true, session: "s1", view: top.shownView });
+            verify(view.fetching, "heartbeat detects the fallback generation and fetches its targets");
+            verify(view.collecting, "old labels stay locked while the new labels are loading");
+            keyClick(Qt.Key_A);
+            compare(top.keysSent().length, 0, "a key cannot select a label from the old generation");
+
+            top.answering = true;
+            view.apply(top.fallbackReply);
             verify(!view.collecting);
+            verify(!view.fetching);
             compare(view.targets.length, 3);
             keyClick(Qt.Key_A);
             compare(top.keysSent().length, 1, "keys resume after the fallback result arrives");
+            compare(top.keysSent()[0].generation, 1, "key input names the generation shown to the user");
         }
 
         function test_req_session_01_drawn_event_reports_rendered_overlay_bounds() {
@@ -223,6 +232,8 @@ Item {
             compare(keys, ["S+shift", "l", "Tab", "Backtab+shift", "BackSpace", "Return+ctrl"]);
             compare(top.keysSent()[6].key, "/", "REQ-SEARCH-02: slash starts a search in labels-only mode");
             verify(top.keysSent().every(k => k.session === "s1"));
+            verify(top.keysSent().every(k => typeof k.generation === "number"),
+                   "REQ-SESSION-01: every key request names its displayed generation");
         }
 
         function test_req_search_01_caps_lock_text_does_not_activate() {

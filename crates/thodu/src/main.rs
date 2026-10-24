@@ -1014,8 +1014,14 @@ fn run(args: &[String]) -> Result<(), String> {
             let (Some(session), Some(key)) = (args.get(1), args.get(2)) else {
                 return Err("usage: thodu key SESSION KEY [--shift] [--ctrl]".into());
             };
+            let current =
+                ask(json!({"v": VERSION, "op": "session", "session": session, "brief": true}))?;
+            let generation = current
+                .view
+                .ok_or("thodud sent no session view")?
+                .generation;
             let reply = ask(
-                json!({"v": VERSION, "op": "key", "session": session, "key": key, "shift": flag(args, "--shift"), "ctrl": flag(args, "--ctrl")}),
+                json!({"v": VERSION, "op": "key", "session": session, "generation": generation, "key": key, "shift": flag(args, "--shift"), "ctrl": flag(args, "--ctrl")}),
             )?;
             println!("{}", serde_json::to_string(&reply.view).unwrap_or_default());
         }

@@ -2,19 +2,21 @@
 
 Status: review
 Depends on: 0011, 0012
-Spec: REQ-SRC-01, REQ-SRC-06, REQ-SRC-07
+Spec: REQ-SRC-01, REQ-SRC-06, REQ-SRC-07, REQ-SHELL-01, REQ-SESSION-04, REQ-SESSION-06
 Goal: Collect AT-SPI and bounded image targets across every window visible on the focused monitor's active workspace, so a Thodu session can reach controls in each visible application and does not miss visual controls merely because they belong to a non-focused window.
 
 Acceptance:
-- run: `tests/acceptance/reqs.sh REQ-SRC-01 REQ-SRC-06 REQ-SRC-07 REQ-SESSION-01 REQ-CLI-01`
+- run: `tests/acceptance/reqs.sh REQ-SRC-01 REQ-SRC-06 REQ-SRC-07 REQ-SHELL-01 REQ-SESSION-01 REQ-SESSION-04 REQ-SESSION-06 REQ-CLI-01`
 - A Hyprland client fixture includes mapped windows on the active workspace, pinned windows, and windows on a shown special workspace, while excluding inactive workspaces, hidden or unmapped clients, and other monitors.
 - Frames from each visible process are matched to their own window; non-focused windows ignore ACTIVE siblings, and an ambiguous or multiply claimed frame is omitted.
 - Synthetic monitor-image detections become targets for the topmost visible window at each click point and are not duplicated by accessible targets.
 - A populated AT-SPI tree still receives the image supplement; capture follows the overlay's first drawn frame, and detections inside primary targets or the reported label and status rectangles are omitted.
 - A floating window owns an overlap with a tiled window, even when the tiled window has a more recent focus history; moving a window over a label before activation refreshes the session instead of clicking the new occluder.
-- A large scrollable or panel-like content region with no accessible rows requests the image fallback.
+- In focused and explicit-window scopes, image detections use the full visible window stack for ownership and are kept only when the selected window owns the click point.
+- Empty and populated AT-SPI results request image supplementation; synthetic image detections remain scoped to their visible window.
 - On a live desktop with two visible app windows, default hints contain targets for both window addresses; an explicit `--window` remains scoped to that window.
-- When image fallback is requested for hints, primary targets draw first; the overlay accepts Escape while holding label keys, then updates to the fallback generation.
+- When image supplementation is requested for hints, primary targets draw first; stale-generation keys are ignored, the overlay accepts Escape while holding label keys, then updates to the new generation.
+- When no app window is focused, hints use Hyprland's focused monitor to label bar items; if no targets exist, the grid opens.
 
 ## Log
 
@@ -27,3 +29,5 @@ Acceptance:
 - 2026-10-24: moved image-target conversion coverage onto the production mapper, restored the click-only image acceptance, and added multi-window session/JSON tests. A live default benchmark before the fix measured 276 ms to first draw and 129 ms collection when Chromium was not on the accessibility bus; hints now draw primary targets before collecting visual targets and update the session when those arrive.
 - 2026-10-24: research and the file-manager screenshot showed that a populated AT-SPI tree can still omit custom-painted controls, so the proposed image behavior now supplements every visible-window collection after primary targets draw. The fallback excludes label chips and the status toast, and the heartbeat test checks that the overlay reloads the new generation without key input.
 - 2026-10-24: the overlay now reports its rendered exclusion rectangles with the first-draw event, and image capture waits for that event before reading the screen. Timeout, no-overlay, closed-session and Busy-key paths have regression coverage. `tests/acceptance/reqs.sh REQ-SRC-01 REQ-SRC-06 REQ-SRC-07 REQ-SESSION-01 REQ-CLI-01` passes, including 45 daemon, 45 core and 33 QML tests.
+- 2026-10-24: hints now use Hyprland's focused monitor when no app window is active; the shell source collects its cached bar items with an empty window list, and the grid opens if no source has targets. `tests/acceptance/reqs.sh REQ-SRC-01 REQ-SRC-06 REQ-SRC-07 REQ-SHELL-01 REQ-SESSION-01 REQ-SESSION-04 REQ-SESSION-06 REQ-CLI-01` passes, including 49 daemon, 43 core and 33 QML tests.
+- 2026-10-24: focused and explicit-window image collection now uses the full visible window stack to assign ownership, then keeps only detections owned by the selected window. The overlap regression and updated acceptance command pass, including 50 daemon, 43 core and 33 QML tests.

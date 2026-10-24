@@ -117,18 +117,21 @@ FocusScope {
             return;
         }
         const shownGeneration = reply.view ? (reply.view.generation || 0) : view.generation;
-        if (reply.targets && (!view.loaded || shownGeneration !== view.generation)) {
-            view.targets = reply.targets;
-            view.generation = shownGeneration;
-            view.fetching = false;
-            if (reply.monitor) {
-                view.area = reply.monitor.area;
-                view.monitorName = reply.monitor.name;
+        if (reply.targets) {
+            if (!view.loaded || shownGeneration !== view.generation) {
+                view.targets = reply.targets;
+                view.generation = shownGeneration;
+                if (reply.monitor) {
+                    view.area = reply.monitor.area;
+                    view.monitorName = reply.monitor.name;
+                }
+                view.loaded = true;
             }
-            view.loaded = true;
+            view.fetching = false;
         } else if (view.loaded && shownGeneration !== view.generation && !view.fetching) {
             // Keys sent over the IPC changed the targets; fetch them.
             view.fetching = true;
+            view.collecting = true;
             view.send({ op: "session", session: view.session });
         }
         if (reply.status)
@@ -136,7 +139,7 @@ FocusScope {
         const shown = reply.view;
         if (!shown)
             return;
-        view.collecting = shown.collecting === true;
+        view.collecting = shown.collecting === true || view.fetching;
         const kept = {};
         for (const id of shown.visible)
             kept[id] = true;
@@ -191,7 +194,7 @@ FocusScope {
         }
         else
             return null;
-        return { op: "key", session: view.session, key: name, shift: shift, ctrl: ctrl };
+        return { op: "key", session: view.session, generation: view.generation, key: name, shift: shift, ctrl: ctrl };
     }
 
     // The smallest rectangle holding every rectangle in `rects`.

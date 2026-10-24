@@ -40,11 +40,12 @@ impl Source for ImageSource {
     }
 
     fn collect(&self, window: &Window, monitor: &Monitor) -> Found {
-        self.collect_windows(std::slice::from_ref(window), monitor, &[])
+        let windows = std::slice::from_ref(window);
+        self.collect_windows(windows, windows, monitor, &[])
     }
 
     fn collect_many(&self, windows: &[Window], monitor: &Monitor) -> Found {
-        self.collect_windows(windows, monitor, &[])
+        self.collect_windows(windows, windows, monitor, &[])
     }
 
     fn collect_many_excluding(
@@ -53,12 +54,28 @@ impl Source for ImageSource {
         monitor: &Monitor,
         excluded: &[Target],
     ) -> Found {
-        self.collect_windows(windows, monitor, excluded)
+        self.collect_windows(windows, windows, monitor, excluded)
+    }
+
+    fn collect_many_excluding_scoped(
+        &self,
+        windows: &[Window],
+        visible_windows: &[Window],
+        monitor: &Monitor,
+        excluded: &[Target],
+    ) -> Found {
+        self.collect_windows(windows, visible_windows, monitor, excluded)
     }
 }
 
 impl ImageSource {
-    fn collect_windows(&self, windows: &[Window], monitor: &Monitor, excluded: &[Target]) -> Found {
+    fn collect_windows(
+        &self,
+        windows: &[Window],
+        visible_windows: &[Window],
+        monitor: &Monitor,
+        excluded: &[Target],
+    ) -> Found {
         let started = Instant::now();
         if windows.is_empty() {
             return Ok(SourceTargets::new(
@@ -121,8 +138,14 @@ impl ImageSource {
                 })
             })
             .collect();
-        let targets =
-            targets_from_monitor_detections(windows, visible, monitor.scale, &boxes, excluded);
+        let targets = targets_from_monitor_detections(
+            windows,
+            visible_windows,
+            visible,
+            monitor.scale,
+            &boxes,
+            excluded,
+        );
         let took = started.elapsed().as_millis();
         let count = targets.len();
         Ok(SourceTargets::new(
@@ -162,7 +185,8 @@ struct DetectionBox {
 /// visible window at its click point. A candidate whose click point shifts
 /// when clipped to its window is dropped, keeping its eventual click safe.
 fn targets_from_monitor_detections(
-    windows: &[Window],
+    selected_windows: &[Window],
+    visible_windows: &[Window],
     visible: Rect,
     scale: f64,
     detections: &[DetectionBox],
@@ -182,10 +206,16 @@ fn targets_from_monitor_detections(
             let bottom = visible.y + logical(d.bounds.bottom());
             let bounds = Rect::new(x, y, right - x, bottom - y).intersect(&visible)?;
             let center = bounds.center();
-            let window = windows
+            let window = visible_windows
                 .iter()
                 .filter(|window| window.rect().contains_point(center.0, center.1))
                 .min_by_key(|window| window.stacking_key())?;
+            if !selected_windows
+                .iter()
+                .any(|selected| selected.address == window.address)
+            {
+                return None;
+            }
             let bounds = bounds.intersect(&window.rect())?;
             if bounds.center() != center
                 || covered_by_accessible(bounds, &window.address, accessible)
@@ -318,7 +348,8 @@ mod tests {
             },
         ];
         let found = targets_from_monitor_detections(
-            &[file_window],
+            std::slice::from_ref(&file_window),
+            std::slice::from_ref(&file_window),
             Rect::new(0, 0, 400, 300),
             1.25,
             &detections,
@@ -372,7 +403,8 @@ mod tests {
         ];
 
         let found = targets_from_monitor_detections(
-            &[app],
+            std::slice::from_ref(&app),
+            std::slice::from_ref(&app),
             Rect::new(0, 0, 400, 300),
             1.0,
             &detections,
@@ -414,8 +446,10 @@ mod tests {
                 .iter()
                 .any(|d| d.class == woints_vision::DetectionClass::TextLine)
         );
+        let app = window();
         let targets = targets_from_monitor_detections(
-            &[window()],
+            std::slice::from_ref(&app),
+            std::slice::from_ref(&app),
             Rect::new(0, 0, 1920, 120),
             1.0,
             &found
@@ -459,8 +493,10 @@ mod tests {
             actions: vec![ActionKind::Click],
             window: "0xback".into(),
         };
+        let visible_windows = [front, back];
         let targets = targets_from_monitor_detections(
-            &[front, back],
+            &visible_windows,
+            &visible_windows,
             Rect::new(0, 0, 200, 100),
             1.0,
             &[detection(20), detection(130)],
@@ -468,6 +504,47 @@ mod tests {
         );
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].window, "0xback");
+        assert_eq!(targets[0].bounds, Rect::new(20, 20, 20, 10));
+    }
+
+    // REQ-SRC-06 and REQ-SRC-07: a focused single-window scope must still
+    // discard image pixels owned by a visible floating window above it.
+    #[test]
+    fn req_src_07_single_window_scope_omits_pixels_from_occluding_windows() {
+        let mut selected = window();
+        selected.address = "0xselected".into();
+        selected.at = (0, 0);
+        selected.size = (200, 100);
+        let mut occluder = selected.clone();
+        occluder.address = "0xoccluder".into();
+        occluder.at = (80, 0);
+        occluder.size = (120, 100);
+        occluder.floating = true;
+        occluder.focus_history_id = 0;
+        let visible_windows = [occluder, selected.clone()];
+        let detections = [
+            DetectionBox {
+                bounds: Rect::new(20, 20, 20, 10),
+                kind: DetectionKind::TextLine,
+                confidence: 0.9,
+            },
+            DetectionBox {
+                bounds: Rect::new(90, 20, 20, 10),
+                kind: DetectionKind::TextLine,
+                confidence: 0.9,
+            },
+        ];
+
+        let targets = targets_from_monitor_detections(
+            &[selected],
+            &visible_windows,
+            Rect::new(0, 0, 200, 100),
+            1.0,
+            &detections,
+            &[],
+        );
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].window, "0xselected");
         assert_eq!(targets[0].bounds, Rect::new(20, 20, 20, 10));
     }
 }

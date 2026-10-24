@@ -337,102 +337,6 @@ fn req_src_04_hidden_and_closed_popups_are_dropped() {
     }
 }
 
-// REQ-SRC-06: visible rows with missing data or an under-reported list ask
-// the image source to fill the gap; complete and hidden rows do not.
-#[test]
-fn req_src_06_incomplete_list_rows_request_image_fallback() {
-    use thodu_core::tree::Node;
-
-    let row = |name: &str, states: &[&str], extents| Node {
-        role: "list item".into(),
-        states: states.iter().map(|s| (*s).into()).collect(),
-        name: name.into(),
-        extents,
-        ..Node::default()
-    };
-    let list = Node {
-        role: "list".into(),
-        states: vec!["showing".into(), "visible".into()],
-        children: vec![
-            row("Arivu", &["showing", "visible"], Some([0, 0, 300, 24])),
-            row("", &["showing", "visible"], Some([0, 0, 0, 0])),
-            row("", &["showing", "visible"], Some([0, 0, 0, 0])),
-            row("", &["showing", "visible"], None),
-        ],
-        ..Node::default()
-    };
-    assert!(tree::needs_image_fallback(&list));
-
-    let complete = Node {
-        role: "list".into(),
-        states: vec!["showing".into(), "visible".into()],
-        children: (0..4)
-            .map(|i| {
-                row(
-                    &format!("file-{i}"),
-                    &["showing", "visible"],
-                    Some([0, i * 24, 300, 24]),
-                )
-            })
-            .collect(),
-        ..Node::default()
-    };
-    assert!(!tree::needs_image_fallback(&complete));
-
-    let underreported = Node {
-        role: "list".into(),
-        states: vec!["showing".into(), "visible".into()],
-        children: vec![row(
-            "only visible row in tree",
-            &["showing", "visible"],
-            Some([0, 0, 300, 24]),
-        )],
-        ..Node::default()
-    };
-    assert!(tree::needs_image_fallback(&underreported));
-
-    // REQ-SRC-06: a toolkit may put rows under a generic container instead
-    // of exposing a list role. A lone complete row still signals under-reporting.
-    let generic_parent = Node {
-        role: "scroll pane".into(),
-        states: vec!["showing".into(), "visible".into()],
-        children: vec![row(
-            "only row exposed by the tree",
-            &["showing", "visible"],
-            Some([0, 0, 300, 24]),
-        )],
-        ..Node::default()
-    };
-    assert!(tree::needs_image_fallback(&generic_parent));
-
-    let hidden = Node {
-        role: "list".into(),
-        states: vec!["showing".into(), "visible".into()],
-        children: vec![row("", &[], None)],
-        ..Node::default()
-    };
-    assert!(!tree::needs_image_fallback(&hidden));
-}
-
-// REQ-SRC-06: a large scrollable content region with no accessible
-// children can still contain visible file rows, so image fallback runs.
-#[test]
-fn req_src_06_large_content_area_requests_image_fallback() {
-    let empty_content_area = Node {
-        role: "frame".into(),
-        states: vec!["showing".into(), "visible".into()],
-        extents: Some([0, 0, 800, 600]),
-        children: vec![Node {
-            role: "panel".into(),
-            states: vec!["showing".into(), "visible".into()],
-            extents: Some([200, 50, 580, 500]),
-            ..Node::default()
-        }],
-        ..Node::default()
-    };
-    assert!(tree::needs_image_fallback(&empty_content_area));
-}
-
 // REQ-SRC-04: an element a later dialog covers is not a target.
 #[test]
 fn req_src_04_covered_elements_are_dropped() {
@@ -990,9 +894,10 @@ fn overlay_requests_parse() {
         }
     );
     assert_eq!(
-        parse(r#"{"v":1,"op":"key","session":"s1","key":"s","shift":true}"#),
+        parse(r#"{"v":1,"op":"key","session":"s1","generation":2,"key":"s","shift":true}"#),
         Request::Key {
             session: "s1".into(),
+            generation: 2,
             key: "s".into(),
             shift: true,
             ctrl: false

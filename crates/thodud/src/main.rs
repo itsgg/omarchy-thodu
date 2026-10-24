@@ -60,6 +60,8 @@ struct WindowScope {
     refetch_address: Option<String>,
 }
 
+type CollectionScope = (Option<Window>, Monitor, Vec<Window>, Vec<Window>);
+
 struct Entry {
     session: Session,
     /// The geometry snapshot for each app window that contributed targets.
@@ -171,18 +173,26 @@ impl Daemon {
 
     /// The default scope is every mapped client shown on the focused
     /// window's monitor; an explicit address keeps the single-window scope.
-    fn collection_scope(
-        &self,
-        address: Option<&str>,
-        scope: &str,
-    ) -> Res<(Window, Monitor, Vec<Window>)> {
+    fn collection_scope(&self, address: Option<&str>, scope: &str) -> Res<CollectionScope> {
         if !matches!(scope, "visible" | "focused") {
             return Err(fail(
                 ErrorKind::BadRequest,
                 format!("unknown window scope {scope}; use visible or focused"),
             ));
         }
-        let active = self.window(address)?;
+        let active = match address {
+            Some(address) => Some(self.window(Some(address))?),
+            None => hypr::active_window().map_err(internal)?,
+        };
+        let Some(active) = active else {
+            let focused = hypr::focused_monitor().map_err(internal)?;
+            let visible_windows = hypr::visible_windows(focused.id).map_err(internal)?;
+            return Ok(no_active_window_scope(
+                scope,
+                focused.monitor,
+                visible_windows,
+            ));
+        };
         let focused_address = if address.is_some() {
             hypr::active_window()
                 .map_err(internal)?
@@ -191,10 +201,11 @@ impl Daemon {
             Some(active.address.clone())
         };
         let monitor = hypr::monitor_of(&active).map_err(internal)?;
+        let visible_windows = hypr::visible_windows(active.monitor).map_err(internal)?;
         let visible = if address.is_some() || scope == "focused" {
             Vec::new()
         } else {
-            hypr::visible_windows(active.monitor).map_err(internal)?
+            visible_windows.clone()
         };
         let windows = scoped_windows(
             &active,
@@ -203,22 +214,33 @@ impl Daemon {
             scope,
             focused_address.as_deref(),
         );
-        Ok((active, monitor, windows))
+        Ok((Some(active), monitor, windows, visible_windows))
     }
 
     /// Targets of `window` from every source within its budget
     /// (REQ-SRC-05), and a status line.
-    fn collect(&self, windows: &[Window], monitor: &Monitor) -> Res<(Vec<Target>, String)> {
-        let got = sources::collect_visible(&self.sources, windows, monitor);
+    fn collect(
+        &self,
+        windows: &[Window],
+        visible_windows: &[Window],
+        monitor: &Monitor,
+    ) -> Res<(Vec<Target>, String)> {
+        let got = sources::collect_visible_scoped(&self.sources, windows, visible_windows, monitor);
         Ok((got.targets, got.status.join("; ")))
     }
 
     fn collect_primary(
         &self,
         windows: &[Window],
+        visible_windows: &[Window],
         monitor: &Monitor,
     ) -> (Vec<Target>, String, bool) {
-        let got = sources::collect_primary_visible(&self.sources, windows, monitor);
+        let got = sources::collect_primary_visible_scoped(
+            &self.sources,
+            windows,
+            visible_windows,
+            monitor,
+        );
         (got.targets, got.status.join("; "), got.fallback_requested)
     }
 
@@ -251,25 +273,27 @@ impl Daemon {
     ) -> Res<Reply> {
         let grid = mode == "grid";
         let named = window.is_some();
-        let (window, monitor, windows) = if grid && !named {
+        let (_window, monitor, windows, visible_windows) = if grid && !named {
             let focused = hypr::focused_monitor().map_err(internal)?;
             let window = self.window(None).ok();
-            (grid_window(window, focused.id), focused.monitor, Vec::new())
+            (
+                grid_window(window, focused.id),
+                focused.monitor,
+                Vec::new(),
+                Vec::new(),
+            )
         } else if grid {
             let window = self.window(window.as_deref())?;
             let monitor = hypr::monitor_of(&window).map_err(internal)?;
-            (Some(window), monitor, Vec::new())
+            (Some(window), monitor, Vec::new(), Vec::new())
         } else {
-            let (active, monitor, windows) = self.collection_scope(window.as_deref(), scope)?;
-            (Some(active), monitor, windows)
+            self.collection_scope(window.as_deref(), scope)?
         };
         let began = Instant::now();
-        let (targets, status, collecting) = match window.as_ref() {
-            Some(_) if !grid => {
-                let (targets, status, collecting) = self.collect_primary(&windows, &monitor);
-                (targets, status, collecting)
-            }
-            _ => (Vec::new(), "the grid".to_string(), false),
+        let (targets, status, collecting) = if grid {
+            (Vec::new(), "the grid".to_string(), false)
+        } else {
+            self.collect_primary(&windows, &visible_windows, &monitor)
         };
         let collect_ms = began.elapsed().as_millis() as u64;
         let (settings, problem) = settings();
@@ -336,6 +360,7 @@ impl Daemon {
             let daemon = Arc::clone(self);
             let sources = self.sources.clone();
             let windows = windows.clone();
+            let visible_windows = visible_windows.clone();
             let monitor = fallback_monitor;
             let fallback_id = id.clone();
             thread::spawn(move || {
@@ -346,9 +371,10 @@ impl Daemon {
                 else {
                     return;
                 };
-                let fallback = sources::collect_fallback_visible(
+                let fallback = sources::collect_fallback_visible_scoped(
                     &sources,
                     &windows,
+                    &visible_windows,
                     &monitor,
                     &visual_exclusions,
                 );
@@ -523,13 +549,30 @@ impl Daemon {
         })
     }
 
-    fn key(self: &Arc<Self>, id: &str, name: &str, shift: bool, ctrl: bool) -> Res<Reply> {
+    fn key(
+        self: &Arc<Self>,
+        id: &str,
+        name: &str,
+        shift: bool,
+        ctrl: bool,
+        expected_generation: u32,
+    ) -> Res<Reply> {
         let key = parse_key(name, shift, ctrl)
             .ok_or_else(|| fail(ErrorKind::BadRequest, format!("unknown key {name}")))?;
         let mut sessions = self.sessions.lock().map_err(|_| internal("session lock"))?;
         let entry = sessions
             .get_mut(id)
             .ok_or_else(|| fail(ErrorKind::BadRequest, format!("no session {id}")))?;
+        if expected_generation != entry.session.generation && key != Key::Escape {
+            return Ok(Reply {
+                session: Some(id.to_string()),
+                targets: Some(Self::labeled(entry)),
+                view: Some(Self::view(entry)),
+                status: Some(entry.status.clone()),
+                timing: Some(entry.timing.clone()),
+                ..Reply::ok()
+            });
+        }
         if entry.collecting && key != Key::Escape {
             return Err(fail(ErrorKind::Busy, "visual targets are still collecting"));
         }
@@ -816,8 +859,9 @@ impl Daemon {
     }
 
     fn targets(&self, window: Option<String>, scope: &str) -> Res<Reply> {
-        let (_, monitor, windows) = self.collection_scope(window.as_deref(), scope)?;
-        let (targets, status) = self.collect(&windows, &monitor)?;
+        let (_, monitor, windows, visible_windows) =
+            self.collection_scope(window.as_deref(), scope)?;
+        let (targets, status) = self.collect(&windows, &visible_windows, &monitor)?;
         let mut session = Session::new(targets, false);
         let labeled = session
             .targets
@@ -857,10 +901,11 @@ impl Daemon {
             Request::Session { session, brief } => self.session(&session, brief),
             Request::Key {
                 session,
+                generation,
                 key,
                 shift,
                 ctrl,
-            } => self.key(&session, &key, shift, ctrl),
+            } => self.key(&session, &key, shift, ctrl, generation),
             Request::Hidden { session } => self.hidden(&session),
             Request::Drawn { session, overlays } => self.drawn(&session, overlays),
             // serve() registers the connection once the reply is written.
@@ -891,6 +936,19 @@ fn with_grid_note(status: String, session: &Session, asked: bool) -> String {
     } else {
         format!("{status}; no targets found, so the grid is open")
     }
+}
+
+fn no_active_window_scope(
+    scope: &str,
+    monitor: Monitor,
+    visible_windows: Vec<Window>,
+) -> CollectionScope {
+    let windows = if scope == "visible" {
+        visible_windows.clone()
+    } else {
+        Vec::new()
+    };
+    (None, monitor, windows, visible_windows)
 }
 
 /// Rectangles rendered by the overlay are not app controls. The image pass
@@ -1221,6 +1279,7 @@ fn main() {
     let shell = Arc::new(sources::Shell {
         items: Mutex::new(HashMap::new()),
         budget: SHELL_BUDGET,
+        layer_origin: hypr::layer_origin,
     });
     let image = Arc::new(image::ImageSource::new(IMAGE_BUDGET));
     let daemon = Arc::new(Daemon {
@@ -1276,8 +1335,8 @@ mod tests {
 
     use super::{
         Daemon, Entry, WORKSPACE_CHANGE_WAIT, WindowScope, grid_window, image_fallback_exclusions,
-        merge_fallback, parse_key, restart_address, scoped_windows, visible_target_owner_changed,
-        wait_for_workspace_change, window_for_target, with_grid_note,
+        merge_fallback, no_active_window_scope, parse_key, restart_address, scoped_windows,
+        visible_target_owner_changed, wait_for_workspace_change, window_for_target, with_grid_note,
     };
     use crate::sources::{self, Found, Source};
 
@@ -1296,6 +1355,7 @@ mod tests {
             shell: Arc::new(sources::Shell {
                 items: Mutex::new(HashMap::new()),
                 budget: Duration::ZERO,
+                layer_origin: crate::hypr::layer_origin,
             }),
             sources: Vec::new(),
             listeners: Mutex::new(crate::listeners::Listeners::new()),
@@ -1369,6 +1429,58 @@ mod tests {
         );
         let asked = Session::begin(Vec::new(), monitor.logical(), false, true);
         assert_eq!(with_grid_note("the grid".into(), &asked, true), "the grid");
+    }
+
+    // REQ-SESSION-06 and REQ-SHELL-01: with no active app, hints use the
+    // focused monitor's bar; if the bar has no targets, the grid opens.
+    #[test]
+    fn req_session_06_req_shell_01_hints_work_without_open_apps() {
+        let chosen_monitor = Monitor {
+            name: "M".into(),
+            x: 120,
+            y: 0,
+            width: 100,
+            height: 50,
+            scale: 1.0,
+        };
+        let (active, monitor, windows, visible_windows) =
+            no_active_window_scope("visible", chosen_monitor.clone(), Vec::new());
+        assert!(active.is_none());
+        assert_eq!(monitor, chosen_monitor);
+        assert!(windows.is_empty());
+
+        let shell = Arc::new(sources::Shell {
+            items: Mutex::new(HashMap::from([(
+                monitor.name.clone(),
+                vec![thodu_core::protocol::ShellItem {
+                    x: 5,
+                    y: 2,
+                    w: 20,
+                    h: 20,
+                    text: "workspace".into(),
+                }],
+            )])),
+            budget: Duration::from_millis(40),
+            layer_origin: |_, _| Some((120, 0)),
+        });
+        let got = sources::collect_visible_scoped(&[shell], &windows, &visible_windows, &monitor);
+        let session = Session::begin(got.targets, monitor.logical(), false, false);
+        assert_eq!(session.targets.len(), 1, "the bar target is labeled");
+        assert!(session.grid.is_empty(), "a bar target prevents the grid");
+
+        let no_bar = Arc::new(sources::Shell {
+            items: Mutex::new(HashMap::new()),
+            budget: Duration::from_millis(40),
+            layer_origin: |_, _| None,
+        });
+        let got = sources::collect_visible_scoped(&[no_bar], &windows, &visible_windows, &monitor);
+        let session = Session::begin(got.targets, monitor.logical(), false, false);
+        let status = with_grid_note(got.status.join("; "), &session, false);
+        assert!(
+            !session.grid.is_empty(),
+            "the grid opens when the bar is empty"
+        );
+        assert!(status.contains("no targets found"));
     }
 
     // REQ-SRC-06 and REQ-SESSION-01: image targets join the drawn primary
@@ -1690,11 +1802,75 @@ mod tests {
             restore: None,
         });
 
-        let busy = daemon.key("s1", "A", false, false).unwrap_err();
+        let busy = daemon.key("s1", "A", false, false, 0).unwrap_err();
         assert_eq!(busy.error, Some(ErrorKind::Busy));
-        let escape = daemon.key("s1", "Escape", false, false).unwrap();
+        let escape = daemon.key("s1", "Escape", false, false, 0).unwrap();
         assert_eq!(
             escape.view.expect("escape returns a view").state,
+            State::Closed
+        );
+    }
+
+    // REQ-SRC-06 and REQ-SESSION-01: input queued against old labels cannot
+    // act after an asynchronous source has changed the session generation.
+    #[test]
+    fn req_src_06_req_session_01_stale_generation_key_returns_current_targets() {
+        let monitor = Monitor {
+            name: "M".into(),
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+            scale: 1.0,
+        };
+        let target = Target {
+            id: "a0".into(),
+            bounds: Rect::new(10, 10, 20, 20),
+            role: Role::Button,
+            text: "Open".into(),
+            source: TargetSource::Atspi,
+            actions: vec![ActionKind::Click],
+            window: "0x1".into(),
+        };
+        let mut session = Session::new(vec![target], false).with_area(monitor.logical());
+        session.generation = 1;
+        let daemon = daemon_with_entry(Entry {
+            session,
+            window: None,
+            monitor,
+            status: "2 targets from image".into(),
+            collecting: false,
+            overlay_bounds: None,
+            test: true,
+            hidden: false,
+            created: Instant::now(),
+            timing: Timing::default(),
+            pending: 0,
+            clicked: false,
+            workspace_changed: false,
+            closing: false,
+            restore: None,
+        });
+
+        let reply = daemon.key("s1", "A", true, false, 0).unwrap();
+        let view = reply.view.expect("stale key returns the current view");
+        assert_eq!(view.generation, 1);
+        assert_eq!(view.state, State::Showing);
+        assert_eq!(
+            reply
+                .targets
+                .expect("stale key returns current labels")
+                .len(),
+            1
+        );
+        let sessions = daemon.sessions.lock().unwrap();
+        let entry = sessions.get("s1").unwrap();
+        assert_eq!(entry.session.state, State::Showing, "the key did not act");
+        assert_eq!(entry.pending, 0, "no action was queued");
+        drop(sessions);
+        let escape = daemon.key("s1", "Escape", false, false, 0).unwrap();
+        assert_eq!(
+            escape.view.expect("Escape remains available").state,
             State::Closed
         );
     }
