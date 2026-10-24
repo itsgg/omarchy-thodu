@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Thodu demo</title>
+    <style>
+      :root { color-scheme: dark; font: 16px/1.45 Inter, sans-serif; background: #0e1318; color: #e4eaf0; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-width: 900px; }
+      button, input { font: inherit; color: inherit; }
+      button { cursor: pointer; }
+      .top { height: 58px; display: flex; align-items: center; gap: 18px; padding: 0 26px; border-bottom: 1px solid #27333c; }
+      .brand { color: #99c8ea; font-weight: 700; letter-spacing: .04em; }
+      .top input { margin-left: auto; width: 250px; padding: 9px 12px; border: 1px solid #31434f; border-radius: 7px; background: #151d24; }
+      .avatar { width: 30px; height: 30px; border-radius: 50%; border: 0; background: #315568; }
+      .layout { display: grid; grid-template-columns: 220px 1fr; min-height: calc(100vh - 58px); }
+      nav { padding: 24px 14px; border-right: 1px solid #27333c; }
+      nav h2 { margin: 0 12px 12px; color: #8fa0ad; font-size: 12px; text-transform: uppercase; letter-spacing: .12em; }
+      nav button { display: block; width: 100%; padding: 11px 12px; margin: 3px 0; text-align: left; border: 0; border-radius: 6px; background: transparent; }
+      nav button[aria-current] { background: #1b2a33; color: #a8d8f2; }
+      main { padding: 30px 42px 42px; }
+      .heading { display: flex; align-items: center; gap: 12px; }
+      h1 { margin: 0; font-size: 26px; font-weight: 600; }
+      .muted { color: #9daab4; }
+      .heading .spacer { flex: 1; }
+      .primary, .secondary { padding: 9px 14px; border-radius: 6px; }
+      .primary { background: #9bd1ed; color: #13232c; border: 1px solid #9bd1ed; }
+      .secondary { background: #182229; border: 1px solid #3b4a53; }
+      .summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 24px 0; }
+      .card { min-height: 95px; padding: 16px; border: 1px solid #293640; border-radius: 8px; background: #121a20; text-align: left; }
+      .card strong { display: block; margin-bottom: 5px; font-size: 21px; }
+      .section-head { display: flex; align-items: center; margin: 28px 0 12px; }
+      h2 { margin: 0; font-size: 18px; }
+      .section-head .muted { margin-left: auto; }
+      .files { height: 350px; overflow: auto; border: 1px solid #293640; border-radius: 8px; background: #121a20; }
+      .row { display: grid; grid-template-columns: 1fr 150px 150px 84px; align-items: center; gap: 16px; min-height: 51px; padding: 0 16px; border: 0; border-bottom: 1px solid #25313a; background: transparent; width: 100%; text-align: left; }
+      .row:hover { background: #19252c; }
+      .row.header { position: sticky; top: 0; color: #96a7b2; background: #172128; font-size: 12px; }
+      .file { display: flex; align-items: center; gap: 10px; }
+      .icon { color: #8fc7e6; }
+      .row .secondary { justify-self: end; padding: 5px 9px; }
+      footer { display: flex; gap: 8px; margin-top: 18px; }
+    </style>
+  </head>
+  <body>
+    <header class="top">
+      <span class="brand">NORTHSTAR</span>
+      <span class="muted">Workspace / Projects</span>
+      <input aria-label="Search workspace" placeholder="Search workspace">
+      <button class="avatar" aria-label="Open profile menu"></button>
+    </header>
+    <div class="layout">
+      <nav aria-label="Main navigation">
+        <h2>Workspace</h2>
+        <button aria-current="page">Overview</button>
+        <button>Projects</button>
+        <button>Tasks</button>
+        <button>Reports</button>
+        <h2 style="margin-top:30px">Teams</h2>
+        <button>Design</button>
+        <button>Engineering</button>
+      </nav>
+      <main>
+        <div class="heading">
+          <div><h1>Project files</h1><span class="muted">A compact accessibility demo for Thodu</span></div>
+          <span class="spacer"></span>
+          <button class="secondary">Filter</button>
+          <button class="primary">New project</button>
+        </div>
+        <section class="summary" aria-label="Project summary">
+          <button class="card"><strong>12</strong><span class="muted">Active projects</span></button>
+          <button class="card"><strong>4</strong><span class="muted">Needs review</span></button>
+          <button class="card"><strong>86%</strong><span class="muted">On track</span></button>
+        </section>
+        <div class="section-head">
+          <h2>Recent files</h2>
+          <span class="muted">Updated just now</span>
+        </div>
+        <section class="files" role="region" aria-label="Recent files">
+          <div class="row header"><span>Name</span><span>Owner</span><span>Updated</span><span></span></div>
+          <button class="row"><span class="file"><span class="icon">◆</span> Q3 planning</span><span class="muted">A. Kumar</span><span class="muted">Today</span><span class="secondary">Open</span></button>
+          <button class="row"><span class="file"><span class="icon">◇</span> Design system</span><span class="muted">M. Lee</span><span class="muted">Yesterday</span><span class="secondary">Open</span></button>
+          <button class="row"><span class="file"><span class="icon">◆</span> Product launch</span><span class="muted">R. Shah</span><span class="muted">Oct 21</span><span class="secondary">Open</span></button>
+          <button class="row"><span class="file"><span class="icon">◇</span> Customer notes</span><span class="muted">J. Park</span><span class="muted">Oct 20</span><span class="secondary">Open</span></button>
+          <button class="row"><span class="file"><span class="icon">◆</span> Release checklist</span><span class="muted">A. Kumar</span><span class="muted">Oct 18</span><span class="secondary">Open</span></button>
+          <button class="row"><span class="file"><span class="icon">◇</span> Team roadmap</span><span class="muted">M. Lee</span><span class="muted">Oct 16</span><span class="secondary">Open</span></button>
+          <button class="row"><span class="file"><span class="icon">◆</span> Accessibility audit</span><span class="muted">J. Park</span><span class="muted">Oct 14</span><span class="secondary">Open</span></button>
+          <button class="row"><span class="file"><span class="icon">◇</span> API guide</span><span class="muted">R. Shah</span><span class="muted">Oct 12</span><span class="secondary">Open</span></button>
+          <button class="row"><span class="file"><span class="icon">◆</span> Launch brief</span><span class="muted">A. Kumar</span><span class="muted">Oct 10</span><span class="secondary">Open</span></button>
+          <button class="row"><span class="file"><span class="icon">◇</span> Onboarding plan</span><span class="muted">M. Lee</span><span class="muted">Oct 08</span><span class="secondary">Open</span></button>
+          <button class="row"><span class="file"><span class="icon">◆</span> Research notes</span><span class="muted">J. Park</span><span class="muted">Oct 06</span><span class="secondary">Open</span></button>
+          <button class="row"><span class="file"><span class="icon">◇</span> Sprint review</span><span class="muted">R. Shah</span><span class="muted">Oct 04</span><span class="secondary">Open</span></button>
+          <button class="row"><span class="file"><span class="icon">◆</span> Usability study</span><span class="muted">A. Kumar</span><span class="muted">Oct 02</span><span class="secondary">Open</span></button>
+          <button class="row"><span class="file"><span class="icon">◇</span> Brand assets</span><span class="muted">M. Lee</span><span class="muted">Sep 30</span><span class="secondary">Open</span></button>
+          <button class="row"><span class="file"><span class="icon">◆</span> Release notes</span><span class="muted">J. Park</span><span class="muted">Sep 28</span><span class="secondary">Open</span></button>
+          <button class="row"><span class="file"><span class="icon">◇</span> Support plan</span><span class="muted">R. Shah</span><span class="muted">Sep 26</span><span class="secondary">Open</span></button>
+          <button class="row"><span class="file"><span class="icon">◆</span> Metrics summary</span><span class="muted">A. Kumar</span><span class="muted">Sep 24</span><span class="secondary">Open</span></button>
+          <button class="row"><span class="file"><span class="icon">◇</span> Team handbook</span><span class="muted">M. Lee</span><span class="muted">Sep 22</span><span class="secondary">Open</span></button>
+        </section>
+        <footer>
+          <button class="secondary">Upload file</button>
+          <button class="secondary">Share workspace</button>
+        </footer>
+      </main>
+    </div>
+  </body>
+</html>

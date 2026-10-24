@@ -18,6 +18,13 @@ FocusScope {
     // logical place less the area's origin.
     property var area: ({ x: 0, y: 0, w: 0, h: 0 })
     property string monitorName: ""
+    // Workspace changes invalidate the visible targets and must release the
+    // monitor-wide overlay before another workspace is shown (REQ-SESSION-01).
+    function workspaceDeactivated() {
+        if (view.active)
+            view.end("workspace changed", false);
+    }
+
     // Ids of the targets the search and the typed label still keep.
     property var kept: ({})
     property string focusedId: ""

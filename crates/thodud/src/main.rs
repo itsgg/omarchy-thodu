@@ -1116,8 +1116,8 @@ impl Daemon {
         )
     }
 
-    /// Move the pointer to `point` so Hyprland recomputes its focus, then
-    /// send the wheel there.
+    /// Move the pointer to `point` only when it is not already there, then
+    /// send the wheel to the selected area.
     fn send_wheel(
         &self,
         target: &Target,
@@ -1128,7 +1128,17 @@ impl Daemon {
     ) -> Result<(), ScrollFailure> {
         let result = send_wheel_with(
             point,
+            hypr::cursor().ok(),
             |point| pointer::move_to(monitor, point),
+            |point| {
+                match self.dispatch_syntax {
+                Some(syntax) => hypr::refresh_cursor_focus(point, syntax),
+                None => Err(
+                    "Hyprland dispatch syntax is unavailable; check `hyprctl systeminfo` and restart thodud"
+                        .into(),
+                ),
+            }
+            },
             || {
                 let mut wheel = self
                     .wheel
@@ -1309,18 +1319,23 @@ impl Daemon {
     }
 }
 
-fn send_wheel_with<M, E>(
+fn send_wheel_with<M, R, E>(
     point: (i32, i32),
+    pointer_position: Option<(i32, i32)>,
     mut move_pointer: M,
+    mut refresh_focus: R,
     emit: E,
 ) -> Result<(), ScrollFailure>
 where
     M: FnMut((i32, i32)) -> Result<(), String>,
+    R: FnMut((i32, i32)) -> Result<(), String>,
     E: FnOnce() -> Result<(), ScrollFailure>,
 {
-    // Hyprland skips the focus check when the pointer has not moved.
-    move_pointer((point.0 + 1, point.1)).map_err(ScrollFailure::Input)?;
-    move_pointer(point).map_err(ScrollFailure::Input)?;
+    if pointer_position == Some(point) {
+        refresh_focus(point).map_err(ScrollFailure::Input)?;
+    } else {
+        move_pointer(point).map_err(ScrollFailure::Input)?;
+    }
     emit()
 }
 
@@ -1859,7 +1874,7 @@ fn main() {
 mod tests {
     use thodu_core::model::Window;
 
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::collections::{HashMap, HashSet};
     use std::ops::Deref;
     use std::path::{Path, PathBuf};
@@ -1874,7 +1889,7 @@ mod tests {
     use thodu_core::{labels, protocol};
 
     use super::{
-        Daemon, Entry, ScrollFocus, WORKSPACE_CHANGE_WAIT, WindowScope, grid_window,
+        Daemon, Entry, ScrollFailure, ScrollFocus, WORKSPACE_CHANGE_WAIT, WindowScope, grid_window,
         image_fallback_exclusions, merge_fallback, no_active_window_scope, parse_key,
         perform_scroll_event_with, refresh_options, restart_address, scoped_windows,
         send_wheel_with, start_refreshed_session, status_persistent, visible_target_owner_changed,
@@ -1975,11 +1990,13 @@ mod tests {
             || {
                 send_wheel_with(
                     target.bounds.center(),
+                    None,
                     |point| {
                         assert!(*focused.borrow(), "pointer must move under owner focus");
                         points.borrow_mut().push(point);
                         Ok(())
                     },
+                    |_| Err("unexpected stationary focus refresh".into()),
                     || {
                         assert!(*focused.borrow(), "wheel must run under owner focus");
                         *wheels.borrow_mut() += 1;
@@ -1990,8 +2007,133 @@ mod tests {
         );
         assert_eq!(result, Ok(()));
         assert!(!*focused.borrow());
-        assert_eq!(*points.borrow(), vec![(5, 4), (4, 4)]);
+        assert_eq!(*points.borrow(), vec![(4, 4)]);
         assert_eq!(*wheels.borrow(), 1);
+    }
+
+    // REQ-ACT-06: a scroll action positions the pointer at the selected area
+    // without a one-pixel focus nudge that makes held scrolling flicker.
+    #[test]
+    fn req_act_06_scroll_event_does_not_nudge_the_pointer() {
+        let positions = RefCell::new(Vec::new());
+        let result = send_wheel_with(
+            (4, 4),
+            None,
+            |point| {
+                positions.borrow_mut().push(point);
+                Ok(())
+            },
+            |_| Err("unexpected stationary focus refresh".into()),
+            || Ok(()),
+        );
+        assert_eq!(result, Ok(()));
+        assert_eq!(*positions.borrow(), [(4, 4)]);
+    }
+
+    // REQ-ACT-06: when the cursor is already over the selected area, a
+    // compositor focus refresh does not move it before the wheel event.
+    #[test]
+    fn req_act_06_scroll_refreshes_stationary_pointer_focus_without_moving_it() {
+        let point = (4, 4);
+        let positions = RefCell::new(Vec::new());
+        let refreshes = RefCell::new(Vec::new());
+        let result = send_wheel_with(
+            point,
+            Some(point),
+            |destination| {
+                positions.borrow_mut().push(destination);
+                Ok(())
+            },
+            |destination| {
+                refreshes.borrow_mut().push(destination);
+                Ok(())
+            },
+            || Ok(()),
+        );
+        assert_eq!(result, Ok(()));
+        assert!(positions.borrow().is_empty());
+        assert_eq!(*refreshes.borrow(), [point]);
+    }
+
+    // REQ-ACT-06: if Hyprland cannot confirm pointer focus, do not send a
+    // wheel event that could land on a different surface.
+    #[test]
+    fn req_act_06_failed_focus_refresh_does_not_emit_wheel_input() {
+        let point = (4, 4);
+        let moved = RefCell::new(Vec::new());
+        let emitted = Cell::new(false);
+        let result = send_wheel_with(
+            point,
+            Some(point),
+            |destination| {
+                moved.borrow_mut().push(destination);
+                Ok(())
+            },
+            |_| Err("focus refresh unavailable".into()),
+            || {
+                emitted.set(true);
+                Ok(())
+            },
+        );
+        assert_eq!(
+            result,
+            Err(ScrollFailure::Input("focus refresh unavailable".into()))
+        );
+        assert!(moved.borrow().is_empty());
+        assert!(!emitted.get());
+    }
+
+    // REQ-ACT-06: held repeats keep the pointer at the selected point and
+    // refresh compositor focus without movement on subsequent ticks.
+    #[test]
+    fn req_act_06_scroll_repeats_do_not_reposition_the_pointer() {
+        let point = (4, 4);
+        let next_point = (8, 8);
+        let pointer = Cell::new(Some((40, 40)));
+        let positions = RefCell::new(Vec::new());
+        let refreshes = RefCell::new(Vec::new());
+        let wheels = Cell::new(0);
+        for _ in 0..4 {
+            let result = send_wheel_with(
+                point,
+                pointer.get(),
+                |destination| {
+                    positions.borrow_mut().push(destination);
+                    pointer.set(Some(destination));
+                    Ok(())
+                },
+                |destination| {
+                    refreshes.borrow_mut().push(destination);
+                    Ok(())
+                },
+                || {
+                    wheels.set(wheels.get() + 1);
+                    Ok(())
+                },
+            );
+            assert_eq!(result, Ok(()));
+        }
+        assert_eq!(*positions.borrow(), [point]);
+        assert_eq!(*refreshes.borrow(), [point, point, point]);
+        assert_eq!(wheels.get(), 4);
+
+        let result = send_wheel_with(
+            next_point,
+            pointer.get(),
+            |destination| {
+                positions.borrow_mut().push(destination);
+                pointer.set(Some(destination));
+                Ok(())
+            },
+            |destination| {
+                refreshes.borrow_mut().push(destination);
+                Ok(())
+            },
+            || Ok(()),
+        );
+        assert_eq!(result, Ok(()));
+        assert_eq!(*positions.borrow(), [point, next_point]);
+        assert_eq!(*refreshes.borrow(), [point, point, point]);
     }
 
     // REQ-ACT-04: Omarchy shell scroll targets have no app window and should

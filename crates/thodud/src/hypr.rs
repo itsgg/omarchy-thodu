@@ -1,5 +1,5 @@
-//! Hyprland's request socket: the focused window, a window by address,
-//! monitors and the cursor. Only queries; nothing here dispatches.
+//! Hyprland's request socket for queries and the cursor-focus refresh used
+//! by repeated scrolling.
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
@@ -9,6 +9,8 @@ use std::time::Duration;
 use serde_json::Value;
 use thodu_core::model::{Monitor, Window};
 use thodu_core::protocol::hyprland_socket_path as hypr_socket_path;
+
+use crate::focus::DispatchSyntax;
 
 pub fn socket_path() -> Result<PathBuf, String> {
     let runtime =
@@ -236,6 +238,29 @@ pub fn cursor() -> Result<(i32, i32), String> {
     Ok((get("x"), get("y")))
 }
 
+fn cursor_focus_refresh_command((x, y): (i32, i32), syntax: DispatchSyntax) -> String {
+    match syntax {
+        DispatchSyntax::Lua => format!("/dispatch hl.dsp.cursor.move({{ x = {x}, y = {y} }})"),
+        DispatchSyntax::Hyprlang => format!("/dispatch movecursor {x} {y}"),
+    }
+}
+
+/// Ask Hyprland to recompute pointer focus without changing the coordinates.
+/// Its cursor dispatcher refreshes pointer focus even when the cursor is
+/// already at this position, which lets held wheel events reach the app
+/// without a visible cursor nudge.
+pub fn refresh_cursor_focus(point: (i32, i32), syntax: DispatchSyntax) -> Result<(), String> {
+    let response = request(&cursor_focus_refresh_command(point, syntax))?;
+    if response.trim() == "ok" {
+        Ok(())
+    } else {
+        Err(format!(
+            "Hyprland did not refresh pointer focus: {}",
+            response.trim()
+        ))
+    }
+}
+
 /// Where the layer-shell surface `namespace` sits on the monitor `name`,
 /// in logical coordinates.
 pub fn layer_origin(name: &str, namespace: &str) -> Option<(i32, i32)> {
@@ -298,6 +323,23 @@ fn window_at_from(monitors: &Value, clients: &Value, x: i32, y: i32) -> Option<S
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+
+    use super::cursor_focus_refresh_command;
+    use crate::focus::DispatchSyntax;
+
+    // REQ-ACT-06: a stationary scroll pointer refreshes Hyprland focus at
+    // the same coordinate instead of using a visible movement as a nudge.
+    #[test]
+    fn req_act_06_focus_refresh_dispatch_keeps_the_pointer_stationary() {
+        assert_eq!(
+            cursor_focus_refresh_command((768, 493), DispatchSyntax::Lua),
+            "/dispatch hl.dsp.cursor.move({ x = 768, y = 493 })"
+        );
+        assert_eq!(
+            cursor_focus_refresh_command((768, 493), DispatchSyntax::Hyprlang),
+            "/dispatch movecursor 768 493"
+        );
+    }
 
     #[test]
     fn req_act_02_active_workspace_is_scoped_to_monitor() {

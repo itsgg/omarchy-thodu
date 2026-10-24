@@ -22,6 +22,7 @@ Item {
     property string pendingHiddenSession: ""
     property string hiddenClickSession: ""
     property string lingerFocusSession: ""
+    property var workspaceSnapshot: ({})
     property int keyboardFocusMode: WlrKeyboardFocus.Exclusive
     property bool focusReleasePending: false
     property bool drawnSent: false
@@ -65,6 +66,8 @@ Item {
     // Draw a session: `reply` is its full session reply when pushed.
     function show(session, test, reply, socket) {
         view.end("replaced", false);
+        workspaceGuard.watching = false;
+        root.workspaceSnapshot = root.activeWorkspaceSnapshot();
         root.test = test;
         root.session = session;
         root.pendingHiddenSession = "";
@@ -76,7 +79,32 @@ Item {
         client.connectTo(socket);
         root.opened = true;
         view.begin(session, reply);
+        root.bindSessionWorkspace();
         view.forceActiveFocus();
+    }
+
+    function activeWorkspaceSnapshot() {
+        const snapshot = {};
+        for (const monitor of Hyprland.monitors.values) {
+            snapshot[monitor.name] = monitor.activeWorkspace ? monitor.activeWorkspace.id : null;
+        }
+        return snapshot;
+    }
+
+    function bindSessionWorkspace() {
+        if (!view.monitorName)
+            return;
+        const monitors = Hyprland.monitors.values;
+        for (const monitor of monitors) {
+            if (monitor.name !== view.monitorName)
+                continue;
+            const hasSnapshot = Object.prototype.hasOwnProperty.call(root.workspaceSnapshot, monitor.name);
+            const workspaceId = hasSnapshot
+                ? root.workspaceSnapshot[monitor.name]
+                : (monitor.activeWorkspace ? monitor.activeWorkspace.id : null);
+            workspaceGuard.bind(monitor, workspaceId);
+            return;
+        }
     }
 
     function close() {
@@ -99,6 +127,19 @@ Item {
     Listener {
         id: listener
         onOpened: event => root.show(String(event.session), event.test === true, event.reply, listener.path)
+    }
+
+    Connections {
+        target: view
+        function onMonitorNameChanged() {
+            if (root.opened)
+                root.bindSessionWorkspace();
+        }
+    }
+
+    WorkspaceGuard {
+        id: workspaceGuard
+        onDeactivated: view.workspaceDeactivated()
     }
 
     Client {

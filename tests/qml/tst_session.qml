@@ -139,6 +139,17 @@ Item {
             verify(!view.activeFocus, "the view gave the keyboard back");
         }
 
+        // REQ-SESSION-01: targets collected from one workspace must not stay
+        // drawn after Hyprland deactivates that workspace.
+        function test_req_session_01_workspace_deactivation_ends_the_session() {
+            verify(view.active);
+            view.workspaceDeactivated();
+            tryVerify(() => top.ended !== null, 1000, "the workspace-bound session ended");
+            compare(top.ended.why, "workspace changed");
+            verify(!view.active, "the overlay stopped drawing on other workspaces");
+            verify(!view.activeFocus, "the overlay released keyboard focus");
+        }
+
         // REQ-SESSION-01: while the first labels are drawn, visual targets can
         // finish asynchronously without letting a pending label change under
         // a key. Escape stays available; keys resume after the new generation.
