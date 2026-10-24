@@ -4,7 +4,7 @@ Thodu is a keyboard hint picker for Omarchy. It labels clickable controls in eve
 
 This is an early, Omarchy-only milestone. It uses accessibility trees for GTK 3, GTK 4, Qt Widgets, Chromium controls and Electron controls, plus clickable items in the Omarchy bar. Default hints cover mapped windows on the focused monitor's active workspace, shown special workspace and pinned clients. One label sequence spans those windows, with the shortest labels placed near the top-left. `--scope focused` and `--window` restrict collection to one window.
 
-Every visible-window collection also runs a bounded monitor screenshot detector after primary targets draw. It can add click hints for visible text lines and box-like controls that apps do not expose in their accessibility trees, even when other controls are accessible. These image hints have no searchable text and use an amber style. They can miss controls, and may label visible text that is not interactive. A grid remains available for choosing any point on the focused monitor. Some Chromium and Electron page controls can be labeled when exposed over AT-SPI, but broad website coverage is not promised yet. Scrolling, dragging and hovering are not supported; Thodu has no scroll-mode shortcut yet.
+Every visible-window collection also runs a bounded monitor screenshot detector after primary targets draw. It can add click hints for visible text lines and box-like controls that apps do not expose in their accessibility trees, even when other controls are accessible. These image hints have no searchable text and use an amber style. They can miss controls, and may label visible text that is not interactive. A grid remains available for choosing any point on the focused monitor. Scroll mode finds AT-SPI scroll panes and web document viewports across visible windows, with a window-sized fallback for apps that expose no scroll area. Dragging and hovering are not supported.
 
 When no app window is focused, Thodu uses the focused monitor and still labels the Omarchy bar. If no source finds targets, it opens the grid.
 
@@ -33,12 +33,18 @@ thodu install
 thodu doctor
 ```
 
-The first install with no existing Thodu bindings uses `SUPER + SHIFT + F12` for hints and `SUPER + CTRL + F12` for the grid. Re-running the installer preserves existing Thodu bindings. To set or replace both bindings explicitly, pass both options:
+The first install with no existing Thodu bindings uses `SUPER + SHIFT + F12` for hints, `SUPER + CTRL + F12` for the grid and `SUPER + ALT + F12` for scroll mode. Re-running the installer preserves existing hints and grid keys, and adds the default scroll key if missing. To change only the scroll key, pass `--scroll-key`; this preserves your other Thodu keys. To set or replace both hints and grid bindings explicitly, pass both options:
 
 ```sh
 thodu install \
   --hints-key "SUPER + CTRL + SPACE" \
   --grid-key "SUPER + CTRL + SHIFT + SPACE"
+```
+
+For example, to use `CTRL + ALT + SPACE` for scroll mode while keeping your existing hints and grid bindings:
+
+```sh
+thodu install --scroll-key "CTRL + ALT + SPACE"
 ```
 
 Installation may ask for authorization to add the `/dev/uinput` rule. `thodu doctor` reports which installation requirements are present. If the Omarchy shell was not restarted by the installer, run `omarchy restart shell` and then `thodu doctor` again.
@@ -51,11 +57,11 @@ Installation may ask for authorization to add the `/dev/uinput` rule. `thodu doc
 
 Close every Chromium window, including standalone app windows, then wait for all Chromium processes to exit before relaunching. Chromium app windows can reuse an existing browser process, so reopening only a web app while the old process is still running may keep the old environment. Start the browser and its installed web apps again from Omarchy after `thodu install`.
 
-Chromium-based web apps, including Slack opened in its own window, use this same Chromium setup. If a window has no AT-SPI targets, open `chrome://accessibility` to inspect or enable the tree for the current run. Chromium documents `--force-renderer-accessibility` as a fallback. On Arch, put that flag on its own line in `~/.config/chromium-flags.conf`, then fully quit and restart all Chromium windows and processes. Prefer the normal Thodu session setup first because forced accessibility can keep more of the browser tree active. See [Chromium's accessibility documentation](https://www.chromium.org/developers/design-documents/accessibility/) and the ArchWiki section on [persistent Chromium flags](https://wiki.archlinux.org/title/Chromium#Making_flags_persistent).
+Chromium-based web apps, including Slack opened in its own window, use this same Chromium setup. If a window has no AT-SPI targets, open `chrome://accessibility` to inspect or enable the tree for the current run. Chromium documents `--force-renderer-accessibility` as a fallback. On Arch, put that flag on its own line in `~/.config/chromium-flags.conf`, then fully quit and restart all Chromium windows and processes. Prefer the normal Thodu session setup first because forced accessibility can keep more of the browser tree active. Scroll mode sends wheel input through the installed uinput device, so it does not require a browser extension. See [Chromium's accessibility documentation](https://www.chromium.org/developers/design-documents/accessibility/) and the ArchWiki section on [persistent Chromium flags](https://wiki.archlinux.org/title/Chromium#Making_flags_persistent).
 
 ### Electron apps
 
-Electron normally enables accessibility when it detects assistive technology. Quit and relaunch Electron apps from Omarchy after installing Thodu. If an app was started outside the Omarchy session, close it and start it with the environment prefix, for example `ACCESSIBILITY_ENABLED=1 obsidian`. For a Flatpak app, set the variable for that app and restart it:
+Electron normally enables accessibility when it detects assistive technology. Quit and relaunch Electron apps from Omarchy after installing Thodu. If an app was started outside the Omarchy session, close it and start it with the environment prefix, for example `ACCESSIBILITY_ENABLED=1 obsidian`. Scroll mode uses the same uinput wheel path for Electron. For a Flatpak app, set the variable for that app and restart it:
 
 ```sh
 flatpak override --user --env=ACCESSIBILITY_ENABLED=1 APP_ID
@@ -65,7 +71,7 @@ Replace `APP_ID` with the app's Flatpak ID. To remove the override later, run `f
 
 ### Web page coverage
 
-Thodu reads controls that Chromium and Electron expose through AT-SPI. Individual sites can omit controls or use custom widgets that expose no useful accessibility information. The planned Chromium extension is not included, so general website coverage remains limited. Screenshot hints may add visible candidates, but they do not understand a page's control semantics and can miss targets. Scrolling is not implemented and Thodu has no scroll-mode shortcut.
+Thodu reads controls that Chromium and Electron expose through AT-SPI. Individual sites can omit controls or use custom widgets that expose no useful accessibility information. The planned Chromium extension is not included, so general website coverage remains limited. Screenshot hints may add visible candidates, but they do not understand a page's control semantics and can miss targets. Scroll mode remains usable on a window-sized fallback when a browser does not expose semantic panes; this lets wheel scrolling work but cannot identify individual nested page panes.
 
 The screenshot below shows Thodu labeling the Open, Save and Close buttons exposed by the local Chromium reference page:
 
@@ -80,6 +86,7 @@ The screenshot below shows Thodu labeling the Open, Save and Close buttons expos
 - `Tab` and `Shift+Tab` move focus. `Escape` closes the session. `Space` opens the grid when no target is focused.
 - `Shift+Return` right-clicks, `Control+Return` clicks with Control held, and two distinct `Return` presses within 300 ms double-click.
 - Press the grid binding to choose a point on the focused monitor. Select a cell to refine it, then press `Return` to click its center.
+- Press the scroll binding (`SUPER + ALT + F12` by default) to select and scroll panes across visible app windows on the focused monitor. Lowercase `j`/`k` scroll down/up and `h`/`l` scroll left/right. Uppercase `J`/`K`/`H`/`L` sends a larger step. `Tab` and `Shift+Tab` cycle areas, digits select an area by its number, `Return` clears the number prefix, and `Escape` exits. The overlay hides while the wheel event is sent, then resumes the same session.
 
 The configuration file is `~/.config/thodu/config.toml`. The supported setting is:
 
@@ -95,6 +102,8 @@ The default is `false`, which starts in search-first mode. Restart an active ses
 thodu hints                  # show target labels across visible windows
 thodu hints --scope focused  # show targets from the focused window only
 thodu grid                   # choose a point with the grid
+thodu scroll                 # select and scroll a pane in any visible app window
+thodu scroll --scope focused # scroll only the focused app window
 thodu targets --json         # print targets from visible windows
 thodu targets --scope focused --json  # print targets from the focused window
 thodu doctor                 # check the installation

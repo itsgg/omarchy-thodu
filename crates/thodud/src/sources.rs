@@ -366,6 +366,80 @@ impl Source for Atspi {
 }
 
 impl Atspi {
+    /// Collect semantic scroll regions, with one window fallback where the
+    /// app tree has no usable scroll role (REQ-SRC-08).
+    pub fn collect_scroll_areas(
+        &self,
+        windows: &[Window],
+        visible_windows: &[Window],
+        monitor: &Monitor,
+    ) -> (Vec<Target>, String) {
+        if windows.is_empty() {
+            return (Vec::new(), "0 scroll areas across 0 windows".into());
+        }
+        let started = Instant::now();
+        let snapshots = (|| -> Result<(Vec<tree::Snapshot>, bool), String> {
+            let mut bus = self.bus.lock().map_err(|_| "bus lock".to_string())?;
+            if bus.is_none() {
+                *bus = Some(atspi::Bus::connect()?);
+            }
+            let reader = bus.as_ref().ok_or("no bus")?;
+            let mut woken = self.woken.lock().map_err(|_| "wake lock".to_string())?;
+            let mut walk = atspi::Walk::new(self.budget.saturating_sub(self.budget / 8));
+            let snapshots = atspi::snapshot_many(reader, windows, monitor, &mut walk, &mut woken);
+            Ok((snapshots, walk.truncated))
+        })();
+
+        let mut targets = Vec::new();
+        let mut semantic_count = 0;
+        let mut fallback_count = 0;
+        let mut details = Vec::new();
+        match snapshots {
+            Ok((snapshots, truncated)) => {
+                let matches = tree::match_frame_indices(&snapshots);
+                for (window, matched) in windows.iter().zip(matches) {
+                    let frame = matched.and_then(|(app, frame)| {
+                        snapshots
+                            .iter()
+                            .find(|snapshot| snapshot.window.address == window.address)
+                            .and_then(|snapshot| snapshot.apps.get(app)?.frames.get(frame))
+                    });
+                    let found = scroll_areas_for_window(frame, window, monitor);
+                    if found.iter().any(|target| target.source == From::Window) {
+                        fallback_count += 1;
+                    } else {
+                        semantic_count += found.len();
+                    }
+                    targets.extend(found);
+                }
+                if truncated {
+                    details.push("tree walk reached its budget".to_string());
+                }
+            }
+            Err(error) => {
+                details.push(format!("atspi unavailable: {error}"));
+                for window in windows {
+                    let found = scroll_areas_for_window(None, window, monitor);
+                    fallback_count += found.len();
+                    targets.extend(found);
+                }
+            }
+        }
+        finish_visible_targets(&mut targets, visible_windows);
+        let mut status = format!(
+            "{} scroll areas from atspi and {} window fallbacks across {} windows in {} ms",
+            semantic_count,
+            fallback_count,
+            windows.len(),
+            started.elapsed().as_millis()
+        );
+        if !details.is_empty() {
+            status.push_str("; ");
+            status.push_str(&details.join("; "));
+        }
+        (targets, status)
+    }
+
     fn collect_windows(&self, windows: &[Window], monitor: &Monitor) -> Found {
         let started = Instant::now();
         if windows.is_empty() {
@@ -429,6 +503,39 @@ impl Atspi {
         // interactive hints draw these primary targets before it completes.
         Ok(atspi_targets_with_visual_supplement(targets, said))
     }
+}
+
+/// Scroll areas for one window, falling back to its client bounds when the
+/// accessibility tree has no semantic region.
+pub fn scroll_areas_for_window(
+    frame: Option<&tree::Node>,
+    window: &Window,
+    monitor: &Monitor,
+) -> Vec<Target> {
+    let mut targets = frame
+        .map(|frame| tree::scroll_targets(frame, window, monitor))
+        .unwrap_or_default();
+    if targets.is_empty()
+        && let Some(bounds) = window.rect().intersect(&monitor.logical())
+    {
+        targets.push(Target {
+            id: format!("{}:window-scroll", window.address),
+            bounds,
+            role: Role::ScrollArea,
+            text: if window.title.is_empty() {
+                format!("{} window", window.class)
+            } else {
+                window.title.clone()
+            },
+            source: From::Window,
+            actions: vec![ActionKind::Scroll],
+            window: window.address.clone(),
+        });
+    }
+    for (index, target) in targets.iter_mut().enumerate() {
+        target.id = format!("{}:scroll-{index}", window.address);
+    }
+    targets
 }
 
 fn atspi_targets_with_visual_supplement(
@@ -675,6 +782,42 @@ mod tests {
             height: 100,
             scale: 1.0,
         }
+    }
+
+    // REQ-SRC-08: windows with no semantic pane remain scroll-selectable.
+    #[test]
+    fn req_src_08_scroll_area_uses_a_window_fallback_and_respects_stacking() {
+        let mut back = window();
+        back.size = (80, 80);
+        let mut front = window();
+        front.address = "0x2".into();
+        front.at = (30, 0);
+        front.size = (40, 80);
+        front.floating = true;
+        let mut targets = scroll_areas_for_window(None, &back, &monitor());
+        targets.extend(scroll_areas_for_window(None, &front, &monitor()));
+        assert_eq!(targets.len(), 2);
+        assert!(targets.iter().all(|target| {
+            target.role == Role::ScrollArea
+                && target.actions == [ActionKind::Scroll]
+                && target.source == From::Window
+        }));
+        finish_visible_targets(&mut targets, &[back, front]);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].window, "0x2");
+    }
+
+    // REQ-SRC-08: no app windows return an empty result rather than an error.
+    #[test]
+    fn req_src_08_empty_scroll_scope_reports_no_windows() {
+        let source = Atspi {
+            bus: Mutex::new(None),
+            woken: Mutex::new(HashSet::new()),
+            budget: Duration::from_millis(80),
+        };
+        let (targets, status) = source.collect_scroll_areas(&[], &[], &monitor());
+        assert!(targets.is_empty());
+        assert!(status.contains("0 scroll areas across 0 windows"));
     }
 
     // REQ-SRC-07: a floating window stays actionable over a tiled window,

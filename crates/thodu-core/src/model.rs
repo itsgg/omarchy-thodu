@@ -81,6 +81,7 @@ pub enum Source {
     Atspi,
     Shell,
     Image,
+    Window,
     Grid,
 }
 
@@ -93,6 +94,7 @@ pub enum ActionKind {
     Middle,
     Double,
     Focus,
+    Scroll,
 }
 
 /// Something a mouse could act on.

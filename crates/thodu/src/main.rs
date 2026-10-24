@@ -3,12 +3,14 @@
 //!
 //!   thodu hints [--scope visible|focused] [--window ADDRESS] [--test] [--no-overlay] start a session
 //!   thodu grid [--window ADDRESS] [--test] [--no-overlay]    start on the grid
+//!   thodu scroll [--scope visible|focused] [--window ADDRESS] [--test] [--no-overlay] scroll panes
 //!   thodu targets [--scope visible|focused] [--json] [--window ADDRESS] print targets without labels
 //!   thodu key SESSION KEY [--shift] [--ctrl]  send a key, for live checks
 //!   thodu close SESSION
 //!   thodu bench [--sessions N] [--window ADDRESS]   time to labels drawn
 //!   thodu record-tree --out FILE [--window ADDRESS]  record the tree
-//!   thodu install [--hints-key KEY --grid-key KEY] default: SUPER + SHIFT + F12, SUPER + CTRL + F12
+//!   thodu install [--hints-key KEY --grid-key KEY] [--scroll-key KEY]
+//!       defaults: SUPER + SHIFT + F12, SUPER + CTRL + F12, SUPER + ALT + F12
 //!   thodu doctor                              check environment, rule and service
 //!
 //! ADDRESS is a Hyprland window address, or class:NAME for the first window
@@ -17,7 +19,7 @@
 //! It starts thodud when nothing answers on the socket. Errors print an
 //! ERROR line and exit 1; bad arguments exit 2.
 
-use std::io::{BufRead, BufReader, IsTerminal, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
@@ -445,7 +447,9 @@ fn check_doctor(home: &Path) -> (Vec<DoctorItem>, bool) {
     let binding_is_configured = |name: &str| {
         active_line(&format!("\"Thodu {name}\"")) && active_line(&format!(" {name}\")"))
     };
-    let bindings = binding_is_configured("hints") && binding_is_configured("grid");
+    let bindings = binding_is_configured("hints")
+        && binding_is_configured("grid")
+        && binding_is_configured("scroll");
     items.push(DoctorItem {
         name: "hyprland keybindings",
         present: bindings,
@@ -512,10 +516,12 @@ fn install_plugin_files(dest: &Path) -> Result<(), String> {
 struct KeyBindings {
     hints: String,
     grid: String,
+    scroll: String,
 }
 
 const DEFAULT_HINTS_KEY: &str = "SUPER + SHIFT + F12";
 const DEFAULT_GRID_KEY: &str = "SUPER + CTRL + F12";
+const DEFAULT_SCROLL_KEY: &str = "SUPER + ALT + F12";
 
 fn validate_key(key: &str, option: &str) -> Result<String, String> {
     let key = key.trim();
@@ -531,63 +537,61 @@ fn validate_key(key: &str, option: &str) -> Result<String, String> {
     Ok(key.to_string())
 }
 
-fn prompt_key(prompt: &str) -> Result<String, String> {
-    print!("{prompt}");
-    std::io::stdout().flush().map_err(|e| e.to_string())?;
-    let mut line = String::new();
-    std::io::stdin()
-        .read_line(&mut line)
-        .map_err(|e| format!("cannot read key choice: {e}"))?;
-    validate_key(&line, prompt.trim_end_matches(": "))
+fn configured_key(content: &str, name: &str) -> Option<String> {
+    let label = format!("\"Thodu {name}\"");
+    content.lines().find_map(|line| {
+        let line = line.trim_start();
+        if line.starts_with("--") || !line.contains("o.bind(") || !line.contains(&label) {
+            return None;
+        }
+        let argument = line.strip_prefix("o.bind(")?.split(',').next()?.trim();
+        serde_json::from_str(argument).ok()
+    })
 }
 
-fn install_key_choices(args: &[String], home: &Path) -> Result<Option<KeyBindings>, String> {
+fn install_key_choices(args: &[String], home: &Path) -> Result<KeyBindings, String> {
     let hints = value(args, "--hints-key");
     let grid = value(args, "--grid-key");
-    match (hints, grid) {
-        (Some(hints), Some(grid)) => {
-            let choices = KeyBindings {
-                hints: validate_key(&hints, "--hints-key")?,
-                grid: validate_key(&grid, "--grid-key")?,
-            };
-            if choices.hints == choices.grid {
-                return Err("--hints-key and --grid-key must be different".into());
-            }
-            Ok(Some(choices))
-        }
+    let requested_scroll = value(args, "--scroll-key");
+    let (hints, grid) = match (hints, grid) {
+        (Some(hints), Some(grid)) => (
+            validate_key(&hints, "--hints-key")?,
+            validate_key(&grid, "--grid-key")?,
+        ),
         (Some(_), None) | (None, Some(_)) => {
-            Err("--hints-key and --grid-key must be supplied together".into())
+            return Err("--hints-key and --grid-key must be supplied together".into());
         }
         (None, None) => {
             let path = home.join(".config/hypr/bindings.lua");
             let current = std::fs::read_to_string(path).unwrap_or_default();
-            let has_hints = active_config_line(&current, "\"Thodu hints\"");
-            let has_grid = active_config_line(&current, "\"Thodu grid\"");
-            if has_hints && has_grid {
-                return Ok(None);
-            }
-            if !has_hints && !has_grid {
-                return Ok(Some(KeyBindings {
-                    hints: DEFAULT_HINTS_KEY.to_string(),
-                    grid: DEFAULT_GRID_KEY.to_string(),
-                }));
-            }
-            if !std::io::stdin().is_terminal() {
-                return Err(
-                    "choose both keybindings with --hints-key and --grid-key, or run thodu install in a terminal".into(),
-                );
-            }
-            println!("Choose the two free Omarchy keybindings for Thodu.");
-            let choices = KeyBindings {
-                hints: prompt_key("Key for Thodu hints: ")?,
-                grid: prompt_key("Key for Thodu grid: ")?,
-            };
-            if choices.hints == choices.grid {
-                return Err("the Thodu hints and grid keys must be different".into());
-            }
-            Ok(Some(choices))
+            (
+                configured_key(&current, "hints").unwrap_or_else(|| DEFAULT_HINTS_KEY.to_string()),
+                configured_key(&current, "grid").unwrap_or_else(|| DEFAULT_GRID_KEY.to_string()),
+            )
         }
+    };
+    let scroll = requested_scroll
+        .as_deref()
+        .map(|key| validate_key(key, "--scroll-key"))
+        .transpose()?
+        .or_else(|| {
+            let path = home.join(".config/hypr/bindings.lua");
+            let current = std::fs::read_to_string(path).unwrap_or_default();
+            configured_key(&current, "scroll")
+        })
+        .unwrap_or_else(|| DEFAULT_SCROLL_KEY.to_string());
+    let choices = KeyBindings {
+        hints,
+        grid,
+        scroll,
+    };
+    if choices.hints == choices.grid
+        || choices.hints == choices.scroll
+        || choices.grid == choices.scroll
+    {
+        return Err("Thodu hints, grid and scroll keybindings must be different".into());
     }
+    Ok(choices)
 }
 
 fn lua_string(value: &str) -> String {
@@ -598,7 +602,7 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-fn install_hyprland_config(home: &Path, choices: Option<&KeyBindings>) -> Result<(), String> {
+fn install_hyprland_config(home: &Path, choices: &KeyBindings) -> Result<(), String> {
     let hypr_dir = home.join(".config/hypr");
     std::fs::create_dir_all(&hypr_dir).map_err(|e| format!("{}: {e}", hypr_dir.display()))?;
     let bindings_file = hypr_dir.join("bindings.lua");
@@ -617,10 +621,10 @@ fn install_hyprland_config(home: &Path, choices: Option<&KeyBindings>) -> Result
         )
     };
     let mut updated = String::new();
-    let (mut has_hints, mut has_grid) = (false, false);
+    let (mut has_hints, mut has_grid, mut has_scroll) = (false, false, false);
     for line in current.lines() {
         let active_binding = !line.trim_start().starts_with("--") && line.contains("o.bind(");
-        if let Some(choices) = choices.filter(|_| active_binding) {
+        if active_binding {
             if line.contains("\"Thodu hints\"") {
                 if !has_hints {
                     updated.push_str(&binding_line("hints", &choices.hints));
@@ -635,17 +639,25 @@ fn install_hyprland_config(home: &Path, choices: Option<&KeyBindings>) -> Result
                 }
                 continue;
             }
+            if line.contains("\"Thodu scroll\"") {
+                if !has_scroll {
+                    updated.push_str(&binding_line("scroll", &choices.scroll));
+                    has_scroll = true;
+                }
+                continue;
+            }
         }
         updated.push_str(line);
         updated.push('\n');
     }
-    if let Some(choices) = choices {
-        if !has_hints {
-            updated.push_str(&binding_line("hints", &choices.hints));
-        }
-        if !has_grid {
-            updated.push_str(&binding_line("grid", &choices.grid));
-        }
+    if !has_hints {
+        updated.push_str(&binding_line("hints", &choices.hints));
+    }
+    if !has_grid {
+        updated.push_str(&binding_line("grid", &choices.grid));
+    }
+    if !has_scroll {
+        updated.push_str(&binding_line("scroll", &choices.scroll));
     }
     for line in [
         "hl.env(\"ACCESSIBILITY_ENABLED\", \"1\")",
@@ -723,7 +735,7 @@ fn enable_user_service(home: &Path, unit: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn do_install(home: &Path, choices: Option<&KeyBindings>) -> Result<(), String> {
+fn do_install(home: &Path, choices: &KeyBindings) -> Result<(), String> {
     install_udev_rule(home)?;
 
     let plugin_dest = home.join(".config/omarchy/plugins/io.github.itsgg.thodu");
@@ -973,14 +985,14 @@ fn doctor() -> Result<(), String> {
 fn install(args: &[String]) -> Result<(), String> {
     let home = home_dir()?;
     let choices = install_key_choices(args, &home)?;
-    do_install(&home, choices.as_ref())?;
+    do_install(&home, &choices)?;
     println!("thodu installed successfully");
     Ok(())
 }
 
 fn run(args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str) {
-        Some(mode @ ("hints" | "grid")) => {
+        Some(mode @ ("hints" | "grid" | "scroll")) => {
             check_hyprland()?;
             let reply = ask(
                 json!({"v": VERSION, "op": "start", "mode": mode, "scope": value(args, "--scope").unwrap_or_else(|| "visible".into()), "window": value(args, "--window"), "test": flag(args, "--test"), "overlay": !flag(args, "--no-overlay")}),
@@ -1052,7 +1064,7 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) if e.is_empty() => {
             eprintln!(
-                "usage: thodu hints [--scope visible|focused] [--window ADDRESS] [--test] [--no-overlay] | grid [--window ADDRESS] [--test] [--no-overlay] | targets [--scope visible|focused] [--json] [--window ADDRESS] | key SESSION KEY | close SESSION | bench [--sessions N] [--window ADDRESS] | record-tree [--out FILE] [--window ADDRESS] | install [--hints-key KEY --grid-key KEY] | doctor"
+                "usage: thodu hints [--scope visible|focused] [--window ADDRESS] [--test] [--no-overlay] | grid [--window ADDRESS] [--test] [--no-overlay] | scroll [--scope visible|focused] [--window ADDRESS] [--test] [--no-overlay] | targets [--scope visible|focused] [--json] [--window ADDRESS] | key SESSION KEY | close SESSION | bench [--sessions N] [--window ADDRESS] | record-tree [--out FILE] [--window ADDRESS] | install [--hints-key KEY --grid-key KEY] [--scroll-key KEY] | doctor"
             );
             ExitCode::from(2)
         }

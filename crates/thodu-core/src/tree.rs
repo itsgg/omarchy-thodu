@@ -149,6 +149,15 @@ pub fn role_of(name: &str) -> Option<Role> {
     Some(role)
 }
 
+/// Roles that identify a region a pointer wheel can scroll. Scroll bars are
+/// omitted because their narrow bounds are poor wheel targets.
+pub fn is_scroll_area_role(name: &str) -> bool {
+    matches!(
+        name,
+        "scroll pane" | "viewport" | "document web" | "document frame"
+    )
+}
+
 /// Roles drawn above what came before them in the tree; an earlier element
 /// they cover is not clickable while they show.
 fn is_layer(role: &str) -> bool {
@@ -161,7 +170,8 @@ fn is_layer(role: &str) -> bool {
 const fn actions_for(role: Role) -> &'static [ActionKind] {
     match role {
         Role::Entry => &[ActionKind::Click, ActionKind::Focus],
-        Role::Text | Role::ScrollArea | Role::Unknown => &[ActionKind::Click],
+        Role::ScrollArea => &[ActionKind::Scroll],
+        Role::Text | Role::Unknown => &[ActionKind::Click],
         _ => &[ActionKind::Click, ActionKind::Right, ActionKind::Double],
     }
 }
@@ -216,6 +226,119 @@ pub fn targets(frame: &Node, window: &Window, monitor: &Monitor) -> Vec<Target> 
         .map(|(i, mut f)| {
             f.target.id = format!("a{i}");
             f.target
+        })
+        .collect()
+}
+
+/// Scrollable areas in one visible accessibility frame (REQ-SRC-08).
+/// Exact duplicate bounds keep the most specific role, so a document and
+/// its viewport do not produce indistinguishable labels.
+pub fn scroll_targets(frame: &Node, window: &Window, monitor: &Monitor) -> Vec<Target> {
+    let Some(area) = window.rect().intersect(&monitor.logical()) else {
+        return Vec::new();
+    };
+    fn rank(role: &str) -> u8 {
+        match role {
+            "scroll pane" => 4,
+            "document web" => 3,
+            "viewport" => 2,
+            "document frame" => 1,
+            _ => 0,
+        }
+    }
+    struct ScrollWalk<'a> {
+        window: &'a Window,
+        monitor: &'a Monitor,
+        area: Rect,
+        order: usize,
+        found: Vec<(u8, usize, Target)>,
+    }
+    impl ScrollWalk<'_> {
+        fn visit(&mut self, node: &Node, div: f64, parent: Option<[i32; 4]>) {
+            if !node.shown() || node.has("defunct") {
+                return;
+            }
+            self.order += 1;
+            let div = match (node.extents, parent) {
+                (Some(e), Some(p))
+                    if div == 1.0
+                        && is_document(&node.role)
+                        && scaled(e, p, self.monitor.scale) =>
+                {
+                    self.monitor.scale
+                }
+                _ => div,
+            };
+            if is_scroll_area_role(&node.role)
+                && let Some([x, y, w, h]) = node.extents
+            {
+                let logical = |v: i32| (f64::from(v) / div).round() as i32;
+                let bounds = Rect::new(
+                    self.window.at.0 + logical(x),
+                    self.window.at.1 + logical(y),
+                    logical(w),
+                    logical(h),
+                )
+                .intersect(&self.area);
+                if let Some(bounds) = bounds {
+                    let text = [node.name.trim(), node.description.trim()]
+                        .iter()
+                        .filter(|value| !value.is_empty())
+                        .copied()
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    self.found.push((
+                        rank(&node.role),
+                        self.order,
+                        Target {
+                            id: String::new(),
+                            bounds,
+                            role: Role::ScrollArea,
+                            text,
+                            source: Source::Atspi,
+                            actions: vec![ActionKind::Scroll],
+                            window: self.window.address.clone(),
+                        },
+                    ));
+                }
+            }
+            let parent = node.extents.or(parent);
+            for child in &node.children {
+                self.visit(child, div, parent);
+            }
+        }
+    }
+
+    let mut walk = ScrollWalk {
+        window,
+        monitor,
+        area,
+        order: 0,
+        found: Vec::new(),
+    };
+    walk.visit(frame, 1.0, None);
+    let mut found = walk.found;
+    found.sort_by_key(|(_, order, target)| (target.bounds.y, target.bounds.x, *order));
+    let mut unique: Vec<(u8, usize, Target)> = Vec::new();
+    for candidate in found {
+        if let Some(existing) = unique
+            .iter_mut()
+            .find(|(_, _, target)| target.bounds == candidate.2.bounds)
+        {
+            if candidate.0 > existing.0 {
+                *existing = candidate;
+            }
+        } else {
+            unique.push(candidate);
+        }
+    }
+    unique.sort_by_key(|(_, order, target)| (target.bounds.y, target.bounds.x, *order));
+    unique
+        .into_iter()
+        .enumerate()
+        .map(|(index, (_, _, mut target))| {
+            target.id = format!("s{index}");
+            target
         })
         .collect()
 }

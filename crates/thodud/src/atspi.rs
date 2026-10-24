@@ -114,12 +114,15 @@ fn cache_role_name(role: u32) -> &'static str {
         43 => "button",
         44 => "radio button",
         45 => "radio menu item",
+        48 => "scroll bar",
+        49 => "scroll pane",
         51 => "slider",
         52 => "spin button",
         56 => "table cell",
         61 => "text",
         62 => "toggle button",
         64 => "tooltip",
+        68 => "viewport",
         69 => "window",
         79 => "entry",
         82 => "document frame",
@@ -352,7 +355,10 @@ impl Tree for Bus {
                         && entry.child_count == 0;
                     let row_cell = matches!(role, "grid cell" | "table cell")
                         && row_paths.contains(entry.parent.1.as_str());
-                    let geometry = (tree::role_of(role).is_some() && shown && !row_cell)
+                    let geometry = ((tree::role_of(role).is_some()
+                        || tree::is_scroll_area_role(role))
+                        && shown
+                        && !row_cell)
                         || frame_root
                         || (shown && is_document(role))
                         || (shown

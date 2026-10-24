@@ -218,13 +218,15 @@ fn install_args() -> [&'static str; 1] {
     ["install"]
 }
 
-fn alternate_install_args() -> [&'static str; 5] {
+fn alternate_install_args() -> [&'static str; 7] {
     [
         "install",
         "--hints-key",
         "SUPER + SHIFT + code:201",
         "--grid-key",
         "SUPER + F10",
+        "--scroll-key",
+        "CTRL + ALT + SPACE",
     ]
 }
 
@@ -271,7 +273,8 @@ fn req_install_01_noninteractive_install_uses_f12_defaults() {
         .expect("read default keybindings");
     assert!(
         bindings.contains("o.bind(\"SUPER + SHIFT + F12\", \"Thodu hints\"")
-            && bindings.contains("o.bind(\"SUPER + CTRL + F12\", \"Thodu grid\""),
+            && bindings.contains("o.bind(\"SUPER + CTRL + F12\", \"Thodu grid\"")
+            && bindings.contains("o.bind(\"SUPER + ALT + F12\", \"Thodu scroll\""),
         "{bindings}"
     );
     assert!(
@@ -316,7 +319,8 @@ fn req_install_01_noninteractive_install_preserves_existing_bindings() {
     let installed_bindings = std::fs::read_to_string(&bindings).expect("read bindings");
     assert!(
         installed_bindings.contains("o.bind(\"CTRL + SPACE\", \"Thodu hints\"")
-            && installed_bindings.contains("o.bind(\"CTRL + SHIFT + SPACE\", \"Thodu grid\""),
+            && installed_bindings.contains("o.bind(\"CTRL + SHIFT + SPACE\", \"Thodu grid\"")
+            && installed_bindings.contains("o.bind(\"SUPER + ALT + F12\", \"Thodu scroll\""),
         "{installed_bindings}"
     );
     assert!(
@@ -355,13 +359,54 @@ fn req_install_01_explicit_key_options_override_defaults() {
     let changed_bindings = std::fs::read_to_string(&bindings).expect("read changed bindings");
     assert!(
         changed_bindings.contains("SUPER + SHIFT + code:201")
-            && changed_bindings.contains("SUPER + F10"),
+            && changed_bindings.contains("SUPER + F10")
+            && changed_bindings.contains("CTRL + ALT + SPACE"),
         "{changed_bindings}"
     );
     assert!(
         !changed_bindings.contains("SUPER + SHIFT + F12")
             && !changed_bindings.contains("SUPER + CTRL + F12"),
         "explicit options must replace both defaults: {changed_bindings}"
+    );
+}
+
+// REQ-INSTALL-01: a scroll override leaves the user's hints and grid keys intact.
+#[test]
+fn req_install_01_scroll_key_override_preserves_other_keys() {
+    let root = TestRoot::new("scroll-key-only");
+    let home = root.home();
+    let udev_dir = root.udev_dir();
+    let cwd = root.0.join("elsewhere");
+    std::fs::create_dir_all(&cwd).expect("create unrelated working directory");
+    let bindings = home.join(".config/hypr/bindings.lua");
+    std::fs::create_dir_all(bindings.parent().expect("bindings parent"))
+        .expect("create Hyprland config directory");
+    std::fs::write(
+        &bindings,
+        concat!(
+            "o.bind(\"CTRL + SPACE\", \"Thodu hints\", \"thodu hints\")\n",
+            "o.bind(\"CTRL + SHIFT + SPACE\", \"Thodu grid\", \"thodu grid\")\n"
+        ),
+    )
+    .expect("write local Thodu bindings");
+
+    let installed = thodu(
+        &home,
+        &udev_dir,
+        &["install", "--scroll-key", "CTRL + ALT + SPACE"],
+        &cwd,
+    );
+    assert!(
+        installed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&installed.stderr)
+    );
+    let installed_bindings = std::fs::read_to_string(&bindings).expect("read bindings");
+    assert!(
+        installed_bindings.contains("o.bind(\"CTRL + SPACE\", \"Thodu hints\"")
+            && installed_bindings.contains("o.bind(\"CTRL + SHIFT + SPACE\", \"Thodu grid\"")
+            && installed_bindings.contains("o.bind(\"CTRL + ALT + SPACE\", \"Thodu scroll\""),
+        "{installed_bindings}"
     );
 }
 
@@ -516,6 +561,10 @@ fn req_install_01_fake_home_reports_missing_then_installed_reports_present() {
     );
     assert!(
         installed_bindings.contains("SUPER + CTRL + F12"),
+        "{installed_bindings}"
+    );
+    assert!(
+        installed_bindings.contains("SUPER + ALT + F12"),
         "{installed_bindings}"
     );
     assert!(

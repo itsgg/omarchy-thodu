@@ -24,6 +24,7 @@ FocusScope {
     property bool labelSelected: false
     property string search: ""
     property bool labelsOnly: false
+    property bool scrollMode: false
     // With labels_only, / started a search (REQ-SEARCH-02).
     property bool searching: false
     property string labelPrefix: ""
@@ -75,6 +76,7 @@ FocusScope {
         view.labelSelected = false;
         view.search = "";
         view.labelsOnly = false;
+        view.scrollMode = false;
         view.searching = false;
         view.labelPrefix = "";
         view.status = "";
@@ -147,6 +149,7 @@ FocusScope {
         view.focusedId = shown.focused || "";
         view.labelSelected = shown.label_selected === true;
         view.labelsOnly = shown.labels_only === true;
+        view.scrollMode = shown.scroll_mode === true;
         view.search = shown.search || "";
         view.searching = shown.searching === true;
         view.labelPrefix = shown.label_prefix || "";
@@ -168,6 +171,8 @@ FocusScope {
         // Caps Lock can make text uppercase without Shift. Only Shift means
         // activation; repeats cannot complete labels or double-click.
         const shift = (modifiers & Qt.ShiftModifier) !== 0;
+        if (view.scrollMode && autoRepeat)
+            return null;
         const letter = key >= Qt.Key_A && key <= Qt.Key_Z;
         const labelInput = shift || view.labelPrefix.length > 0 || (view.labelsOnly && !view.searching);
         if (autoRepeat && (key === Qt.Key_Return || key === Qt.Key_Enter || (letter && labelInput)))
@@ -188,6 +193,8 @@ FocusScope {
             name = "space";
         else if (key === Qt.Key_Slash)
             name = "/";
+        else if (view.scrollMode && !shift && key >= Qt.Key_0 && key <= Qt.Key_9)
+            name = String.fromCharCode(key);
         else if (key >= Qt.Key_A && key <= Qt.Key_Z) {
             const lower = String.fromCharCode(key).toLowerCase();
             name = shift ? lower.toUpperCase() : lower;
@@ -231,6 +238,11 @@ FocusScope {
             return "";
         if (view.collecting)
             return "visual targets loading | Esc cancels";
+        if (view.scrollMode) {
+            if (view.targets.length === 0)
+                return "no scroll areas | Esc exits";
+            return "j/k scroll | h/l horizontal | Shift+HJKL larger | Tab cycles | digits select | Esc exits";
+        }
         if (view.labelPrefix.length > 0)
             return "lowercase continues | uppercase final activates | Tab cycles hints";
         if (view.labelsOnly)

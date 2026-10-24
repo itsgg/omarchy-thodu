@@ -231,6 +231,9 @@ pub struct View {
     /// (REQ-ACT-02).
     #[serde(default)]
     pub linger: bool,
+    /// The session uses pane selection and wheel keys instead of hint actions.
+    #[serde(default)]
+    pub scroll_mode: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

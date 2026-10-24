@@ -236,6 +236,22 @@ Item {
                    "REQ-SESSION-01: every key request names its displayed generation");
         }
 
+        // REQ-SESSION-07: numeric area selection is only sent in scroll mode,
+        // and held keys cannot repeat a wheel action after the overlay resumes.
+        function test_req_session_07_scroll_keys_and_cue() {
+            compare(view.keyRequest(Qt.Key_2, Qt.NoModifier, "2", false), null,
+                    "digits stay ignored in hints mode");
+            view.scrollMode = true;
+            compare(view.keyRequest(Qt.Key_2, Qt.NoModifier, "2", false).key, "2");
+            compare(view.keyRequest(Qt.Key_J, Qt.NoModifier, "j", false).key, "j");
+            compare(view.keyRequest(Qt.Key_J, Qt.ShiftModifier, "J", false).key, "J");
+            compare(view.keyRequest(Qt.Key_J, Qt.NoModifier, "j", true), null,
+                    "auto-repeat cannot send multiple wheel actions");
+            compare(view.hintCue(), "j/k scroll | h/l horizontal | Shift+HJKL larger | Tab cycles | digits select | Esc exits");
+            view.targets = [];
+            compare(view.hintCue(), "no scroll areas | Esc exits");
+        }
+
         function test_req_search_01_caps_lock_text_does_not_activate() {
             const request = view.keyRequest(Qt.Key_A, Qt.NoModifier, "A", false);
             compare(request.key, "a");

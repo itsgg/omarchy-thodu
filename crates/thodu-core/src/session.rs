@@ -30,6 +30,9 @@ pub enum Key {
     Upper {
         c: char,
     },
+    Digit {
+        digit: u8,
+    },
     Return {
         shift: bool,
         ctrl: bool,
@@ -40,6 +43,21 @@ pub enum Key {
     Backspace,
     Escape,
     Space,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScrollAxis {
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScrollAction {
+    pub target: usize,
+    pub axis: ScrollAxis,
+    /// Signed wheel detents. Positive vertical scrolls up; positive
+    /// horizontal scrolls right, following Linux input event conventions.
+    pub value: i32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,6 +120,10 @@ pub struct Session {
     pub grid: Vec<Rect>,
     /// Bumped whenever the targets change, so the overlay fetches them.
     pub generation: u32,
+    pub scroll_mode: bool,
+    pub scroll_number: String,
+    scroll_number_origin: Option<Option<usize>>,
+    scroll_action: Option<ScrollAction>,
     /// A disjoint label namespace for targets added after the first draw.
     reserved_label_prefix: Option<char>,
 }
@@ -134,8 +156,107 @@ impl Session {
             area: None,
             grid: Vec::new(),
             generation: 0,
+            scroll_mode: false,
+            scroll_number: String::new(),
+            scroll_number_origin: None,
+            scroll_action: None,
             reserved_label_prefix: None,
         }
+    }
+
+    /// A keyboard scroll session with decimal area labels and first-area focus.
+    pub fn new_scroll(targets: Vec<Target>) -> Self {
+        let mut session = Self::new(targets, false);
+        session.scroll_mode = true;
+        session.labels = (1..=session.targets.len())
+            .map(|number| number.to_string())
+            .collect();
+        session.focused = (!session.targets.is_empty()).then_some(0);
+        session
+    }
+
+    pub fn take_scroll_action(&mut self) -> Option<ScrollAction> {
+        self.scroll_action.take()
+    }
+
+    pub fn resume_after_scroll(&mut self) {
+        self.state = State::Showing;
+        self.act = None;
+        self.scroll_action = None;
+    }
+
+    fn scroll_digit(&mut self, digit: u8) {
+        if self.scroll_number.is_empty() {
+            self.scroll_number_origin = Some(self.focused);
+        }
+        self.scroll_number.push(char::from(b'0' + digit));
+        let number = if self.scroll_number == "0" {
+            Some(10)
+        } else {
+            self.scroll_number.parse::<usize>().ok()
+        };
+        if let Some(index) = number
+            .and_then(|number| number.checked_sub(1))
+            .filter(|index| *index < self.targets.len())
+        {
+            self.focused = Some(index);
+        }
+        self.label_selected = false;
+    }
+
+    fn scroll_key(&mut self, key: Key) {
+        match key {
+            Key::Digit { digit } if digit <= 9 => self.scroll_digit(digit),
+            Key::Tab { shift } => {
+                self.scroll_number.clear();
+                self.scroll_number_origin = None;
+                self.move_focus(shift);
+            }
+            Key::Backspace => {
+                if self.scroll_number.pop().is_some() {
+                    if self.scroll_number.is_empty() {
+                        self.focused = self.scroll_number_origin.take().flatten();
+                    } else if let Ok(number) = self.scroll_number.parse::<usize>()
+                        && number > 0
+                        && number <= self.targets.len()
+                    {
+                        self.focused = Some(number - 1);
+                    }
+                }
+            }
+            Key::Return { .. } => {
+                self.scroll_number.clear();
+                self.scroll_number_origin = None;
+            }
+            Key::Escape => self.state = State::Closed,
+            Key::Char { c, shift } => self.queue_scroll(c, shift),
+            Key::Upper { c } => self.queue_scroll(c.to_ascii_lowercase(), true),
+            Key::Digit { .. } | Key::Space => {}
+        }
+    }
+
+    fn queue_scroll(&mut self, key: char, shift: bool) {
+        let axis_value = match key.to_ascii_lowercase() {
+            'h' => Some((ScrollAxis::Horizontal, -1)),
+            'j' => Some((ScrollAxis::Vertical, -1)),
+            'k' => Some((ScrollAxis::Vertical, 1)),
+            'l' => Some((ScrollAxis::Horizontal, 1)),
+            _ => None,
+        };
+        let Some((axis, direction)) = axis_value else {
+            return;
+        };
+        let Some(target) = self.focused else {
+            return;
+        };
+        self.scroll_number.clear();
+        self.scroll_number_origin = None;
+        self.scroll_action = Some(ScrollAction {
+            target,
+            axis,
+            value: direction * if shift { 5 } else { 1 },
+        });
+        self.state = State::Acting;
     }
 
     /// Keep `prefix` free for targets that may arrive in a later generation.
@@ -369,6 +490,10 @@ impl Session {
             State::Acting => return self.after_act(key, at_ms),
             State::Showing => {}
         }
+        if self.scroll_mode {
+            self.scroll_key(key);
+            return None;
+        }
         let in_grid = !self.grid.is_empty();
         let labels_first = (self.labels_only && !self.searching) || in_grid;
         match key {
@@ -382,6 +507,7 @@ impl Session {
                 self.refocus();
             }
             Key::Upper { c } => return self.type_label(c, true, at_ms),
+            Key::Digit { .. } => {}
             Key::Char { c, shift } if shift || labels_first || !self.label_prefix.is_empty() => {
                 return self.type_label(c, false, at_ms);
             }

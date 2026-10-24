@@ -14,7 +14,7 @@ use thodu_core::labels::{self, ALPHABET};
 use thodu_core::model::{Monitor, Rect, Role, Source, Target, Window};
 use thodu_core::perf;
 use thodu_core::protocol::{Envelope, LabeledTarget, OpenEvent, Reply, Request, Timing};
-use thodu_core::session::{Button, DOUBLE_MS, Key, Session, State};
+use thodu_core::session::{Button, DOUBLE_MS, Key, ScrollAxis, Session, State};
 use thodu_core::stale::{is_stale, target_is_stale};
 use thodu_core::tree::{self, App, Node, Snapshot};
 use thodu_core::unregistered;
@@ -303,6 +303,127 @@ fn req_src_07_same_process_frame_claimed_by_two_windows_is_omitted() {
     ]);
 
     assert_eq!(matches, [Some((0, 0)), None, None]);
+}
+
+// REQ-SRC-08: scroll panes are found in visible nested accessibility trees.
+#[test]
+fn req_src_08_scroll_targets_use_visible_pane_bounds() {
+    let pane =
+        |role: &str, name: &str, states: &[&str], bounds: [i32; 4], children: Vec<Node>| Node {
+            role: role.into(),
+            name: name.into(),
+            states: states.iter().map(|state| (*state).into()).collect(),
+            extents: Some(bounds),
+            children,
+            ..Node::default()
+        };
+    let frame = pane(
+        "frame",
+        "",
+        &["showing", "visible"],
+        [0, 0, 400, 300],
+        vec![
+            pane(
+                "scroll pane",
+                "Files",
+                &["showing", "visible"],
+                [10, 20, 180, 200],
+                vec![pane(
+                    "viewport",
+                    "Files viewport",
+                    &["showing", "visible"],
+                    [10, 20, 180, 200],
+                    vec![],
+                )],
+            ),
+            pane(
+                "scroll pane",
+                "Details",
+                &["showing", "visible"],
+                [220, 30, 150, 180],
+                vec![],
+            ),
+            pane(
+                "scroll pane",
+                "Hidden",
+                &["visible"],
+                [10, 230, 180, 50],
+                vec![],
+            ),
+            pane(
+                "scroll pane",
+                "Outside",
+                &["showing", "visible"],
+                [410, 0, 40, 40],
+                vec![],
+            ),
+        ],
+    );
+    let targets = tree::scroll_targets(&frame, &window(), &monitor());
+    assert_eq!(targets.len(), 2, "hidden and off-window panes are dropped");
+    assert_eq!(targets[0].bounds, Rect::new(110, 220, 180, 200));
+    assert_eq!(targets[0].text, "Files");
+    assert_eq!(targets[1].bounds, Rect::new(320, 230, 150, 180));
+    assert!(targets.iter().all(|target| target.role == Role::ScrollArea));
+}
+
+// REQ-SESSION-07: scroll mode cycles and selects numeric areas.
+#[test]
+fn req_session_07_scroll_keys_select_areas() {
+    let targets: Vec<_> = (0..12)
+        .map(|i| target(&format!("area {i}"), Rect::new(0, i * 30, 100, 24)))
+        .collect();
+    let mut session = Session::new_scroll(targets);
+    assert!(session.scroll_mode);
+    assert_eq!(session.focused, Some(0));
+    assert_eq!(session.labels[0], "1");
+    assert_eq!(session.labels[9], "10");
+    session.key(Key::Digit { digit: 1 });
+    session.key(Key::Digit { digit: 2 });
+    assert_eq!(session.focused, Some(11));
+    session.key(Key::Backspace);
+    assert_eq!(session.focused, Some(0));
+    session.key(Key::Return {
+        shift: false,
+        ctrl: false,
+    });
+    assert!(session.scroll_number.is_empty());
+    session.key(Key::Tab { shift: false });
+    assert_eq!(session.focused, Some(1));
+    session.key(Key::Tab { shift: true });
+    assert_eq!(session.focused, Some(0));
+    session.key(Key::Escape);
+    assert_eq!(session.state, State::Closed);
+}
+
+// REQ-ACT-04: hjkl select a signed wheel direction and Shift scales the step.
+#[test]
+fn req_act_04_scroll_keys_make_wheel_actions_without_clicks() {
+    let mut session = Session::new_scroll(vec![target("pane", Rect::new(10, 20, 80, 60))]);
+    for (key, axis, value) in [
+        ('h', ScrollAxis::Horizontal, -1),
+        ('j', ScrollAxis::Vertical, -1),
+        ('k', ScrollAxis::Vertical, 1),
+        ('l', ScrollAxis::Horizontal, 1),
+    ] {
+        session.key(Key::Char {
+            c: key,
+            shift: false,
+        });
+        let action = session.take_scroll_action().expect("one scroll action");
+        assert_eq!(action.axis, axis);
+        assert_eq!(action.value, value);
+        session.resume_after_scroll();
+    }
+    session.key(Key::Char {
+        c: 'j',
+        shift: true,
+    });
+    let action = session.take_scroll_action().expect("shift scroll action");
+    assert_eq!(action.axis, ScrollAxis::Vertical);
+    assert_eq!(action.value, -5);
+    assert_eq!(action.target, 0);
+    assert!(session.act.is_none(), "scroll mode never creates a click");
 }
 
 // REQ-SRC-07: IPC calls without a scope request every visible window.
