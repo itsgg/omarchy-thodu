@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use thodu_core::input::Input;
 use thodu_core::model::Monitor;
-use thodu_core::session::Button;
+use thodu_core::session::{Button, ScrollAction, ScrollAxis};
 use wayland_client::protocol::{wl_output, wl_pointer, wl_registry, wl_seat};
 use wayland_client::{Connection, Dispatch, QueueHandle, delegate_noop};
 use wayland_protocols_wlr::virtual_pointer::v1::client::{
@@ -229,9 +229,121 @@ pub fn move_to(monitor: &Monitor, point: (i32, i32)) -> Result<(), String> {
     })
 }
 
+/// Move to the selected area and send discrete wheel steps through the same
+/// Wayland virtual pointer. This keeps the pointer location and scroll event
+/// in one ordered compositor input stream.
+pub fn scroll_to<F>(
+    monitor: &Monitor,
+    point: (i32, i32),
+    action: ScrollAction,
+    mut validate: F,
+) -> Result<(), String>
+where
+    F: FnMut() -> Result<(), String>,
+{
+    let conn = Connection::connect_to_env().map_err(|e| format!("no Wayland display: {e}"))?;
+    let mut queue = conn.new_event_queue();
+    let qh = queue.handle();
+    conn.display().get_registry(&qh, ());
+    let mut globals = Globals::default();
+    queue.roundtrip(&mut globals).map_err(|e| e.to_string())?;
+    queue.roundtrip(&mut globals).map_err(|e| e.to_string())?;
+    let manager = globals
+        .manager
+        .clone()
+        .ok_or("the compositor offers no virtual pointer")?;
+    let seat = globals.seat.clone();
+    let output = globals
+        .outputs
+        .iter()
+        .find(|(_, name)| *name == monitor.name)
+        .map(|(output, _)| output)
+        .ok_or_else(|| format!("no output named {}", monitor.name))?;
+    let pointer = manager.create_virtual_pointer_with_output(seat.as_ref(), Some(output), &qh, ());
+    let area = monitor.logical();
+    let local_x = (point.0 - area.x).clamp(0, area.w - 1) as u32;
+    let local_y = (point.1 - area.y).clamp(0, area.h - 1) as u32;
+    let result = (|| {
+        let now = now_ms();
+        pointer.motion_absolute(now, local_x, local_y, area.w as u32, area.h as u32);
+        pointer.frame();
+        queue.roundtrip(&mut globals).map_err(|e| e.to_string())?;
+
+        let direction = action.value.signum();
+        let (axis, value, discrete) = scroll_axis_event(ScrollAction {
+            value: direction,
+            ..action
+        });
+        for _ in 0..action.value.unsigned_abs() {
+            validate()?;
+            pointer.axis_discrete(now_ms(), axis, value, discrete);
+            // Hyprland associates this source with the axis most recently set above.
+            pointer.axis_source(wl_pointer::AxisSource::Wheel);
+            pointer.frame();
+        }
+        queue
+            .roundtrip(&mut globals)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    })();
+    pointer.destroy();
+    let mut result = result;
+    if let Err(error) = queue.roundtrip(&mut globals) {
+        keep_error(&mut result, error.to_string());
+    }
+    result
+}
+
+fn scroll_axis_event(action: ScrollAction) -> (wl_pointer::Axis, f64, i32) {
+    const DEGREES_PER_DETENT: f64 = 15.0;
+    match action.axis {
+        ScrollAxis::Vertical => (
+            wl_pointer::Axis::VerticalScroll,
+            f64::from(-action.value) * DEGREES_PER_DETENT,
+            -action.value,
+        ),
+        ScrollAxis::Horizontal => (
+            wl_pointer::Axis::HorizontalScroll,
+            f64::from(action.value) * DEGREES_PER_DETENT,
+            action.value,
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::release_ctrl_if_held;
+    use super::{release_ctrl_if_held, scroll_axis_event};
+    use thodu_core::session::{ScrollAction, ScrollAxis};
+    use wayland_client::protocol::wl_pointer;
+
+    // REQ-ACT-04: all four directions map to compositor wheel axes with
+    // detents in the Wayland axis convention.
+    #[test]
+    fn req_act_04_wheel_axes_cover_vertical_and_horizontal_scrolling() {
+        let event = |axis, value| {
+            scroll_axis_event(ScrollAction {
+                target: 0,
+                axis,
+                value,
+            })
+        };
+        assert_eq!(
+            event(ScrollAxis::Vertical, -1),
+            (wl_pointer::Axis::VerticalScroll, 15.0, 1)
+        );
+        assert_eq!(
+            event(ScrollAxis::Vertical, 1),
+            (wl_pointer::Axis::VerticalScroll, -15.0, -1)
+        );
+        assert_eq!(
+            event(ScrollAxis::Horizontal, -1),
+            (wl_pointer::Axis::HorizontalScroll, -15.0, -1)
+        );
+        assert_eq!(
+            event(ScrollAxis::Horizontal, 1),
+            (wl_pointer::Axis::HorizontalScroll, 15.0, 1)
+        );
+    }
 
     // REQ-ACT-02: when an action exits while Control is held, cleanup sends
     // a release before returning.

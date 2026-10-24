@@ -420,6 +420,20 @@ fn req_session_07_scroll_keys_select_areas() {
     assert_eq!(session.state, State::Closed);
 }
 
+// REQ-SESSION-07: an invalid multi-digit number falls back to the latest
+// single digit so every existing one-digit label remains directly selectable.
+#[test]
+fn req_session_07_invalid_scroll_number_selects_the_latest_valid_digit() {
+    let targets = vec![
+        target("area 1", Rect::new(0, 0, 100, 24)),
+        target("area 2", Rect::new(0, 30, 100, 24)),
+    ];
+    let mut session = Session::new_scroll(targets);
+    session.key(Key::Digit { digit: 1 });
+    session.key(Key::Digit { digit: 2 });
+    assert_eq!(session.focused, Some(1));
+}
+
 // REQ-ACT-04: hjkl select a signed wheel direction and Shift scales the step.
 #[test]
 fn req_act_04_scroll_keys_make_wheel_actions_without_clicks() {

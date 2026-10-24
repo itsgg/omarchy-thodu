@@ -219,16 +219,27 @@ impl Session {
             self.scroll_number_origin = Some(self.focused);
         }
         self.scroll_number.push(char::from(b'0' + digit));
-        let number = if self.scroll_number == "0" {
-            Some(10)
-        } else {
-            self.scroll_number.parse::<usize>().ok()
+        let selected_index = |number: &str, count: usize| {
+            let number = if number == "0" {
+                Some(10)
+            } else {
+                number.parse::<usize>().ok()
+            };
+            number
+                .and_then(|number| number.checked_sub(1))
+                .filter(|index| *index < count)
         };
-        if let Some(index) = number
-            .and_then(|number| number.checked_sub(1))
-            .filter(|index| *index < self.targets.len())
-        {
+        if let Some(index) = selected_index(&self.scroll_number, self.targets.len()) {
             self.focused = Some(index);
+        } else {
+            // Keep labels above 10 addressable, while letting a new valid
+            // one-digit label recover from an out-of-range prefix such as 12
+            // when the session has only two areas.
+            self.scroll_number.clear();
+            self.scroll_number.push(char::from(b'0' + digit));
+            if let Some(index) = selected_index(&self.scroll_number, self.targets.len()) {
+                self.focused = Some(index);
+            }
         }
         self.label_selected = false;
     }
