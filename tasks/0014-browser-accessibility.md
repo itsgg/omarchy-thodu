@@ -1,6 +1,6 @@
 # 0014: Document browser accessibility setup
 
-Status: review
+Status: done
 Depends on: none
 Spec: REQ-SRC-02, REQ-SRC-03, REQ-CLI-01
 Goal: Explain how to start Chromium, Electron and Chromium-based web apps with accessibility enabled, what Thodu currently supports from their trees, and how to diagnose missing browser targets. Add a privacy-safe screenshot of the real Thodu overlay on the generic Chromium reference page.
@@ -20,3 +20,4 @@ Acceptance:
 - 2026-10-24: merged as `b017ff7` and pushed to `origin/main`.
 - 2026-10-24: GitHub Actions run `40086256798` failed because the browser docs acceptance used `rg`, which the Ubuntu runner does not install. Replaced that lookup with fixed-string `grep` without changing its README or screenshot assertions. The docs acceptance passed with a restricted PATH containing bash, grep, dirname and env, with no `rg`; `tests/acceptance/reqs.sh REQ-SRC-02 REQ-SRC-03 REQ-CLI-01` passed.
 - 2026-10-24: added `docs-browser-setup-portable.sh` to keep the CI PATH regression covered by the task acceptance.
+- 2026-10-24: merged as `9250d9a`; full gate and Agy review passed. The CI docs acceptance now passes without `rg`.
