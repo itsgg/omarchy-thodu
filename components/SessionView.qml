@@ -63,6 +63,7 @@ FocusScope {
     property color border: "#cdd6f4"
     property color selectedBackground: "#313244"
     property color selectedText: "#89b4fa"
+    property color scrollAccent: "#a6e3a1"
     property color imageBackground: "#332a16"
     property color imageBorder: "#fab387"
     property string fontFamily: "monospace"
@@ -530,7 +531,7 @@ FocusScope {
         color: "transparent"
         radius: 4
         border.width: 2
-        border.color: view.selectedText
+        border.color: view.scrollMode ? view.scrollAccent : view.selectedText
     }
 
     // The grid's cells (REQ-GRID-01). Below the monitor's level they are

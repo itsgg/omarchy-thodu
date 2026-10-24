@@ -1,6 +1,6 @@
 # 0018: Keep scroll focus and distinguish the active area
 
-Status: open
+Status: claimed
 Depends on: none
 Spec: REQ-SESSION-07, REQ-ACT-06
 Goal: Keep scroll keys inside Thodu while wheel input is passed to the selected application, and make the selected scroll area easy to distinguish from a click target.

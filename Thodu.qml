@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import Quickshell.Hyprland
 import Quickshell.Wayland
 import qs.Commons
 import "components"
@@ -138,6 +139,14 @@ Item {
         }
     }
 
+    // Hyprland may move keyboard focus to the window under a passed-through
+    // pointer. Keep keyboard input with the overlay for the whole session.
+    HyprlandFocusGrab {
+        id: keyboardGrab
+        windows: [panel]
+        active: root.opened && !root.test && panel.visible
+    }
+
     PanelWindow {
         id: panel
         visible: root.opened && view.loaded && root.sessionScreen !== null
@@ -190,6 +199,7 @@ Item {
             border: Color.menu.border
             selectedBackground: Color.menu.selectedBackground
             selectedText: Color.menu.selectedText
+            scrollAccent: Color.accent
             fontFamily: Style.font.family
 
             onSend: request => client.send(request)

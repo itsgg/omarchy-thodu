@@ -541,6 +541,7 @@ Item {
             keyPress(Qt.Key_J);
             tryVerify(() => top.sent.some(r => r.op === "scroll-ready"), 1000, "the pass-through handshake completes");
             verify(top.sawScrollPassThrough, "the overlay remains active in pointer pass-through mode");
+            verify(view.activeFocus, "scroll mode keeps keyboard focus while wheel input passes through");
             compare(view.scrollHole.x, 49);
             compare(view.scrollHole.y, 44);
             tryVerify(() => top.sent.filter(r => r.op === "key" && r.key === "j").length >= 2,
@@ -554,6 +555,18 @@ Item {
                     "release asks thodud to restore the pointer");
             verify(!view.scrollPassThrough, "the overlay returns to its normal input region");
             verify(view.active, "scroll mode stays open");
+            verify(view.activeFocus, "keyboard focus remains in the overlay after the wheel action");
+        }
+
+        function test_req_session_07_scroll_outline_has_a_distinct_accent() {
+            view.scrollMode = true;
+            view.focusedId = "a0";
+            const ring = findChild(view, "focus-ring");
+            verify(ring !== null && ring.visible, "the selected scroll area is outlined");
+            verify(ring.border.color !== view.selectedText,
+                   "scroll focus has its own color instead of the click-selection color");
+            verify(view.hintCue().indexOf("Esc exits") !== -1,
+                   "the text cue still identifies how to leave scroll mode");
         }
 
         function test_req_act_06_all_directions_repeat_while_held() {
