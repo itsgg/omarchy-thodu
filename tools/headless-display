@@ -5,7 +5,9 @@
 #
 # Starts sway with the headless backend and software rendering in its own
 # runtime directory, runs COMMAND with WAYLAND_DISPLAY pointing at it, then
-# stops sway. Nothing appears on GG's outputs or workspaces. Screenshots come
+# stops sway, on a private D-Bus session that starts no services. Nothing
+# appears on GG's outputs or workspaces, and nothing reaches his session bus
+# or Hyprland. Screenshots come
 # from `grim` inside COMMAND. A QML window came up in about 1.2 seconds this
 # way on 2026-10-21.
 set -euo pipefail
@@ -30,4 +32,25 @@ for _ in $(seq 1 100); do
     sleep 0.05
 done
 [ -n "${socket:-}" ] || { echo "ERROR no Wayland socket after 5 seconds" >&2; exit 1; }
-XDG_RUNTIME_DIR="$runtime" WAYLAND_DISPLAY=$(basename "$socket") QT_QPA_PLATFORM=wayland "$@"
+# A private session bus too, with no services to start, so a shell under test
+# cannot take the tray, notifications or a portal from GG's running shell or
+# start desktop services of its own; and no Hyprland socket, so it cannot
+# reach his compositor.
+command -v dbus-run-session >/dev/null || { echo "ERROR dbus-run-session is not installed" >&2; exit 2; }
+cat >"$runtime/bus.conf" <<EOF
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>unix:dir=$runtime</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+EOF
+env -u DBUS_SESSION_BUS_ADDRESS -u HYPRLAND_INSTANCE_SIGNATURE XDG_RUNTIME_DIR="$runtime" \
+    WAYLAND_DISPLAY="$(basename "$socket")" QT_QPA_PLATFORM=wayland \
+    dbus-run-session --config-file="$runtime/bus.conf" -- "$@"

@@ -615,8 +615,9 @@ def check_hooks() -> None:
     if missing:
         raise Fail(f"hooks not installed: {', '.join(missing)}; run: tools/install-hooks")
     # With a global core.hooksPath, ask git to run each hook as a commit
-    # would, with a one-time token only this check knows, so a hooks path that
-    # does not dispatch here is caught whatever its scripts look like.
+    # would, with a one-time token, and expect this repository's hook to echo
+    # it: a hooks path that forgets to dispatch here is caught. It catches a
+    # misconfiguration, not a hook written to answer the probe.
     effective = git("config", "--get", "core.hooksPath", check=False).strip()
     if effective:
         probe_hooks(effective)
@@ -745,6 +746,8 @@ def check_secrets(argv: list[str]) -> None:
             for m in re.finditer(pattern, text):
                 line = text.count("\n", 0, m.start()) + 1
                 found.append(f"{rel}:{line}: {label}")
+    if not every and shutil.which("betterleaks"):
+        found.extend(scanner_findings(paths))
     if every and since is not None and shutil.which("betterleaks"):
         diff = git("diff", since)
         result = subprocess.run(
@@ -756,6 +759,43 @@ def check_secrets(argv: list[str]) -> None:
     if found:
         raise Fail("possible secrets; remove them and rotate any that were real:\n  " + "\n  ".join(found))
     print(f"secrets: none in {len(paths)} file(s)")
+
+
+def scanner_findings(paths: list[str]) -> list[str]:
+    """betterleaks over the given files in one pass, each finding mapped back
+    to its file and line; its few hundred rules sit on top of the regexes."""
+    chunks: list[str] = []
+    starts: list[tuple[int, str]] = []
+    line = 1
+    for rel in paths:
+        text = read_text(ROOT / rel)
+        if not text:
+            continue
+        if not text.endswith("\n"):
+            text += "\n"
+        starts.append((line, rel))
+        chunks.append(text)
+        line += text.count("\n")
+    if not chunks:
+        return []
+    result = subprocess.run(
+        ["betterleaks", "stdin", "--no-banner", "--redact", "-l", "error", "-f", "json", "-r", "-"],
+        input="".join(chunks), capture_output=True, text=True, check=False,
+    )
+    # 0 is clean and 1 is leaks found, each with a JSON report; anything else,
+    # or no report, means the scan did not happen.
+    try:
+        items = json.loads(result.stdout) if result.returncode in (0, 1) else None
+    except json.JSONDecodeError:
+        items = None
+    if not isinstance(items, list) or (result.returncode == 1 and not items):
+        return [f"betterleaks did not finish a scan (exit {result.returncode}): {result.stderr.strip()[-200:]}"]
+    out = []
+    for item in items:
+        number = int(item.get("StartLine", 0))
+        first, rel = max((s for s in starts if s[0] <= number), default=(1, "?"))
+        out.append(f"{rel}:{number - first + 1}: {item.get('RuleID', 'a secret')} (betterleaks)")
+    return out
 
 
 def check_agents_md() -> None:
@@ -1220,16 +1260,6 @@ def roots(argv: list[str]) -> None:
         print(d)
 
 
-def declared(argv: list[str]) -> None:
-    """List the Protected and Removes test lines in BASE..HEAD, for landing."""
-    since = argv[0] if argv else base()
-    text = "\n".join(c.message for c in commits(since))
-    for path in DECLARED_PROTECTED.findall(text):
-        print(f"protected {path}")
-    for name in DECLARED_REMOVED.findall(text):
-        print(f"removes-test {name}")
-
-
 CHECKS = {
     "commit-msg": check_commit_msg,
     "hooks": lambda argv: check_hooks(),
@@ -1243,7 +1273,6 @@ CHECKS = {
     "spec": lambda argv: check_spec(),
     "tasks": check_tasks,
     "manifest": lambda argv: check_manifest(),
-    "declared": declared,
     "declarations": check_declarations,
     "roots": roots,
     "review-prompt": review_prompt,

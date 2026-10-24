@@ -1,4 +1,4 @@
-# Python steps (uv, ruff, mypy, pytest with Hypothesis) in every root with a
+# Python steps (uv, ruff, mypy, pytest with Hypothesis, pip-audit) in every root with a
 # pyproject.toml. Sourced by tools/gate.
 
 python_turn() {
@@ -10,6 +10,9 @@ python_turn() {
 
 python_full() {
     each_root pyproject.toml uv-lock uv lock --check --quiet
+    # The locked dependencies against the PyPI advisory database.
+    each_root pyproject.toml pip-audit bash -c 'set -o pipefail; uv export --frozen --quiet --format requirements-txt --no-hashes \
+        --no-emit-project | uvx --quiet pip-audit@2.10.1 --strict --progress-spinner off --no-deps --disable-pip -r /dev/stdin'
 }
 
 python_nightly() {

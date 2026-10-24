@@ -20,15 +20,15 @@
 # the host's credentials or home files, and cannot change anything the host
 # later runs (caches, toolchains, harness settings). /usr and /etc are bound
 # read-only for the system's programs, certificates and name resolution. Of the
-# repository's .git it can write only its own worktree's metadata and the
-# agent/* branches, and new objects go to its own object store with the
-# shared one read-only behind it: never main, hooks, config or existing
-# objects. Known edges: every agent can write every agent/* branch, not only
-# its own; while an agent branch exists, host-side fetch, pull, gc and branch
-# listing in the main repository fail on its ref until tools/land merge copies
-# the objects in (status, log and push work); and a ref update in the sandbox
-# may print packed-refs.lock errors and still succeed. It has no credentials
-# to push with. Before each session its harness
+# repository's .git it sees everything, through an overlay whose writes go to
+# a throwaway layer, and keeps only what it writes to its own worktree's
+# metadata, the agent/* branches and its own object store: never main, hooks,
+# config or existing objects. Every agent can write every agent/* branch, not
+# only its own. While a session runs and after it, the host copies the
+# agent's new objects into the repository's store, each one checked by
+# `git index-pack --strict`, so the main checkout's git never meets a ref it
+# cannot read (for at most the two seconds between copies). It has no
+# credentials to push with. Before each session its harness
 # goes to $AGENT_STATE/agents/NAME/sessions.log, outside the sandbox, and
 # tools/land counts every harness there as an author of the branch.
 #
@@ -124,12 +124,13 @@ env=(--clearenv --setenv HOME "$HOME" --setenv USER "$USER" --setenv PATH "$path
      --setenv GIT_CONFIG_KEY_1 maintenance.auto --setenv GIT_CONFIG_VALUE_1 false)
 [ -n "${AGENT_MODEL:-}" ] && env+=(--setenv AGENT_MODEL "$AGENT_MODEL")
 auth="$state/agent-auth.env"
-if [ "$login" = 0 ] && [ "$harness" != shell ]; then
+if [ "$login" = 0 ] && [ "$harness" != shell ] && [ "$harness" != agy ]; then
     # A session needs a login made with `login`, or a token in the env file.
+    # agy keeps its login in a keyring or a file of its choosing, so it is
+    # asked directly once the sandbox exists.
     case $harness in
         claude) signed_in=("$private/home/.claude/.credentials.json") ;;
         codex)  signed_in=("$private/home/.codex/auth.json") ;;
-        agy)    signed_in=("$private/home/.gemini"/*) ;;
     esac
     if [ ! -e "${signed_in[0]}" ] && ! { [ -f "$auth" ] && grep -q '^[A-Z_]*TOKEN=\|^[A-Z_]*KEY=' "$auth"; }; then
         echo "ERROR $name is not signed in to $harness; run: tools/agent-loop $name $harness login" >&2
@@ -171,8 +172,14 @@ sandbox+=(--bind "$private/cargo-registry" "$HOME/.cargo/registry"
 # Tool directories go on top of the caches, so a tool under ~/go/bin, say,
 # stays the host's read-only copy.
 for dir in "${tool_dirs[@]}"; do ro_if "$dir"; done
-sandbox+=(--ro-bind "$common" "$common"
+# The .git directory is an overlay: what the agent's git writes outside the
+# binds below (packed-refs.lock, main's index, a hook or config of its own)
+# lands in a tmpfs that disappears with the sandbox. Its object store's info/
+# is read-only, so the store cannot point the host's copy at other stores.
+base=("${sandbox[@]}")
+sandbox+=(--overlay-src "$common" --tmp-overlay "$common"
           --bind "$objects" "$objects"
+          --ro-bind "$objects/info" "$objects/info"
           --bind "$common/worktrees/$name" "$common/worktrees/$name"
           --bind "$common/refs/heads/agent" "$common/refs/heads/agent"
           --bind "$common/logs/refs/heads/agent" "$common/logs/refs/heads/agent"
@@ -184,10 +191,25 @@ if [ -n "${AGENT_PRINT_SANDBOX:-}" ]; then
     exit 0
 fi
 
-# Nothing is created until every argument and file above has been checked.
+# `agy models` answers in a second, and only when signed in; an agy that is not
+# would otherwise wait for a browser sign-in that never comes. It runs in the
+# sandbox without the repository, before the worktree or branch exist.
+agy_signed_in() {
+    "${base[@]}" --chdir "$HOME" "${env[@]}" -- agy models >/dev/null 2>&1 </dev/null
+}
+mkdir -p "$private/home" "$private/cargo-registry" "$private/cargo-git" "$private/uv-cache" \
+         "$private/go" "$private/go-build" "$private/npm"
+if [ "$harness" = agy ] && [ "$login" = 0 ] && ! agy_signed_in; then
+    echo "ERROR $name is not signed in to agy; run: tools/agent-loop $name agy login" >&2
+    exit 2
+fi
+
+# Nothing in the repository is created until every argument and file above has been checked.
 mkdir -p "$objects/pack" "$objects/info"
 if [ ! -d "$worktree" ]; then
     mkdir -p "$(dirname "$worktree")"
+    # A worktree directory removed by hand leaves its registration behind.
+    git -C "$repo" worktree prune
     if git -C "$repo" rev-parse -q --verify "refs/heads/agent/$name" >/dev/null; then
         # The checkout would run hooks from the agent's tree, so none run.
         GIT_ALTERNATE_OBJECT_DIRECTORIES="$objects" git -C "$repo" -c core.hooksPath=/dev/null worktree add -q "$worktree" "agent/$name"
@@ -195,15 +217,29 @@ if [ ! -d "$worktree" ]; then
         git -C "$repo" -c core.hooksPath=/dev/null worktree add -q -b "agent/$name" "$worktree" main
     fi
 fi
-mkdir -p "$logs" "$private/home" "$private/cargo-registry" "$private/cargo-git" "$private/uv-cache" \
-         "$private/go" "$private/go-build" "$private/npm"
+mkdir -p "$logs"
 mkdir -p "$common/refs/heads/agent" "$common/logs/refs/heads/agent"
 branch_tip() { git -C "$repo" rev-parse -q --verify "refs/heads/agent/$name" 2>/dev/null || echo none; }
 
+# Copy every object in the agent's store that the repository lacks into the
+# repository's store, through index-pack --strict, which checks each object
+# and its links. Host-side git reads the agent's store only as objects.
+import_objects() {
+    local missing
+    [ ! -e "$objects/info/alternates" ] || { echo "ERROR $objects/info/alternates exists; the agent's store must stand alone"; return 1; }
+    missing=$(GIT_OBJECT_DIRECTORY="$objects" git -C "$repo" cat-file --batch-all-objects --batch-check='%(objectname)' \
+        | git -C "$repo" cat-file --batch-check='%(objectname) %(objecttype)' | awk '$2 == "missing" { print $1 }')
+    [ -n "$missing" ] || return 0
+    printf '%s\n' "$missing" | GIT_ALTERNATE_OBJECT_DIRECTORIES="$objects" git -C "$repo" pack-objects --quiet --stdout \
+        | git -C "$repo" index-pack --stdin --strict >/dev/null
+}
+
 if [ "$login" = 1 ]; then
     echo "signing $name in to $harness inside its sandbox; open any URL it prints in your browser"
+    [ "$harness" != codex ] || echo "codex's device login must first be allowed in your ChatGPT account's security settings"
     exec "${sandbox[@]}" "${cmd[@]}"
 fi
+
 
 failures=0
 for i in $(seq 1 "$sessions"); do
@@ -211,12 +247,29 @@ for i in $(seq 1 "$sessions"); do
         echo "ERROR rebase of agent/$name onto main failed in the sandbox; see $logs/rebase.log" >&2
         exit 1
     fi
+    import_objects >>"$logs/import.log" 2>&1 || { echo "ERROR copying the agent's objects failed; see $logs/import.log" >&2; exit 1; }
+    if [ "$harness" = agy ] && ! agy_signed_in; then
+        echo "ERROR $name's agy sign-in lapsed before session $i; run: tools/agent-loop $name agy login" >&2
+        exit 2
+    fi
     log="$logs/$(date +%Y%m%d-%H%M%S-%N).jsonl"
     echo "session $i of $sessions: $log"
     # Written before the session starts, so a session that is killed still
     # counts as an author of the branch.
     [ "$harness" = shell ] || echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $harness $(branch_tip)" >>"$private/sessions.log"
-    if ! "${sandbox[@]}" "${cmd[@]}" >"$log" 2>&1 </dev/null; then
+    "${sandbox[@]}" "${cmd[@]}" >"$log" 2>&1 </dev/null &
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+        import_objects >>"$logs/import.log" 2>&1 || true
+        sleep 2
+    done
+    status=0
+    wait "$pid" || status=$?
+    if ! import_objects >>"$logs/import.log" 2>&1; then
+        echo "ERROR copying the agent's objects failed; see $logs/import.log" >&2
+        status=1
+    fi
+    if [ "$status" -ne 0 ]; then
         echo "ERROR session $i failed; see $log" >&2
         failures=$((failures + 1))
     fi

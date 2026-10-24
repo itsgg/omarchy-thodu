@@ -18,8 +18,8 @@
 #       Pushes main, as its own command.
 #
 # The authors of agent/NAME are every harness tools/agent-loop has started
-# for it (its session log), never an argument. Its commits live in the agent's own object store until
-# merge copies them into the repository's.
+# for it (its session log), never an argument. Its commits are written to the agent's own object
+# store and copied into the repository's by tools/agent-loop as it runs; merge copies any still missing.
 set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$root"
@@ -138,10 +138,12 @@ merge)
         die "accept them with --accept-protected if they add or tighten checks; a change that loosens or removes one waits for GG"
     fi
     if [ -n "$agent" ]; then
-        # Copy the agent's objects into the repository's own store first, so
-        # main never depends on the agent's.
-        common=$(git rev-parse --path-format=absolute --git-common-dir)
-        git rev-list --objects "main..$tip" | git pack-objects --quiet "$common/objects/pack/pack" >/dev/null
+        # tools/agent-loop copies the agent's objects in as it runs; copy any
+        # still missing, so main never depends on the agent's store.
+        if ! env -u GIT_ALTERNATE_OBJECT_DIRECTORIES git rev-list --objects "main..$tip" >/dev/null 2>&1; then
+            git rev-list --objects "main..$tip" | git pack-objects --quiet --stdout \
+                | env -u GIT_ALTERNATE_OBJECT_DIRECTORIES git index-pack --stdin --strict >/dev/null
+        fi
         env -u GIT_ALTERNATE_OBJECT_DIRECTORIES git rev-list --objects "main..$tip" >/dev/null \
             || die "the agent's objects did not reach the repository's store; nothing was merged"
     fi

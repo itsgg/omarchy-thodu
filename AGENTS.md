@@ -33,7 +33,7 @@ Keyboard hints for everything on an Omarchy screen: Homerow for Omarchy. Read SE
 
 ## Landing, for the coordinator
 
-`tools/land check BRANCH` runs the full gate (in the agent's sandbox for `agent/*`) and one review by a model family other than the author's. Verify each finding yourself and fix the real ones with a test on the branch; check again with `--no-review`. `tools/land merge BRANCH` fast-forwards main, and `tools/land push` pushes it, as separate commands. Accept a declared protected change with `--accept-protected` only when it adds or tightens a check; a change that loosens or removes one waits for GG. Findings and verdicts go to GG in the conversation, never into the repository.
+`tools/land check BRANCH` runs the full gate (in the agent's sandbox for `agent/*`) and one review by a model family other than the author's. Verify each finding yourself and fix the real ones with a test on the branch; check again with `--no-review`. `tools/land merge BRANCH` fast-forwards main, and `tools/land push` pushes it, as separate commands. Accept a declared protected change with `--accept-protected` only when it adds or tightens a check; a change that loosens or removes one waits for GG. A declared test edit or removal is accepted when SPEC.md, a merged change in `changes/` or the task says the behavior it checks changed; one that checks the same behavior more loosely waits for GG. Findings and verdicts go to GG in the conversation, never into the repository.
 
 ## Project
 
