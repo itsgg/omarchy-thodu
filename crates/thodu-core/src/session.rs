@@ -487,7 +487,12 @@ impl Session {
     pub fn key_at(&mut self, key: Key, at_ms: u64) -> Option<Act> {
         match self.state {
             State::Closed => return None,
-            State::Acting => return self.after_act(key, at_ms),
+            State::Acting => {
+                if self.scroll_mode {
+                    return None;
+                }
+                return self.after_act(key, at_ms);
+            }
             State::Showing => {}
         }
         if self.scroll_mode {

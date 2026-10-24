@@ -13,3 +13,4 @@ Acceptance:
 
 - 2026-10-24: added AT-SPI scroll areas with window fallbacks, numeric pane selection, HJKL uinput wheel actions, same-session overlay resume, the F12-family binding and Chromium/Electron setup guidance. REQ-SRC-08, REQ-SESSION-07, REQ-ACT-04 and REQ-INSTALL-01 acceptance passed; full gate passed in 144.8 seconds.
 - 2026-10-24: removed the redundant `tools/gate` run command from Acceptance because the full gate replays task run commands; this avoids recursive gate execution.
+- 2026-10-24: corrected pending-key handling in scroll mode and added coverage for web documents without scroll-pane roles; focused scroll tests pass.

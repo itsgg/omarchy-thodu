@@ -367,6 +367,30 @@ fn req_src_08_scroll_targets_use_visible_pane_bounds() {
     assert!(targets.iter().all(|target| target.role == Role::ScrollArea));
 }
 
+// REQ-SRC-08: a web document remains a scroll target without a scroll pane.
+#[test]
+fn req_src_08_web_document_without_scroll_pane_is_a_scroll_target() {
+    let frame = Node {
+        role: "frame".into(),
+        states: vec!["showing".into(), "visible".into()],
+        extents: Some([0, 0, 400, 300]),
+        children: vec![Node {
+            role: "document web".into(),
+            name: "Article".into(),
+            states: vec!["showing".into(), "visible".into()],
+            extents: Some([0, 0, 400, 300]),
+            ..Node::default()
+        }],
+        ..Node::default()
+    };
+
+    let targets = tree::scroll_targets(&frame, &window(), &monitor());
+    assert_eq!(targets.len(), 1);
+    assert_eq!(targets[0].text, "Article");
+    assert_eq!(targets[0].bounds, Rect::new(100, 200, 400, 300));
+    assert_eq!(targets[0].actions, [thodu_core::model::ActionKind::Scroll]);
+}
+
 // REQ-SESSION-07: scroll mode cycles and selects numeric areas.
 #[test]
 fn req_session_07_scroll_keys_select_areas() {
@@ -424,6 +448,35 @@ fn req_act_04_scroll_keys_make_wheel_actions_without_clicks() {
     assert_eq!(action.value, -5);
     assert_eq!(action.target, 0);
     assert!(session.act.is_none(), "scroll mode never creates a click");
+}
+
+// REQ-ACT-04: a key received while the wheel action is pending cannot close
+// the scroll session or queue a second action.
+#[test]
+fn req_act_04_pending_scroll_ignores_additional_keys_until_resume() {
+    let mut session = Session::new_scroll(vec![target("pane", Rect::new(10, 20, 80, 60))]);
+    session.key(Key::Char {
+        c: 'j',
+        shift: false,
+    });
+    assert_eq!(session.state, State::Acting);
+    assert!(session.take_scroll_action().is_some());
+
+    session.key(Key::Char {
+        c: 'j',
+        shift: false,
+    });
+    assert_eq!(session.state, State::Acting);
+    assert!(session.take_scroll_action().is_none());
+
+    session.resume_after_scroll();
+    assert_eq!(session.state, State::Showing);
+    session.key(Key::Char {
+        c: 'j',
+        shift: false,
+    });
+    assert_eq!(session.state, State::Acting);
+    assert!(session.take_scroll_action().is_some());
 }
 
 // REQ-SRC-07: IPC calls without a scope request every visible window.
