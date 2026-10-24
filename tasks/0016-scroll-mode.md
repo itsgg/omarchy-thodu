@@ -1,6 +1,6 @@
 # 0016: Scroll mode
 
-Status: review
+Status: done
 Depends on: none
 Spec: REQ-SRC-08, REQ-SESSION-07, REQ-ACT-04, REQ-INSTALL-01
 Goal: Add accessible scroll-area discovery, a keyboard mode to select and scroll any visible app pane, a browser-compatible wheel path, and an Omarchy shortcut with an F12 default and a per-install override.
