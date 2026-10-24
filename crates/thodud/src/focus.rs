@@ -220,6 +220,13 @@ fn remove_record(path: &Path) -> Result<(), String> {
         .map_err(|error| format!("could not remove recovered focus record: {error}"))
 }
 
+fn discard_unidentified_record(path: &Path, address: &str) -> Result<(), String> {
+    eprintln!(
+        "ERROR legacy scroll focus record for {address} has no process ID; deleting it without changing the window so scrolling can continue"
+    );
+    remove_record(path)
+}
+
 fn migrate_legacy_record(base: &Path, directory: &Path) -> Result<(), String> {
     let legacy = base.join("thodu/scroll-pointer-focus");
     if !legacy.exists() {
@@ -321,9 +328,7 @@ where
         record.pid = parse_record_filename(path).and_then(|(_, pid)| pid);
     }
     if record.pid.is_none() {
-        return Err(format!(
-            "legacy focus record for {address} has no process ID; leaving it untouched to avoid changing a reused window address"
-        ));
+        return discard_unidentified_record(path, address);
     }
     if record.pid.is_some_and(|record_pid| record_pid != pid) {
         remove_record(path)?;
@@ -484,10 +489,7 @@ where
                 record.pid = path_pid;
             }
             if record.pid.is_none() {
-                return Err(format!(
-                    "legacy focus record for {} has no process ID; leaving it untouched to avoid changing a reused window address",
-                    record.address
-                ));
+                return discard_unidentified_record(&path, &record.address);
             }
             let current_pid = identity(&record.address)?;
             let Some(current_pid) = current_pid else {
@@ -933,9 +935,35 @@ mod tests {
             |_| panic!("legacy record has no safe process identity"),
             |_, _| panic!("legacy record must not change the current window"),
         );
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains("has no process ID"));
-        assert!(record.exists());
+        assert!(errors.is_empty());
+        assert!(!record.exists());
+    }
+
+    #[test]
+    fn req_act_06_legacy_record_without_pid_does_not_block_scroll() {
+        let directory = scratch("legacy-does-not-block");
+        let record = legacy_record_path(&directory, "0xabc").unwrap();
+        fs::write(&record, "0xabc\n").unwrap();
+        let focused = RefCell::new(false);
+        let mut changes = Vec::new();
+
+        let result = with_forced_pointer_focus(
+            &directory,
+            "0xabc",
+            TEST_PID,
+            |_| Ok(*focused.borrow()),
+            |address, value| {
+                assert_eq!(address, "0xabc");
+                changes.push(value);
+                *focused.borrow_mut() = value.unwrap_or(false);
+                Ok(())
+            },
+            || Ok::<_, String>("scrolled"),
+        );
+
+        assert_eq!(result.unwrap(), "scrolled");
+        assert_eq!(changes, vec![Some(true), None]);
+        assert!(!record.exists());
     }
 
     #[test]
