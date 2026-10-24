@@ -45,17 +45,31 @@ Installation may ask for authorization to add the `/dev/uinput` rule. `thodu doc
 
 ## Chromium, Electron and web apps
 
-`thodu install` configures `ACCESSIBILITY_ENABLED=1` for apps started in the Omarchy session. Fully quit and restart Chromium and Electron apps after installing Thodu so they inherit the setting. `thodu doctor` checks the session configuration.
+`thodu install` configures `ACCESSIBILITY_ENABLED=1` in the Omarchy Hyprland session. `thodu doctor` checks that session configuration; it cannot change the environment of apps that were already running.
 
-Chromium-based web apps, including Slack opened as its own window, use the same Chromium setup. Thodu reads controls that the browser exposes through its accessibility tree; individual sites can still omit controls. Chromium normally enables its full accessibility APIs when assistive technology requests them. If a Chromium window still has no AT-SPI targets, open `chrome://accessibility` to enable or inspect the tree for the current run. Chromium also documents `--force-renderer-accessibility` as an override; on this Arch setup, put that switch on its own line in `~/.config/chromium-flags.conf`, then fully restart Chromium. Prefer the normal Thodu environment first, since forced accessibility can keep more of the browser tree active. See [Chromium's accessibility documentation](https://www.chromium.org/developers/design-documents/accessibility/).
+### Chromium and Chromium-based web apps
 
-Electron enables accessibility when it detects assistive technology. Restart the app after `thodu install`. For a one-off check when an app was launched outside the Omarchy session, close it and start it with the environment prefix, for example `ACCESSIBILITY_ENABLED=1 obsidian`. If its controls are still missing, check that app's accessibility settings and bundled Electron version. See [Electron's accessibility documentation](https://www.electronjs.org/docs/latest/tutorial/accessibility/).
+Close every Chromium window, including standalone app windows, then wait for all Chromium processes to exit before relaunching. Chromium app windows can reuse an existing browser process, so reopening only a web app while the old process is still running may keep the old environment. Start the browser and its installed web apps again from Omarchy after `thodu install`.
 
-This screenshot shows Thodu labeling controls exposed by the local Chromium reference page:
+Chromium-based web apps, including Slack opened in its own window, use this same Chromium setup. If a window has no AT-SPI targets, open `chrome://accessibility` to inspect or enable the tree for the current run. Chromium documents `--force-renderer-accessibility` as a fallback. On Arch, put that flag on its own line in `~/.config/chromium-flags.conf`, then fully quit and restart all Chromium windows and processes. Prefer the normal Thodu session setup first because forced accessibility can keep more of the browser tree active. See [Chromium's accessibility documentation](https://www.chromium.org/developers/design-documents/accessibility/) and the ArchWiki section on [persistent Chromium flags](https://wiki.archlinux.org/title/Chromium#Making_flags_persistent).
 
-![Thodu labels the Open, Save and Close controls in its Chromium reference page](docs/screenshots/chromium-reference-hints.png)
+### Electron apps
 
-The browser setup does not install Thodu's planned Chromium extension, so general web-page coverage remains limited. Page controls may be available through AT-SPI, but do not assume every site's links and custom controls will be labeled.
+Electron normally enables accessibility when it detects assistive technology. Quit and relaunch Electron apps from Omarchy after installing Thodu. If an app was started outside the Omarchy session, close it and start it with the environment prefix, for example `ACCESSIBILITY_ENABLED=1 obsidian`. For a Flatpak app, set the variable for that app and restart it:
+
+```sh
+flatpak override --user --env=ACCESSIBILITY_ENABLED=1 APP_ID
+```
+
+Replace `APP_ID` with the app's Flatpak ID. To remove the override later, run `flatpak override --user --unset-env=ACCESSIBILITY_ENABLED APP_ID`. Flatpak overrides are per-app and persist for the user. If controls remain missing, check the app's accessibility settings and bundled Electron version. See [Electron's accessibility documentation](https://www.electronjs.org/docs/latest/tutorial/accessibility/) and the [Flatpak override reference](https://docs.flatpak.org/en/latest/flatpak-command-reference.html#flatpak-override).
+
+### Web page coverage
+
+Thodu reads controls that Chromium and Electron expose through AT-SPI. Individual sites can omit controls or use custom widgets that expose no useful accessibility information. The planned Chromium extension is not included, so general website coverage remains limited. Screenshot hints may add visible candidates, but they do not understand a page's control semantics and can miss targets. Scrolling is not implemented and Thodu has no scroll-mode shortcut.
+
+The screenshot below shows Thodu labeling the Open, Save and Close buttons exposed by the local Chromium reference page:
+
+![Thodu labels the Open, Save and Close buttons](docs/screenshots/chromium-reference-hints.png)
 
 ## Use
 
