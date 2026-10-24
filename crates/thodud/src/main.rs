@@ -143,6 +143,11 @@ struct Daemon {
     keyboard: Mutex<Option<keyboard::Keyboard>>,
     /// The uinput wheel for scroll mode, made on first use.
     wheel: Mutex<Option<wheel::Wheel>>,
+    /// Serializes pointer movement and temporary focus overrides across
+    /// scroll actions because the compositor has one pointer.
+    scroll_action: Mutex<()>,
+    focus_records: Option<PathBuf>,
+    dispatch_syntax: Option<focus::DispatchSyntax>,
 }
 
 /// The settings, read at each session so an edit takes effect at once; a
@@ -1064,26 +1069,49 @@ impl Daemon {
         monitor: &Monitor,
         action: ScrollAction,
     ) -> Result<(), ScrollFailure> {
-        if !target.window.is_empty() {
-            let Some(window) = window else {
-                return Err(ScrollFailure::Stale);
-            };
-            if scroll_target_is_stale(target, window) {
-                return Err(ScrollFailure::Stale);
-            }
+        if !target.window.is_empty() && self.dispatch_syntax.is_none() {
+            return Err(ScrollFailure::Input(
+                "Hyprland dispatch syntax is unavailable; check `hyprctl systeminfo` and restart thodud"
+                    .into(),
+            ));
         }
-
+        if !target.window.is_empty() && self.focus_records.is_none() {
+            return Err(ScrollFailure::Input(
+                "scroll recovery storage is unavailable; check Thodu's data directory and restart thodud"
+                    .into(),
+            ));
+        }
+        let _serial = self
+            .scroll_action
+            .lock()
+            .map_err(|_| ScrollFailure::Input("scroll action lock failed".into()))?;
         let point = target.bounds.center();
-        if target.window.is_empty() {
-            return self.send_wheel(target, window, monitor, point, action);
+        let stale = window.is_some_and(|window| scroll_target_is_stale(target, window));
+        let mut get = |address: &str| focus::get_stay_focused(address, hypr::request);
+        let dispatch_syntax = self.dispatch_syntax;
+        let mut set = |address: &str, value: Option<bool>| {
+            match dispatch_syntax {
+            Some(syntax) => focus::set_stay_focused(address, value, syntax, hypr::request),
+            None => Err(
+                "Hyprland dispatch syntax is unavailable; check `hyprctl systeminfo` and restart thodud"
+                    .to_string(),
+            ),
         }
+        };
+        let mut window_exists =
+            |address: &str| hypr::window(address).map(|window| window.map(|window| window.pid));
         // The exclusive overlay keeps the keyboard; Hyprland gives the
         // pointer to the owning window only while it is forced (focus.rs).
-        focus::with_forced_pointer_focus(
-            &focus::record_path(),
-            &target.window,
-            |address| focus::get_stay_focused(address, hypr::request),
-            |address, on| focus::set_stay_focused(address, on, hypr::request),
+        perform_scroll_event_with(
+            target,
+            window,
+            ScrollFocus {
+                records: self.focus_records.as_deref(),
+                stale,
+                get: &mut get,
+                set: &mut set,
+                window_exists: &mut window_exists,
+            },
             || self.send_wheel(target, window, monitor, point, action),
         )
     }
@@ -1098,28 +1126,29 @@ impl Daemon {
         point: (i32, i32),
         action: ScrollAction,
     ) -> Result<(), ScrollFailure> {
-        // Hyprland skips the focus check when the pointer has not moved.
-        pointer::move_to(monitor, (point.0 + 1, point.1)).map_err(ScrollFailure::Input)?;
-        pointer::move_to(monitor, point).map_err(ScrollFailure::Input)?;
-        let result = (|| {
-            let mut wheel = self
-                .wheel
-                .lock()
-                .map_err(|_| ScrollFailure::Input("wheel lock failed".into()))?;
-            if wheel.is_none() {
-                *wheel = Some(wheel::Wheel::open().map_err(ScrollFailure::Input)?);
-            }
-            if !target.window.is_empty()
-                && window.is_some_and(|window| scroll_target_is_stale(target, window))
-            {
-                return Err(ScrollFailure::Stale);
-            }
-            wheel
-                .as_mut()
-                .ok_or_else(|| ScrollFailure::Input("no wheel device".into()))?
-                .emit(action)
-                .map_err(ScrollFailure::Input)
-        })();
+        let result = send_wheel_with(
+            point,
+            |point| pointer::move_to(monitor, point),
+            || {
+                let mut wheel = self
+                    .wheel
+                    .lock()
+                    .map_err(|_| ScrollFailure::Input("wheel lock failed".into()))?;
+                if wheel.is_none() {
+                    *wheel = Some(wheel::Wheel::open().map_err(ScrollFailure::Input)?);
+                }
+                if !target.window.is_empty()
+                    && window.is_some_and(|window| scroll_target_is_stale(target, window))
+                {
+                    return Err(ScrollFailure::Stale);
+                }
+                wheel
+                    .as_mut()
+                    .ok_or_else(|| ScrollFailure::Input("no wheel device".into()))?
+                    .emit(action)
+                    .map_err(ScrollFailure::Input)
+            },
+        );
         if result.is_ok() {
             thread::sleep(Duration::from_millis(30));
         }
@@ -1278,6 +1307,77 @@ impl Daemon {
         };
         result.unwrap_or_else(|e| *e)
     }
+}
+
+fn send_wheel_with<M, E>(
+    point: (i32, i32),
+    mut move_pointer: M,
+    emit: E,
+) -> Result<(), ScrollFailure>
+where
+    M: FnMut((i32, i32)) -> Result<(), String>,
+    E: FnOnce() -> Result<(), ScrollFailure>,
+{
+    // Hyprland skips the focus check when the pointer has not moved.
+    move_pointer((point.0 + 1, point.1)).map_err(ScrollFailure::Input)?;
+    move_pointer(point).map_err(ScrollFailure::Input)?;
+    emit()
+}
+
+type GetFocusState<'a> = dyn FnMut(&str) -> Result<bool, String> + 'a;
+type SetFocusState<'a> = dyn FnMut(&str, Option<bool>) -> Result<(), String> + 'a;
+type WindowIdentity<'a> = dyn FnMut(&str) -> Result<Option<u32>, String> + 'a;
+
+struct ScrollFocus<'a> {
+    records: Option<&'a std::path::Path>,
+    stale: bool,
+    get: &'a mut GetFocusState<'a>,
+    set: &'a mut SetFocusState<'a>,
+    window_exists: &'a mut WindowIdentity<'a>,
+}
+
+fn perform_scroll_event_with<B>(
+    target: &Target,
+    window: Option<&Window>,
+    focus: ScrollFocus<'_>,
+    perform: B,
+) -> Result<(), ScrollFailure>
+where
+    B: FnOnce() -> Result<(), ScrollFailure>,
+{
+    let ScrollFocus {
+        records,
+        stale,
+        get,
+        set,
+        window_exists,
+    } = focus;
+    if target.window.is_empty() {
+        return perform();
+    }
+    if window.is_none() {
+        return Err(ScrollFailure::Stale);
+    }
+    if stale {
+        return Err(ScrollFailure::Stale);
+    }
+    let Some(records) = records else {
+        return Err(ScrollFailure::Input(
+            "scroll recovery storage is unavailable; check Thodu's data directory and restart thodud"
+                .into(),
+        ));
+    };
+    let Some(window) = window else {
+        return Err(ScrollFailure::Stale);
+    };
+
+    focus::with_forced_pointer_focus(records, &target.window, window.pid, get, set, perform)
+        .map_err(|failure| match failure {
+            ScrollFailure::Input(_) if matches!(window_exists(&target.window), Ok(None)) => {
+                ScrollFailure::Stale
+            }
+            other => other,
+        })
 }
 
 /// REQ-SESSION-04: the status line says when the grid opened because no
@@ -1659,9 +1759,40 @@ fn main() {
             return;
         }
     }
-    focus::clear_leftover(&focus::record_path(), |address, on| {
-        focus::set_stay_focused(address, on, hypr::request)
-    });
+    let dispatch_syntax = match focus::detect_dispatch_syntax(hypr::request) {
+        Ok(syntax) => Some(syntax),
+        Err(error) => {
+            eprintln!(
+                "ERROR cannot detect Hyprland dispatch syntax: {error}; app-window scroll is unavailable until `hyprctl systeminfo` works and thodud is restarted"
+            );
+            None
+        }
+    };
+    let focus_records = match focus::record_directory() {
+        Ok(directory) => Some(directory),
+        Err(error) => {
+            eprintln!(
+                "ERROR cannot prepare Thodu scroll recovery state: {error}; hints and clicks remain available, set XDG_DATA_HOME or HOME and restart thodud to enable app-window scroll"
+            );
+            None
+        }
+    };
+    if let (Some(directory), Some(syntax)) = (&focus_records, dispatch_syntax) {
+        for error in focus::clear_leftovers(
+            directory,
+            |address| hypr::window(address).map(|window| window.map(|window| window.pid)),
+            |address| focus::get_stay_focused(address, hypr::request),
+            |address, value| focus::set_stay_focused(address, value, syntax, hypr::request),
+        ) {
+            eprintln!(
+                "ERROR cannot recover scroll focus: {error}; check `hyprctl systeminfo`, the named window, and Thodu's state files, then restart thodud"
+            );
+        }
+    } else if focus_records.is_some() {
+        eprintln!(
+            "ERROR skipped scroll focus recovery because Hyprland dispatch syntax is unavailable; restore it with `hyprctl systeminfo` and restart thodud"
+        );
+    }
     let _ = std::fs::remove_file(&socket);
     let listener = match UnixListener::bind(&socket) {
         Ok(l) => l,
@@ -1697,6 +1828,9 @@ fn main() {
         listeners: Mutex::new(listeners::Listeners::new()),
         keyboard: Mutex::new(None),
         wheel: Mutex::new(None),
+        scroll_action: Mutex::new(()),
+        focus_records,
+        dispatch_syntax,
     });
     if let Err(e) = listener.set_nonblocking(true) {
         eprintln!("ERROR cannot make the service listener nonblocking: {e}");
@@ -1725,10 +1859,12 @@ fn main() {
 mod tests {
     use thodu_core::model::Window;
 
+    use std::cell::RefCell;
     use std::collections::{HashMap, HashSet};
-    use std::path::PathBuf;
+    use std::ops::Deref;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, AtomicU64};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Condvar, Mutex, mpsc};
     use std::time::{Duration, Instant};
 
@@ -1738,9 +1874,10 @@ mod tests {
     use thodu_core::{labels, protocol};
 
     use super::{
-        Daemon, Entry, WORKSPACE_CHANGE_WAIT, WindowScope, grid_window, image_fallback_exclusions,
-        merge_fallback, no_active_window_scope, parse_key, refresh_options, restart_address,
-        scoped_windows, start_refreshed_session, status_persistent, visible_target_owner_changed,
+        Daemon, Entry, ScrollFocus, WORKSPACE_CHANGE_WAIT, WindowScope, grid_window,
+        image_fallback_exclusions, merge_fallback, no_active_window_scope, parse_key,
+        perform_scroll_event_with, refresh_options, restart_address, scoped_windows,
+        send_wheel_with, start_refreshed_session, status_persistent, visible_target_owner_changed,
         wait_for_workspace_change, window_for_target, with_grid_note,
     };
     use crate::sources::{self, Found, Source};
@@ -1766,7 +1903,231 @@ mod tests {
             listeners: Mutex::new(crate::listeners::Listeners::new()),
             keyboard: Mutex::new(None),
             wheel: Mutex::new(None),
+            scroll_action: Mutex::new(()),
+            focus_records: None,
+            dispatch_syntax: None,
         })
+    }
+
+    struct FocusTestDir(PathBuf);
+
+    impl Deref for FocusTestDir {
+        type Target = Path;
+
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+
+    impl Drop for FocusTestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn test_focus_dir() -> FocusTestDir {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let directory = PathBuf::from(std::env::var_os("HOME").unwrap())
+            .join(".local/share/thodu/tests/scroll-events")
+            .join(format!(
+                "{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+        std::fs::create_dir_all(&directory).unwrap();
+        FocusTestDir(directory)
+    }
+
+    // REQ-ACT-04, REQ-ACT-06: the production scroll wrapper forces the
+    // owning window while the action executes, then clears its override.
+    #[test]
+    fn req_act_04_req_act_06_scroll_event_routes_through_owner_focus() {
+        let directory = test_focus_dir();
+        let window = on(0);
+        let target = Target {
+            id: "pane".into(),
+            bounds: Rect::new(2, 2, 4, 4),
+            role: Role::ScrollArea,
+            text: "Document".into(),
+            source: TargetSource::Atspi,
+            actions: vec![ActionKind::Scroll],
+            window: window.address.clone(),
+        };
+        let focused = RefCell::new(false);
+        let points = RefCell::new(Vec::new());
+        let wheels = RefCell::new(0);
+        let mut get = |_: &str| Ok(*focused.borrow());
+        let mut set = |_: &str, value: Option<bool>| {
+            *focused.borrow_mut() = value.unwrap_or(false);
+            Ok(())
+        };
+        let mut exists = |_: &str| Ok(Some(window.pid));
+        let result = perform_scroll_event_with(
+            &target,
+            Some(&window),
+            ScrollFocus {
+                records: Some(&directory),
+                stale: false,
+                get: &mut get,
+                set: &mut set,
+                window_exists: &mut exists,
+            },
+            || {
+                send_wheel_with(
+                    target.bounds.center(),
+                    |point| {
+                        assert!(*focused.borrow(), "pointer must move under owner focus");
+                        points.borrow_mut().push(point);
+                        Ok(())
+                    },
+                    || {
+                        assert!(*focused.borrow(), "wheel must run under owner focus");
+                        *wheels.borrow_mut() += 1;
+                        Ok(())
+                    },
+                )
+            },
+        );
+        assert_eq!(result, Ok(()));
+        assert!(!*focused.borrow());
+        assert_eq!(*points.borrow(), vec![(5, 4), (4, 4)]);
+        assert_eq!(*wheels.borrow(), 1);
+    }
+
+    // REQ-ACT-04: Omarchy shell scroll targets have no app window and should
+    // send their wheel action without querying or changing a window property.
+    #[test]
+    fn req_act_04_shell_scroll_event_skips_window_focus_override() {
+        let directory = test_focus_dir();
+        let target = Target {
+            id: "bar".into(),
+            bounds: Rect::new(2, 2, 4, 4),
+            role: Role::ScrollArea,
+            text: "Bar".into(),
+            source: TargetSource::Shell,
+            actions: vec![ActionKind::Scroll],
+            window: String::new(),
+        };
+        let mut get =
+            |_: &str| -> Result<bool, String> { panic!("shell target has no window property") };
+        let mut set = |_: &str, _: Option<bool>| -> Result<(), String> {
+            panic!("shell target has no window property")
+        };
+        let mut exists = |_: &str| -> Result<Option<u32>, String> {
+            panic!("shell target has no owner to check")
+        };
+        let result = perform_scroll_event_with(
+            &target,
+            None,
+            ScrollFocus {
+                records: Some(&directory),
+                stale: false,
+                get: &mut get,
+                set: &mut set,
+                window_exists: &mut exists,
+            },
+            || Ok(()),
+        );
+        assert_eq!(result, Ok(()));
+    }
+
+    // REQ-ACT-06: if an owner disappears between the geometry check and the
+    // property query, report a stale target rather than a generic input error.
+    #[test]
+    fn req_act_06_closed_owner_during_focus_setup_is_stale() {
+        let directory = test_focus_dir();
+        let window = on(0);
+        let target = Target {
+            id: "pane".into(),
+            bounds: Rect::new(2, 2, 4, 4),
+            role: Role::ScrollArea,
+            text: "Document".into(),
+            source: TargetSource::Atspi,
+            actions: vec![ActionKind::Scroll],
+            window: window.address.clone(),
+        };
+        let mut get = |_: &str| Err("window not found".into());
+        let mut set = |_: &str, _: Option<bool>| Ok(());
+        let mut exists = |_: &str| Ok(None);
+        let result = perform_scroll_event_with(
+            &target,
+            Some(&window),
+            ScrollFocus {
+                records: Some(&directory),
+                stale: false,
+                get: &mut get,
+                set: &mut set,
+                window_exists: &mut exists,
+            },
+            || panic!("closed owner must not receive a wheel action"),
+        );
+        assert_eq!(result, Err(super::ScrollFailure::Stale));
+    }
+
+    #[test]
+    fn req_act_06_missing_window_for_app_scroll_is_stale() {
+        let target = Target {
+            id: "pane".into(),
+            bounds: Rect::new(2, 2, 4, 4),
+            role: Role::ScrollArea,
+            text: "Document".into(),
+            source: TargetSource::Atspi,
+            actions: vec![ActionKind::Scroll],
+            window: "0x1".into(),
+        };
+        let mut get = |_: &str| -> Result<bool, String> { panic!("no window to query") };
+        let mut set =
+            |_: &str, _: Option<bool>| -> Result<(), String> { panic!("no window to update") };
+        let mut identity =
+            |_: &str| -> Result<Option<u32>, String> { panic!("no window identity to query") };
+        let result = perform_scroll_event_with(
+            &target,
+            None,
+            ScrollFocus {
+                records: None,
+                stale: false,
+                get: &mut get,
+                set: &mut set,
+                window_exists: &mut identity,
+            },
+            || panic!("a missing window must not receive wheel input"),
+        );
+        assert_eq!(result, Err(super::ScrollFailure::Stale));
+    }
+
+    #[test]
+    fn req_act_06_missing_scroll_storage_keeps_app_action_disabled() {
+        let window = on(0);
+        let target = Target {
+            id: "pane".into(),
+            bounds: Rect::new(2, 2, 4, 4),
+            role: Role::ScrollArea,
+            text: "Document".into(),
+            source: TargetSource::Atspi,
+            actions: vec![ActionKind::Scroll],
+            window: window.address.clone(),
+        };
+        let mut get = |_: &str| -> Result<bool, String> { panic!("storage check comes first") };
+        let mut set = |_: &str, _: Option<bool>| -> Result<(), String> {
+            panic!("storage check comes first")
+        };
+        let mut identity =
+            |_: &str| -> Result<Option<u32>, String> { panic!("storage check comes first") };
+        let result = perform_scroll_event_with(
+            &target,
+            Some(&window),
+            ScrollFocus {
+                records: None,
+                stale: false,
+                get: &mut get,
+                set: &mut set,
+                window_exists: &mut identity,
+            },
+            || panic!("scrolling must fail visibly without recovery storage"),
+        );
+        assert!(
+            matches!(result, Err(super::ScrollFailure::Input(message)) if message.contains("recovery storage is unavailable"))
+        );
     }
 
     // REQ-ACT-02: the shell workspace guard checks at a bounded rate and
