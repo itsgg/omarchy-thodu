@@ -1,6 +1,6 @@
 # 0015: Preserve headless sessions on refresh
 
-Status: claimed
+Status: review
 Depends on: none
 Spec: REQ-SESSION-01
 Goal: Keep a session started with `overlay=false` on the IPC path if stale-target handling recollects it, so the refresh does not summon the overlay or claim keyboard focus.
@@ -12,3 +12,4 @@ Acceptance:
 ## Log
 
 - 2026-10-24: created after code review found that stale-target refresh always enabled the overlay.
+- 2026-10-24: stored the overlay mode in each session and reused it with the test flag when stale-target refresh recollects. Corrected the exact acceptance selector after confirming the old command ran zero tests. The requirement test passed (1 test); `tools/gate` passed in 148.8 seconds. `cargo-deny` was unavailable and skipped.
