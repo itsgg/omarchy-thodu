@@ -70,6 +70,7 @@ struct Entry {
     status: String,
     collecting: bool,
     overlay_bounds: Option<Vec<Rect>>,
+    overlay: bool,
     test: bool,
     hidden: bool,
     created: Instant,
@@ -84,6 +85,19 @@ struct Entry {
     closing: bool,
     /// Where the pointer goes back to when the session ends.
     restore: Option<(Monitor, (i32, i32))>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct SessionOptions {
+    overlay: bool,
+    test: bool,
+}
+
+fn refresh_options(entry: &Entry) -> SessionOptions {
+    SessionOptions {
+        overlay: entry.overlay,
+        test: entry.test,
+    }
 }
 
 struct Daemon {
@@ -333,6 +347,7 @@ impl Daemon {
                     status: status.clone(),
                     collecting,
                     overlay_bounds: None,
+                    overlay,
                     test,
                     hidden: false,
                     created: Instant::now(),
@@ -647,7 +662,7 @@ impl Daemon {
         }) else {
             return;
         };
-        let Some((window, refetch, monitor, test, target, source)) = sessions.get(id).map(|e| {
+        let Some((window, refetch, monitor, options, target, source)) = sessions.get(id).map(|e| {
             let target = e.session.targets[act.target].clone();
             let source = target.source;
             (
@@ -656,7 +671,7 @@ impl Daemon {
                     .as_ref()
                     .and_then(|scope| scope.refetch_address.clone()),
                 e.monitor.clone(),
-                e.test,
+                refresh_options(e),
                 target,
                 source,
             )
@@ -679,7 +694,9 @@ impl Daemon {
             if target_is_stale(&target, &window, now.as_ref()) || newly_covered {
                 eprintln!("thodud: {id}: the target changed or became covered; collecting again");
                 self.remove(id);
-                if let Err(e) = self.start(refetch, "visible", "hints", true, test) {
+                if let Err(e) =
+                    self.start(refetch, "visible", "hints", options.overlay, options.test)
+                {
                     eprintln!("thodud: {id}: {}", e.message.unwrap_or_default());
                 }
                 return;
@@ -696,11 +713,12 @@ impl Daemon {
         // A test session never takes GG's focus, so it always puts the
         // pointer back.
         let restore = restore.filter(|(_, p)| {
-            test || input::should_restore(
-                hypr::follows_mouse(),
-                hypr::window_at(p.0, p.1).as_deref(),
-                hypr::window_at(act.point.0, act.point.1).as_deref(),
-            )
+            options.test
+                || input::should_restore(
+                    hypr::follows_mouse(),
+                    hypr::window_at(p.0, p.1).as_deref(),
+                    hypr::window_at(act.point.0, act.point.1).as_deref(),
+                )
         });
         let workspace_before = (act.linger && source == Source::Shell)
             .then(|| hypr::active_workspace_id(&monitor.name))
@@ -1329,9 +1347,10 @@ mod tests {
     use thodu_core::{labels, protocol};
 
     use super::{
-        Daemon, Entry, WORKSPACE_CHANGE_WAIT, WindowScope, grid_window, image_fallback_exclusions,
-        merge_fallback, no_active_window_scope, parse_key, restart_address, scoped_windows,
-        visible_target_owner_changed, wait_for_workspace_change, window_for_target, with_grid_note,
+        Daemon, Entry, SessionOptions, WORKSPACE_CHANGE_WAIT, WindowScope, grid_window,
+        image_fallback_exclusions, merge_fallback, no_active_window_scope, parse_key,
+        refresh_options, restart_address, scoped_windows, visible_target_owner_changed,
+        wait_for_workspace_change, window_for_target, with_grid_note,
     };
     use crate::sources::{self, Found, Source};
 
@@ -1522,6 +1541,7 @@ mod tests {
             status: "primary targets; collecting visual targets".into(),
             collecting: true,
             overlay_bounds: None,
+            overlay: true,
             test: true,
             hidden: false,
             created: Instant::now(),
@@ -1666,6 +1686,7 @@ mod tests {
             status: "1 target; collecting visual targets".into(),
             collecting: true,
             overlay_bounds: None,
+            overlay: true,
             test: false,
             hidden: false,
             created: Instant::now(),
@@ -1727,6 +1748,7 @@ mod tests {
             status: "1 target; collecting visual targets".into(),
             collecting: true,
             overlay_bounds: None,
+            overlay: true,
             test: true,
             hidden: false,
             created: Instant::now(),
@@ -1788,6 +1810,7 @@ mod tests {
             status: "1 target; collecting visual targets".into(),
             collecting: true,
             overlay_bounds: None,
+            overlay: true,
             test: true,
             hidden: false,
             created: Instant::now(),
@@ -1838,6 +1861,7 @@ mod tests {
             status: "2 targets from image".into(),
             collecting: false,
             overlay_bounds: None,
+            overlay: true,
             test: true,
             hidden: false,
             created: Instant::now(),
@@ -1942,6 +1966,45 @@ mod tests {
         );
     }
 
+    // REQ-SESSION-01: refresh keeps the original overlay and test settings.
+    #[test]
+    fn req_session_01_refetch_preserves_overlay_setting() {
+        let monitor = Monitor {
+            name: "M".into(),
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+            scale: 1.0,
+        };
+        let entry = Entry {
+            session: Session::begin(Vec::new(), monitor.logical(), false, false),
+            window: None,
+            monitor,
+            status: String::new(),
+            collecting: false,
+            overlay_bounds: None,
+            overlay: false,
+            test: false,
+            hidden: false,
+            created: Instant::now(),
+            timing: Timing::default(),
+            pending: 0,
+            clicked: false,
+            workspace_changed: false,
+            closing: false,
+            restore: None,
+        };
+
+        assert_eq!(
+            refresh_options(&entry),
+            SessionOptions {
+                overlay: false,
+                test: false
+            }
+        );
+    }
+
     // REQ-SRC-07: if another visible window moves over a target after
     // collection, activation refreshes instead of clicking the occluder.
     #[test]
@@ -2040,6 +2103,7 @@ mod tests {
             status: String::new(),
             collecting: false,
             overlay_bounds: None,
+            overlay: true,
             test: false,
             hidden: false,
             created: Instant::now(),
