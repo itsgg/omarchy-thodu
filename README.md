@@ -6,7 +6,9 @@ This is an early, Omarchy-only milestone. It uses accessibility trees for GTK 3,
 
 Every visible-window collection also runs a bounded monitor screenshot detector after primary targets draw. It can add click hints for visible text lines and box-like controls that apps do not expose in their accessibility trees, even when other controls are accessible. These image hints have no searchable text and use an amber style. They can miss controls, and may label visible text that is not interactive. A grid remains available for choosing any point on the focused monitor. Web page content, scrolling, dragging and hovering are not supported yet.
 
-In an interactive session, primary hints appear first and visual hints arrive in a second update. Thodu holds label keys until that update so labels cannot shift during selection; `Escape` still closes the session.
+When no app window is focused, Thodu uses the focused monitor and still labels the Omarchy bar. If no source finds targets, it opens the grid.
+
+In an interactive session, primary hints appear first and visual hints arrive in a second update. Labels already on screen stay attached to their targets, keys are held until new targets load, and `Escape` remains available.
 
 ## Install
 
@@ -21,8 +23,9 @@ Build and install the executables side by side. The `thodu install` command uses
 
 ```sh
 cargo build --release
-install -Dm755 target/release/thodu "$HOME/.local/bin/thodu"
-install -Dm755 target/release/thodud "$HOME/.local/bin/thodud"
+target_dir="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
+install -Dm755 "$target_dir/release/thodu" "$HOME/.local/bin/thodu"
+install -Dm755 "$target_dir/release/thodud" "$HOME/.local/bin/thodud"
 thodu install
 thodu doctor
 ```
