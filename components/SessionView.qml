@@ -274,6 +274,11 @@ FocusScope {
         if (autoRepeat && (key === Qt.Key_Return || key === Qt.Key_Enter || (letter && labelInput)))
             return null;
         const ctrl = (modifiers & Qt.ControlModifier) !== 0;
+        const enter = key === Qt.Key_Return || key === Qt.Key_Enter;
+        // A chord is a shortcut meant for an app: only Escape, and Return
+        // with Control for a Control click, keep their meaning.
+        if (key !== Qt.Key_Escape && view.isChord(enter ? modifiers & ~Qt.ControlModifier : modifiers))
+            return null;
         let name = "";
         if (key === Qt.Key_Escape)
             name = "Escape";
@@ -298,6 +303,11 @@ FocusScope {
         else
             return null;
         return { op: "key", session: view.session, generation: view.generation, key: name, shift: shift, ctrl: ctrl };
+    }
+
+    // Control, Alt or Super make a key a shortcut meant for an app.
+    function isChord(modifiers) {
+        return (modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)) !== 0;
     }
 
     function scrollKeyName(key) {
@@ -504,7 +514,9 @@ FocusScope {
             return;
         const scrollKey = view.scrollMode ? view.scrollKeyName(event.key) : "";
         if (scrollKey.length > 0) {
-            if (!event.isAutoRepeat)
+            if (view.isChord(event.modifiers))
+                view.stopScrollHold("");
+            else if (!event.isAutoRepeat)
                 view.startScrollHold(scrollKey, (event.modifiers & Qt.ShiftModifier) !== 0);
             return;
         }
@@ -525,8 +537,12 @@ FocusScope {
         if (view.collecting && event.key !== Qt.Key_Escape)
             return;
         const request = view.keyRequest(event.key, event.modifiers, event.text, event.isAutoRepeat);
-        if (!request)
+        if (!request) {
+            // A chord in the wait after a click is no double click.
+            if (view.lingering && !modifierKey && view.isChord(event.modifiers))
+                view.end("a key in the wait after a click", false);
             return;
+        }
         view.submitKeyRequest(request);
     }
 

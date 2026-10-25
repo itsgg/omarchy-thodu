@@ -167,12 +167,13 @@ Acceptance:
 ### Search
 
 ### REQ-SEARCH-01: Typing searches; Shift types a label
-While a session is showing in search-first mode, lowercase letters typed without Shift and with no active label prefix shall keep only the targets whose text contains the typed letters, ignoring case and spaces, and focus the first in reading order. In labels-only mode, lowercase letters type labels until `/` starts a search. Shifted letters type a target label in either mode. Lowercase letters continue an active label prefix. Completing a label with a lowercase final character focuses its target; completing it with an uppercase final character activates it according to REQ-ACT-01. A label that is hidden by the current search shall not activate or take focus. An invalid label prefix shall leave the prior focus intact. Operating-system key repeats shall not complete or activate a label. Tab and Shift-Tab move the focus through the kept targets. This follows Homerow's defaults (SEED R1).
+While a session is showing in search-first mode, lowercase letters typed without Shift and with no active label prefix shall keep only the targets whose text contains the typed letters, ignoring case and spaces, and focus the first in reading order. In labels-only mode, lowercase letters type labels until `/` starts a search. Shifted letters type a target label in either mode. Lowercase letters continue an active label prefix. Completing a label with a lowercase final character focuses its target; completing it with an uppercase final character activates it according to REQ-ACT-01. A label that is hidden by the current search shall not activate or take focus. An invalid label prefix shall leave the prior focus intact. Operating-system key repeats shall not complete or activate a label. A key typed with Control, Alt or Super held shall neither search, type a label, select a scroll area nor scroll; Escape keeps its meaning with any modifier, and Return with Control is the Control click of REQ-ACT-02. Tab and Shift-Tab move the focus through the kept targets. This follows Homerow's defaults (SEED R1).
 Acceptance:
 - cases: `spec/cases/search/filter.jsonl`, typed input against target texts with the expected kept targets and focus.
 - scenario: a session test covers an uppercase prefix and lowercase completion in search-first mode.
 - scenario: session tests cover hidden labels, invalid prefixes, prefix cancellation with `/`, and focus restoration on Backspace.
 - scenario: a QML test covers a shifted key whose event text is lowercase, ignores Caps Lock text as an activation signal, and filters repeats while label input is active but preserves search repeats.
+- scenario: QML and daemon tests send Control, Alt and Super chords on letters, digits, Space, Tab, `/`, Backspace and scroll keys; none searches, types a label, selects an area or scrolls, Escape with a modifier still ends the session, and Control-Return still clicks with Control held.
 
 ### REQ-SEARCH-02: Labels-only mode
 Where the setting `labels_only` is true, letters without Shift type labels and `/` starts a search.
@@ -378,6 +379,7 @@ Unit tests and properties cover labels, search, the grid, coordinates and the st
 - 2026-10-24: change 0018, configurable status detail and scroll distance, plus held H/J/K/L scrolling with retained keyboard capture.
 - 2026-10-25: change 0020, a visible Thodu bar control with service status, mode launchers, settings and configuration editing.
 - 2026-10-25: change 0021, stable per-object bar item identities, updated `shell-items` shape, and legacy report compatibility.
+- 2026-10-25: change 0022, keys typed with Control, Alt or Super neither search, type labels, select scroll areas nor scroll.
 
 ### Retired
 

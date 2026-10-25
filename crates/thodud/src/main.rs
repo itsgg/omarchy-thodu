@@ -635,7 +635,10 @@ impl Daemon {
         let entry = sessions
             .get_mut(id)
             .ok_or_else(|| fail(ErrorKind::BadRequest, format!("no session {id}")))?;
-        if expected_generation != entry.session.generation && key != Key::Escape {
+        // A chord with Control is a shortcut meant for an app; only Return,
+        // for a Control click, and Escape take Control.
+        let chord = ctrl && !matches!(key, Key::Return { .. } | Key::Escape);
+        if (expected_generation != entry.session.generation && key != Key::Escape) || chord {
             return Ok(Reply {
                 session: Some(id.to_string()),
                 targets: Some(Self::labeled(entry)),
@@ -3095,6 +3098,73 @@ mod tests {
         assert_eq!(
             escape.view.expect("Escape remains available").state,
             State::Closed
+        );
+    }
+
+    // REQ-SEARCH-01: a letter typed with Control is a shortcut meant for an
+    // app, so it neither types the label nor acts, and the session stays.
+    #[test]
+    fn req_search_01_control_chord_neither_types_a_label_nor_acts() {
+        let monitor = Monitor {
+            name: "M".into(),
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+            scale: 1.0,
+        };
+        let target = Target {
+            id: "a0".into(),
+            bounds: Rect::new(10, 10, 20, 20),
+            role: Role::Button,
+            text: "Open".into(),
+            source: TargetSource::Atspi,
+            actions: vec![ActionKind::Click],
+            window: "0x1".into(),
+        };
+        let session = Session::new(vec![target], false).with_area(monitor.logical());
+        let daemon = daemon_with_entry(Entry {
+            session,
+            window: None,
+            monitor,
+            status: "1 target from atspi".into(),
+            collecting: false,
+            overlay_bounds: None,
+            overlay: true,
+            test: true,
+            hidden: false,
+            created: Instant::now(),
+            timing: Timing::default(),
+            pending: 0,
+            clicked: false,
+            workspace_changed: false,
+            closing: false,
+            restore: None,
+            scroll_restore: None,
+            scroll_released: true,
+        });
+
+        for (name, shift) in [("A", true), ("a", true), ("a", false), ("space", false)] {
+            let reply = daemon.key("s1", name, shift, true, 0).unwrap();
+            let view = reply.view.expect("a chord returns the current view");
+            assert_eq!(
+                view.state,
+                State::Showing,
+                "{name} with Control did not act"
+            );
+        }
+        let sessions = daemon.sessions.lock().unwrap();
+        let entry = sessions.get("s1").unwrap();
+        assert_eq!(entry.session.state, State::Showing);
+        assert_eq!(entry.pending, 0, "no action was queued");
+        drop(sessions);
+        assert_eq!(
+            parse_key("Return", false, true),
+            Some(Key::Return {
+                shift: false,
+                ctrl: true
+            }),
+            "REQ-ACT-02: Control-Return still parses as a Control click"
         );
     }
 

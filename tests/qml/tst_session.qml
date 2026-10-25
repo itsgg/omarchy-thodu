@@ -335,6 +335,42 @@ Item {
             verify(top.keysSent()[0].shift);
         }
 
+        // REQ-SEARCH-01: a key typed with Control, Alt or Super is a shortcut
+        // meant for an app, so Control-Shift-V cannot complete the label v.
+        function test_req_search_01_modifier_chords_neither_search_nor_type_labels() {
+            keyClick(Qt.Key_V, Qt.ControlModifier | Qt.ShiftModifier);
+            keyClick(Qt.Key_V, Qt.AltModifier | Qt.ShiftModifier);
+            keyClick(Qt.Key_V, Qt.MetaModifier);
+            keyClick(Qt.Key_C, Qt.ControlModifier);
+            keyClick(Qt.Key_Space, Qt.ControlModifier);
+            keyClick(Qt.Key_Tab, Qt.AltModifier);
+            keyClick(Qt.Key_Slash, Qt.ControlModifier);
+            keyClick(Qt.Key_Backspace, Qt.ControlModifier);
+            compare(top.keysSent().length, 0, "no chord reaches thodud");
+            compare(view.keyRequest(Qt.Key_Return, Qt.AltModifier, "", false), null,
+                    "Alt-Return is not a click");
+            const control = view.keyRequest(Qt.Key_Return, Qt.ControlModifier, "", false);
+            compare(control.key, "Return");
+            verify(control.ctrl, "REQ-ACT-02: Control-Return still clicks with Control held");
+            keyClick(Qt.Key_Escape, Qt.ControlModifier);
+            compare(top.keysSent().map(k => k.key), ["Escape"], "Escape works with any modifier");
+            verify(!view.active);
+        }
+
+        // REQ-SEARCH-01: in scroll mode a chord neither selects an area nor
+        // scrolls, since an app could read the held modifier as zoom.
+        function test_req_search_01_scroll_mode_chords_neither_select_nor_scroll() {
+            view.scrollMode = true;
+            top.shownView = Object.assign({}, top.shownView, { scroll_mode: true, focused: "a0" });
+            keyClick(Qt.Key_2, Qt.ControlModifier);
+            keyPress(Qt.Key_J, Qt.AltModifier);
+            wait(50);
+            compare(view.heldScrollKey, "", "the chord did not start a held scroll");
+            keyRelease(Qt.Key_J, Qt.AltModifier);
+            keyClick(Qt.Key_K, Qt.ControlModifier);
+            compare(top.keysSent().length, 0, "no area selection or wheel action");
+        }
+
         function test_req_act_01_shifted_visible_label_waits_for_shift_release() {
             view.targets = [{ id: "d0", label: "d", source: "atspi",
                               bounds: { x: 120, y: 80, w: 60, h: 30 },
@@ -494,6 +530,18 @@ Item {
             top.answering = false;
             keyClick(Qt.Key_Return, Qt.ShiftModifier);
             verify(top.ended !== null, "a modified Return is not a double click");
+            verify(!view.activeFocus);
+        }
+
+        function test_req_act_02_a_chord_ends_the_wait_without_reaching_thodud() {
+            top.nextState = "acting";
+            top.nextLinger = true;
+            keyClick(Qt.Key_Return);
+            tryVerify(() => view.lingering, 1000);
+            top.answering = false;
+            keyClick(Qt.Key_V, Qt.ControlModifier);
+            verify(top.ended !== null, "a chord is not a double click and ends the wait");
+            compare(top.keysSent().map(k => k.key), ["Return"], "the chord is not sent");
             verify(!view.activeFocus);
         }
 
