@@ -1,6 +1,6 @@
 # 0029: Decide what owns a point from Hyprland's whole stack
 
-Status: review
+Status: done
 Depends on: none
 Spec: REQ-SRC-07, REQ-SRC-04, REQ-SHELL-01, REQ-SRC-06, REQ-SRC-08
 Goal: Ownership of a click point looks only at client windows, so a notification or other layer surface over a target does not stop Thodu from labelling and clicking it, a window target under the bar strip is kept, bar targets stay labelled under a fullscreen window that covers the bar, and a dialog Hyprland draws over a fullscreen window loses to the fullscreen window. Decide ownership from Hyprland's whole stack on the monitor: overlay layers first; with a fullscreen window, pinned, special-workspace and allowed-over-fullscreen windows, then the fullscreen window, which covers top layers and the windows behind it; otherwise top layers such as the bar, then windows front to back. Windows that accept no input own nothing. A layer takes input over its whole surface except where Omarchy documents otherwise: Thodu's own overlay and the OSD take none, and notifications take only the toast column at the right edge. Collection, image mapping, scroll areas and the recheck before a click all use this owner, and windows hidden behind a fullscreen window are not collected.
@@ -15,3 +15,4 @@ Acceptance:
 
 - 2026-10-25: created from confirmed review findings on layer surfaces and fullscreen stacking. Hyprland's clients report `allowedOverFullscreen` and `acceptsInput`; its layers report only their surface, so Omarchy's masked full-screen layers are known by namespace from their QML.
 - 2026-10-25: thodu-core now models Hyprland's stack: monitors carry their layers, windows carry `allowedOverFullscreen` and `acceptsInput`, and `owner_at` answers what receives a click, following Hyprland 0.56.2's renderer and fullscreen handler. Collection, image mapping, scroll areas and the activation recheck use it, bar targets need the bar to own their point, and windows behind a fullscreen window are not collected. Live on GG's session: 21 bar targets and 477 image targets, as before. Change 0025 records it. `tests/acceptance/reqs.sh REQ-SRC-07 REQ-SRC-04 REQ-SHELL-01 REQ-SRC-06 REQ-SRC-08` passes.
+- 2026-10-25: coordinator merged at `041dc42` after the full gate passed in 347 seconds, with no review findings.
