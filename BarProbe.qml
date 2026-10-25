@@ -118,7 +118,8 @@ BarWidget {
         id: button
         anchors.fill: parent
         bar: probe.bar
-        text: "T"
+        text: "\uf11c"
+        fontFamily: "Font Awesome 7 Free"
         fontSize: Style.font.caption
         horizontalMargin: 7
         verticalPadding: 5

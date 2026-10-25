@@ -15,3 +15,4 @@ Acceptance:
 - 2026-10-25: created after GG asked for a visible, interactive top-bar widget and a matching spec change.
 - 2026-10-25: implemented the visible, themed status control, keyboard-navigable mode and settings menu, persistent settings edits, and popup exclusion from bar scanning. Acceptance and live checks remain before review.
 - 2026-10-25: `tests/acceptance/reqs.sh REQ-SHELL-02` passed: 92 Rust tests and 73 QML tests, including component-level menu navigation and mode dispatch. Fixture lookup now finds the active worktree when Cargo reuses compiled tests. Live checks remain.
+- 2026-10-25: installed with `make reload`; the Font Awesome keyboard icon and Ready state appeared in the bar. Opened the menu from the icon, moved selection to Grid with Right, closed with Escape, launched Hints from the menu, and exited with Escape. Added the cropped menu screenshot to the README. Grid and Scroll launch mappings are covered by the component test.

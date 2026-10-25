@@ -14,6 +14,8 @@ Keyboard hints for everything visible on an Omarchy screen. Thodu finds controls
 - Labels-only, text search, uppercase final-key activation and configurable scroll speed.
 - A top-bar control for service status, mode launchers and live settings.
 
+![Thodu's top-bar menu with service status, modes and settings](docs/screenshots/bar-widget.png)
+
 Accessibility support varies by app. Visual hints can include non-interactive text or miss controls. See [app setup](docs/accessibility.md) for Chromium, Electron and web app guidance.
 
 ## Install
