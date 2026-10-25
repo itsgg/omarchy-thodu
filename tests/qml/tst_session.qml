@@ -306,6 +306,28 @@ Item {
             verify(top.keysSent()[0].shift);
         }
 
+        function test_req_act_01_shifted_label_keys_wait_for_shift_release() {
+            view.submitKeyRequest(view.keyRequest(Qt.Key_D, Qt.ShiftModifier, "d", false));
+            view.submitKeyRequest(view.keyRequest(Qt.Key_S, Qt.ShiftModifier, "s", false));
+            compare(top.keysSent().length, 0,
+                    "the app must not receive shifted keys before physical Shift is released");
+
+            keyRelease(Qt.Key_Shift);
+            compare(top.keysSent().map(k => k.key), ["D", "S"]);
+            verify(top.keysSent().every(k => k.shift),
+                   "the overlay keeps label semantics while dispatching after Shift release");
+        }
+
+        function test_req_act_01_shifted_label_keys_are_discarded_when_session_ends() {
+            view.submitKeyRequest(view.keyRequest(Qt.Key_D, Qt.ShiftModifier, "d", false));
+            compare(top.keysSent().length, 0,
+                    "shifted input is still held by the overlay");
+            view.end("test cancellation", false);
+            keyRelease(Qt.Key_Shift);
+            compare(top.keysSent().length, 0,
+                    "closing the session discards pending input");
+        }
+
         function test_req_act_02_return_auto_repeat_is_ignored() {
             compare(view.keyRequest(Qt.Key_Return, Qt.NoModifier, "", true), null);
             compare(view.keyRequest(Qt.Key_Return, Qt.NoModifier, "", false).key, "Return");

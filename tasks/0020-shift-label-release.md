@@ -1,6 +1,6 @@
 # 0020: Release Shift before dispatching shifted keys
 
-Status: open
+Status: review
 Depends on: none
 Spec: REQ-ACT-01
 Goal: Keep physical Shift captured by the overlay until it is released before dispatching Shift-modified key requests, so activating a link with a label does not inherit browser Shift-click behavior.
@@ -14,3 +14,5 @@ Acceptance:
 ## Log
 
 - 2026-10-25: created after GG reported that Shift+label activation opens browser links in a new window.
+- 2026-10-25: claimed by codex-shift-activation at 00:39 UTC.
+- 2026-10-25: buffered shifted letter requests until Shift release, then dispatched them in order; ending a session clears pending requests. This keeps the physical modifier up before an uppercase label can trigger a click. `tests/acceptance/reqs.sh REQ-ACT-01` passed: 92 Rust tests and 53 QML tests.

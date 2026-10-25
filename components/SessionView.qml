@@ -57,6 +57,10 @@ FocusScope {
     property int scrollRepeatMs: 80
     property var deferredKey: null
     property var deferredEnd: null
+    // Keep physical Shift captured until shifted label keys are dispatched.
+    // Otherwise a virtual-pointer link click can inherit Shift and become a
+    // browser's open-in-new-window gesture.
+    property var pendingShiftLabelRequests: []
 
     // A brief session request this often tells a live thodud from a dead
     // one, and shows changes made by keys sent over the IPC in test mode.
@@ -118,6 +122,7 @@ FocusScope {
         view.scrollReadySent = false;
         view.deferredKey = null;
         view.deferredEnd = null;
+        view.pendingShiftLabelRequests = [];
         view.statusTimeoutMs = 2000;
         view.scrollRepeatMs = 80;
         view.active = true;
@@ -148,6 +153,7 @@ FocusScope {
         view.scrollPassThrough = false;
         view.deferredKey = null;
         view.deferredEnd = null;
+        view.pendingShiftLabelRequests = [];
         silence.stop();
         linger.stop();
         statusExpiry.stop();
@@ -252,7 +258,7 @@ FocusScope {
             } else if (!view.collecting) {
                 const request = view.keyRequest(pending.key, pending.modifiers, pending.text, pending.autoRepeat);
                 if (request)
-                    view.send(request);
+                    view.submitKeyRequest(request);
             }
         }
     }
@@ -446,6 +452,41 @@ FocusScope {
         return { op: "drawn", session: view.session, overlays: view.overlayRects() };
     }
 
+    function shouldWaitForShiftRelease(request) {
+        return !view.scrollMode && request && request.shift && request.key.length === 1 &&
+               request.key >= "A" && request.key <= "Z";
+    }
+
+    function dispatchKeyRequest(request) {
+        if (!view.active)
+            return;
+        view.send(request);
+        // REQ-SESSION-02: Escape gives the keyboard back once dispatched.
+        if (request.key === "Escape")
+            view.end("escape", false);
+        // After a click only a plain Return means anything: a double click.
+        else if (view.lingering && (request.key !== "Return" || request.shift || request.ctrl))
+            view.end("a key in the wait after a click", false);
+    }
+
+    function submitKeyRequest(request) {
+        if (view.shouldWaitForShiftRelease(request)) {
+            view.pendingShiftLabelRequests = view.pendingShiftLabelRequests.concat([request]);
+            return;
+        }
+        view.dispatchKeyRequest(request);
+    }
+
+    function flushShiftLabelRequests() {
+        const requests = view.pendingShiftLabelRequests;
+        view.pendingShiftLabelRequests = [];
+        for (const request of requests) {
+            if (!view.active)
+                break;
+            view.dispatchKeyRequest(request);
+        }
+    }
+
     Keys.onPressed: event => {
         event.accepted = true;
         if (!view.active)
@@ -475,20 +516,18 @@ FocusScope {
         const request = view.keyRequest(event.key, event.modifiers, event.text, event.isAutoRepeat);
         if (!request)
             return;
-        view.send(request);
-        // REQ-SESSION-02: the keyboard goes back at once, whatever thodud
-        // answers, so no key after Escape reaches the overlay.
-        if (request.key === "Escape")
-            view.end("escape", false);
-        // After a click only a plain Return means anything: a double click.
-        // Any other key ends the session at once, and is not seen again.
-        else if (view.lingering && (request.key !== "Return" || request.shift || request.ctrl))
-            view.end("a key in the wait after a click", false);
+        view.submitKeyRequest(request);
     }
 
     Keys.onReleased: event => {
         event.accepted = true;
-        if (!view.active || event.isAutoRepeat || !view.scrollMode)
+        if (!view.active || event.isAutoRepeat)
+            return;
+        if (event.key === Qt.Key_Shift) {
+            view.flushShiftLabelRequests();
+            return;
+        }
+        if (!view.scrollMode)
             return;
         const name = view.scrollKeyName(event.key);
         if (name.length > 0)
