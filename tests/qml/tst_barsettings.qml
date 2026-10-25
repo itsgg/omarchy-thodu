@@ -3,7 +3,7 @@ import QtTest
 import "../../lib/BarSettings.js" as BarSettings
 import "../../lib/BarMenuActions.js" as MenuActions
 
-// REQ-SHELL-02: verify menu actions and persisted settings.
+// Verify menu actions and persisted settings.
 TestCase {
     name: "ThoduBarSettings"
 
@@ -27,11 +27,26 @@ TestCase {
         verify(BarSettings.isSupported(updated));
     }
 
+    function test_req_shell_02_setting_updates_keep_a_single_final_newline() {
+        const once = BarSettings.setValue("scroll_step = 1\n", "scroll_step", 2);
+        const twice = BarSettings.setValue(once, "scroll_step", 3);
+        compare(once, "scroll_step = 2\n");
+        compare(twice, "scroll_step = 3\n");
+    }
+
+    function test_req_shell_02_settings_reject_toml_leading_zero_integers() {
+        verify(!BarSettings.isSupported("scroll_step = 05\n"));
+        verify(!BarSettings.isSupported("scroll_step = 0_5\n"));
+        verify(BarSettings.isSupported("scroll_step = 5\n"));
+        verify(BarSettings.isSupported("scroll_step = 1_0\n"));
+    }
+
     function test_req_shell_02_settings_write_only_changes_top_level_keys() {
         const original = "[other]\nscroll_step = 40\n";
         const updated = BarSettings.setValue(original, "scroll_step", 3);
         verify(updated.indexOf("scroll_step = 40") >= 0);
         verify(updated.indexOf("scroll_step = 3\n[other]") >= 0);
+        verify(!updated.endsWith("\n\n"));
         compare(BarSettings.parse(updated).scroll_step, 3);
         verify(!BarSettings.isSupported(updated));
     }

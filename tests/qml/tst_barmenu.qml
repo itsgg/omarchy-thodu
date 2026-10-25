@@ -2,7 +2,7 @@ import QtQuick
 import QtTest
 import "../../lib/BarScan.js" as BarScan
 
-// REQ-SHELL-02: transient popup actions are not bar targets.
+// Transient popup actions are not bar targets.
 Item {
     id: desktop
     width: 300

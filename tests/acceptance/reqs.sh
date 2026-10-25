@@ -19,6 +19,6 @@ for req in "$@"; do
 done
 cargo test --workspace --locked --quiet
 if [ -n "$qml" ]; then
-    QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qmltestrunner -input tests/qml -import .
+    QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qmltestrunner -input tests/qml -import . -import tests/qml-stubs
 fi
 echo "ok: $*"

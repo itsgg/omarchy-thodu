@@ -8,7 +8,7 @@ import "components"
 import "lib/BarScan.js" as BarScan
 import "lib/BarSettings.js" as BarSettings
 
-// Visible bar control and bar target reporter (REQ-SHELL-01, REQ-SHELL-02).
+// Visible bar control and bar target reporter (REQ-SHELL-01).
 BarWidget {
     id: probe
     moduleName: "io.github.itsgg.thodu"

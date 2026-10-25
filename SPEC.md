@@ -239,13 +239,6 @@ Acceptance:
 - scenario: a QML test with a fake bar of three items reports three targets with their bounds.
 - scenario: with no active app window, the source collects cached bar items by monitor even when the app window list is empty.
 
-### REQ-SHELL-02: The bar widget shows Thodu status and controls
-When the Thodu bar widget is configured, it shall show a visible, themed control with a tooltip. The control shall indicate whether the `thodud` user service is ready. Activating it shall open a themed, keyboard-navigable menu with actions to start hints, grid, and scroll sessions; controls to change `labels_only`, `status_display`, `scroll_step`, and `scroll_shift_step`; and an action to open the Thodu configuration file in an Omarchy terminal editor. Configuration changes shall persist to `~/.config/thodu/config.toml`, preserve comments and other supported settings, use the existing value constraints, and apply to newly started sessions. If the file contains invalid or unsupported settings, the menu shall explain that it needs editing and disable direct setting changes while keeping the editor action available. Escape or an outside click shall close the menu. The bar widget shall continue to report other clickable bar items for hint sessions.
-Acceptance:
-- scenario: QML tests verify the widget's settings are read, changed, persisted without dropping comments or other supported settings, and bounded by the existing configuration rules.
-- scenario: a QML test verifies the menu dispatches all three session modes and closes after a mode is selected.
-- live: the visible control appears in the bar, indicates service readiness, opens and closes its menu, launches each mode, and persists setting changes.
-
 ### Command line
 
 ### REQ-CLI-01: Targets for agents
@@ -374,7 +367,6 @@ Unit tests and properties cover labels, search, the grid, coordinates and the st
 - 2026-10-24: change 0016, sessions without an active app use Hyprland's focused monitor and can label bar items.
 - 2026-10-24: change 0017, accessible scroll areas, keyboard scroll mode, uinput wheel events and an F12-family scroll binding.
 - 2026-10-24: change 0018, configurable status detail and scroll distance, plus held H/J/K/L scrolling with retained keyboard capture.
-- 2026-10-25: change 0020, the Thodu bar widget is visible, reports service readiness, launches modes, and edits settings.
 
 ### Retired
 

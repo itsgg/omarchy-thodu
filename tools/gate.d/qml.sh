@@ -39,7 +39,7 @@ qml_tests() {
     local runner
     if ! compgen -G "tests/qml/tst_*.qml" >/dev/null; then echo "no tests/qml/tst_*.qml"; return 0; fi
     runner=$(qt_bin qmltestrunner) || { echo "qmltestrunner not found"; return 1; }
-    QT_QPA_PLATFORM=offscreen "$runner" -input tests/qml -import .
+    QT_QPA_PLATFORM=offscreen "$runner" -input tests/qml -import . -import tests/qml-stubs
 }
 
 qml_turn() {

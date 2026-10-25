@@ -43,9 +43,16 @@ Item {
 
     function moveSelection(dx, dy) {
         if (dx !== 0) {
-            if (root.selectedIndex === 3 || root.selectedIndex === 4
-                    || (root.selectedIndex >= 5 && root.selectedIndex <= 8))
-                dispatch(root.selectedIndex, dx < 0 ? -1 : 1);
+            const direction = dx < 0 ? -1 : 1;
+            if (root.selectedIndex <= 2) {
+                root.selectedIndex = (root.selectedIndex + direction + 3) % 3;
+            } else if (root.selectedIndex === 3 || root.selectedIndex === 4) {
+                dispatch(root.selectedIndex, direction);
+            } else if (root.selectedIndex === 5 || root.selectedIndex === 6) {
+                root.selectedIndex = direction < 0 ? 5 : 6;
+            } else if (root.selectedIndex === 7 || root.selectedIndex === 8) {
+                root.selectedIndex = direction < 0 ? 7 : 8;
+            }
             return;
         }
         const direction = dy < 0 ? -1 : 1;

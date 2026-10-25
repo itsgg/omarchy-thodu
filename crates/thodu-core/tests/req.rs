@@ -20,9 +20,13 @@ use thodu_core::tree::{self, App, Node, Snapshot};
 use thodu_core::unregistered;
 
 fn cases(path: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../spec/cases")
-        .join(path)
+    let root = std::env::current_dir()
+        .expect("test working directory")
+        .ancestors()
+        .find(|candidate| candidate.join("spec/cases").is_dir())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
+    root.join("spec/cases").join(path)
 }
 
 fn jsonl(path: &str) -> Vec<Value> {
