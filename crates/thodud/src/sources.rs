@@ -595,6 +595,23 @@ impl Source for Shell {
 }
 
 impl Shell {
+    /// Whether a shell target still describes the latest bar item and layer
+    /// origin when it is about to be activated.
+    pub fn target_is_stale(&self, target: &Target, monitor: &Monitor) -> bool {
+        let items = self
+            .items
+            .lock()
+            .ok()
+            .and_then(|items| items.get(&monitor.name).cloned());
+        let origin = (self.layer_origin)(&monitor.name, BAR_NAMESPACE);
+        shell_target_is_stale(
+            target,
+            items.as_deref().unwrap_or_default(),
+            origin,
+            monitor,
+        )
+    }
+
     fn collect_monitor(&self, monitor: &Monitor) -> Found {
         let items = self
             .items
@@ -619,6 +636,21 @@ impl Shell {
         let said = format!("{} targets from the bar", targets.len());
         Ok(SourceTargets::new(targets, said))
     }
+}
+
+fn shell_target_is_stale(
+    target: &Target,
+    items: &[ShellItem],
+    origin: Option<(i32, i32)>,
+    monitor: &Monitor,
+) -> bool {
+    let Some(origin) = origin else {
+        return true;
+    };
+    shell_targets(items, origin, monitor)
+        .into_iter()
+        .find(|current| current.id == target.id)
+        .is_none_or(|current| current.bounds != target.bounds || current.text != target.text)
 }
 
 /// The layer-shell namespace of Omarchy's bar.
@@ -1079,6 +1111,83 @@ mod tests {
             got.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
             ["b0", "b1", "b2"]
         );
+    }
+
+    // REQ-SRC-07: a shell target is valid only while its current item and
+    // layer origin still match the geometry shown to the user.
+    #[test]
+    fn req_src_07_shell_target_is_rechecked_against_latest_bar_items() {
+        let monitor = Monitor {
+            name: "M".into(),
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 50,
+            scale: 1.0,
+        };
+        let original = vec![ShellItem {
+            x: 10,
+            y: 2,
+            w: 20,
+            h: 20,
+            text: "tray item".into(),
+        }];
+        let shell = Shell {
+            items: Mutex::new(std::collections::HashMap::from([(
+                monitor.name.clone(),
+                original.clone(),
+            )])),
+            budget: Duration::from_millis(40),
+            layer_origin: |_, _| Some((0, 0)),
+        };
+        let target = shell_targets(&original, (0, 0), &monitor)[0].clone();
+        assert!(!shell.target_is_stale(&target, &monitor));
+
+        shell.items.lock().unwrap().insert(
+            monitor.name.clone(),
+            vec![ShellItem {
+                x: 10,
+                text: "different tray item".into(),
+                ..original[0].clone()
+            }],
+        );
+        assert!(shell.target_is_stale(&target, &monitor));
+
+        shell.items.lock().unwrap().insert(
+            monitor.name.clone(),
+            vec![ShellItem {
+                x: 35,
+                ..original[0].clone()
+            }],
+        );
+        assert!(shell.target_is_stale(&target, &monitor));
+
+        shell
+            .items
+            .lock()
+            .unwrap()
+            .insert(monitor.name.clone(), Vec::new());
+        assert!(shell.target_is_stale(&target, &monitor));
+
+        let moved_bar = Shell {
+            items: Mutex::new(std::collections::HashMap::from([(
+                monitor.name.clone(),
+                original.clone(),
+            )])),
+            budget: Duration::from_millis(40),
+            layer_origin: |_, _| Some((5, 0)),
+        };
+        assert!(moved_bar.target_is_stale(&target, &monitor));
+
+        let missing_bar = Shell {
+            items: Mutex::new(std::collections::HashMap::from([(
+                monitor.name.clone(),
+                original,
+            )])),
+            budget: Duration::from_millis(40),
+            layer_origin: |_, _| None,
+        };
+        assert!(missing_bar.target_is_stale(&target, &monitor));
     }
 
     // REQ-SHELL-01: bar targets are available by monitor when no app window

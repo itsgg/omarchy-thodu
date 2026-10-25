@@ -717,10 +717,10 @@ impl Daemon {
     }
 
     /// The first click of a session (REQ-ACT-01, REQ-ACT-02, REQ-ACT-03):
-    /// wait for the overlay to be out of the way, check the window has not
-    /// moved, and click. A moved window gets a fresh session instead. A
-    /// lingering click leaves the pointer where it is until a second Return
-    /// or the end of the wait; any other goes back at once.
+    /// wait for the overlay to be out of the way, recheck window targets and
+    /// the latest shell item geometry, and click. A changed target gets a
+    /// fresh session instead. A lingering click leaves the pointer where it
+    /// is until a second Return or the end of the wait; any other goes back.
     fn act(self: &Arc<Self>, id: &str, act: &Act) {
         let Ok(sessions) = self.sessions.lock() else {
             return;
@@ -747,6 +747,8 @@ impl Daemon {
             return;
         };
         drop(sessions);
+        let mut target_changed =
+            source == Source::Shell && self.shell.target_is_stale(&target, &monitor);
         if !target.window.is_empty() {
             let Some(window) = window else {
                 self.remove(id);
@@ -759,21 +761,19 @@ impl Daemon {
                 None
             };
             let newly_covered = visible_target_owner_changed(&target, owner.as_deref());
-            if target_is_stale(&target, &window, now.as_ref()) || newly_covered {
-                eprintln!("thodud: {id}: the target changed or became covered; collecting again");
-                self.remove(id);
-                let result = start_refreshed_session(
-                    options,
-                    refetch,
-                    |window, scope, mode, overlay, test| {
-                        self.start(window, scope, mode, overlay, test)
-                    },
-                );
-                if let Err(e) = result {
-                    eprintln!("thodud: {id}: {}", e.message.unwrap_or_default());
-                }
-                return;
+            target_changed |= target_is_stale(&target, &window, now.as_ref()) || newly_covered;
+        }
+        if target_changed {
+            eprintln!("thodud: {id}: the target changed or became covered; collecting again");
+            self.remove(id);
+            let result =
+                start_refreshed_session(options, refetch, |window, scope, mode, overlay, test| {
+                    self.start(window, scope, mode, overlay, test)
+                });
+            if let Err(e) = result {
+                eprintln!("thodud: {id}: {}", e.message.unwrap_or_default());
             }
+            return;
         }
         let restore = hypr::cursor().ok().and_then(|p| {
             hypr::monitors()
