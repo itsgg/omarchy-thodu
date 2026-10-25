@@ -12,6 +12,7 @@ Keyboard hints for everything visible on an Omarchy screen. Thodu finds controls
 - Screenshot hints for visible controls missing from an app's accessibility tree.
 - Grid mode to click any point, and HJKL scroll mode across visible windows.
 - Labels-only, text search, uppercase final-key activation and configurable scroll speed.
+- A top-bar control for service status, mode launchers and live settings.
 
 Accessibility support varies by app. Visual hints can include non-interactive text or miss controls. See [app setup](docs/accessibility.md) for Chromium, Electron and web app guidance.
 

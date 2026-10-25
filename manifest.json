@@ -16,7 +16,7 @@
   },
   "barWidget": {
     "displayName": "Thodu",
-    "description": "Draws nothing; tells Thodu where the bar's buttons are, so a session can label them.",
+    "description": "Shows Thodu status and controls; also reports bar buttons for hint sessions.",
     "category": "System",
     "allowMultiple": false,
     "defaultSection": "right"
