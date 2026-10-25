@@ -1,9 +1,17 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import "../lib/BarMenuActions.js" as Actions
 
+// The bar control's menu (REQ-SHELL-02), laid out with Omarchy's own panel
+// kit so it reads like the built-in panels: a header with the service state,
+// the three session modes as bordered buttons, then labelled setting rows
+// (title and a one-line description on the left, the control on the right)
+// under a section header, and the editor action. Every setting row shares
+// Toggle's metrics, so labels and controls line up down the panel.
 Item {
     id: root
 
@@ -21,6 +29,8 @@ Item {
     signal actionRequested(var action)
 
     readonly property int rowCount: 10
+    readonly property var statusValues: ["auto", "always", "off"]
+    readonly property string statusValue: String(root.options.status_display || "auto")
     readonly property string serviceLabel: serviceState === "active" ? "Ready"
         : serviceState === "checking" ? "Checking service" : "Service stopped"
     readonly property color serviceColor: serviceState === "active" ? Commons.Color.accent
@@ -35,6 +45,11 @@ Item {
         if (Actions.closesAfter(action))
             root.close();
         root.actionRequested(action);
+    }
+
+    // A click on one option of a choice sets it directly; the keyboard steps.
+    function choose(key, value) {
+        root.actionRequested({ kind: "setting", key: key, value: value });
     }
 
     function activateSelected() {
@@ -72,7 +87,7 @@ Item {
         open: root.open
         focusTarget: keyCatcher
         padding: Style.space(14)
-        contentWidth: panel.fittedContentWidth(Style.space(390))
+        contentWidth: panel.fittedContentWidth(Style.space(400))
         contentHeight: panel.fittedContentHeight(menuContent.implicitHeight)
 
         PanelKeyCatcher {
@@ -86,156 +101,300 @@ Item {
 
         Column {
             id: menuContent
+            objectName: "thoduBarMenuContent"
             anchors.fill: parent
-            spacing: Style.space(8)
+            spacing: Style.space(12)
 
-            Row {
+            // ---------- Header: the name and whether thodud is ready ----------
+            Item {
+                id: header
                 width: parent.width
-                spacing: Style.space(8)
+                implicitHeight: Math.max(title.implicitHeight, service.implicitHeight)
+
                 Text {
+                    id: title
+                    textFormat: Text.PlainText
                     text: "Thodu"
                     color: Commons.Color.foreground
                     font.family: Style.font.family
-                    font.pixelSize: Style.font.body
+                    font.pixelSize: Style.font.title
                     font.bold: true
+                    anchors.left: parent.left
                     anchors.verticalCenter: parent.verticalCenter
                 }
-                Rectangle {
-                    width: Style.space(7)
-                    height: width
-                    radius: width / 2
-                    color: root.serviceColor
+
+                Row {
+                    id: service
+                    objectName: "thoduBarMenuService"
+                    spacing: Style.space(6)
+                    anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
-                }
-                Text {
-                    text: root.serviceLabel
-                    color: root.serviceColor
-                    font.family: Style.font.family
-                    font.pixelSize: Style.font.caption
-                    anchors.verticalCenter: parent.verticalCenter
+
+                    Rectangle {
+                        width: Style.space(7)
+                        height: width
+                        radius: width / 2
+                        color: root.serviceColor
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    Text {
+                        textFormat: Text.PlainText
+                        text: root.serviceLabel.toUpperCase()
+                        color: root.serviceColor
+                        font.family: Style.font.family
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                        font.letterSpacing: 1.2
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
                 }
             }
 
+            // ---------- The session modes ----------
             Row {
+                id: modes
                 width: parent.width
                 spacing: Style.space(6)
 
-                Button {
-                    width: (parent.width - Style.space(12)) / 3
-                    text: "Hints"
-                    hasCursor: root.selectedIndex === 0
-                    onClicked: root.dispatch(0, 0)
+                readonly property real cellWidth: (width - spacing * 2) / 3
+
+                ModeButton { index: 0; iconText: ""; text: "Hints" }
+                ModeButton { index: 1; iconText: ""; text: "Grid" }
+                ModeButton { index: 2; iconText: ""; text: "Scroll" }
+            }
+
+            PanelSeparator { width: parent.width }
+
+            Column {
+                id: settings
+                width: parent.width
+                spacing: Style.space(8)
+
+                PanelSectionHeader { text: "SETTINGS" }
+
+                Toggle {
+                    id: labelsOnly
+                    objectName: "thoduSettingLabelsOnly"
+                    width: parent.width
+                    label: "Labels only"
+                    description: "Letters type labels; / starts a search."
+                    checked: root.options.labels_only === true
+                    hasCursor: root.selectedIndex === 3
+                    enabled: root.settingsReady
+                    opacity: enabled ? 1 : 0.5
+                    onClicked: root.dispatch(3, 0)
+                    onHovered: function(on) { if (on) root.selectedIndex = 3 }
                 }
-                Button {
-                    width: (parent.width - Style.space(12)) / 3
-                    text: "Grid"
-                    hasCursor: root.selectedIndex === 1
-                    onClicked: root.dispatch(1, 0)
+
+                SettingRow {
+                    objectName: "thoduSettingStatus"
+                    label: "Status detail"
+                    description: "Counts in the toast."
+                    hasCursor: root.selectedIndex === 4
+                    onHovered: function(on) { if (on) root.selectedIndex = 4 }
+
+                    ButtonGroup {
+                        options: root.statusValues
+                        value: root.statusValue
+                        focusable: false
+                        cursorIndex: root.selectedIndex === 4 ? root.statusValues.indexOf(root.statusValue) : -1
+                        fontSize: Style.font.bodySmall
+                        enabled: root.settingsReady
+                        onChanged: function(value) { root.choose("status_display", value) }
+                    }
                 }
-                Button {
-                    width: (parent.width - Style.space(12)) / 3
-                    text: "Scroll"
-                    hasCursor: root.selectedIndex === 2
-                    onClicked: root.dispatch(2, 0)
+
+                SettingRow {
+                    objectName: "thoduSettingScrollStep"
+                    label: "Scroll step"
+                    description: "Wheel detents per H/J/K/L."
+                    hasCursor: root.selectedIndex === 5 || root.selectedIndex === 6
+                    onHovered: function(on) { if (on && root.selectedIndex !== 6) root.selectedIndex = 5 }
+
+                    Stepper {
+                        value: Number(root.options.scroll_step || 1)
+                        downIndex: 5
+                        upIndex: 6
+                    }
+                }
+
+                SettingRow {
+                    objectName: "thoduSettingShiftStep"
+                    label: "Shift step"
+                    description: "Wheel detents per Shift+H/J/K/L."
+                    hasCursor: root.selectedIndex === 7 || root.selectedIndex === 8
+                    onHovered: function(on) { if (on && root.selectedIndex !== 8) root.selectedIndex = 7 }
+
+                    Stepper {
+                        value: Number(root.options.scroll_shift_step || 5)
+                        downIndex: 7
+                        upIndex: 8
+                    }
                 }
             }
 
             PanelSeparator { width: parent.width }
 
-            Button {
+            // ---------- The editor, and what applies when ----------
+            Item {
+                id: footer
                 width: parent.width
-                text: "Labels only: " + (root.options.labels_only ? "On" : "Off")
-                leftAlign: true
-                hasCursor: root.selectedIndex === 3
-                enabled: root.settingsReady
-                onClicked: root.dispatch(3, 0)
-            }
+                implicitHeight: Math.max(editConfig.implicitHeight, hint.implicitHeight)
 
-            Button {
-                width: parent.width
-                text: "Status detail: " + String(root.options.status_display || "auto")
-                leftAlign: true
-                hasCursor: root.selectedIndex === 4
-                enabled: root.settingsReady
-                onClicked: root.dispatch(4, 0)
-            }
+                Button {
+                    id: editConfig
+                    objectName: "thoduEditConfiguration"
+                    iconText: ""
+                    text: root.settingsReady ? "Edit configuration" : "Edit to fix settings"
+                    fontSize: Style.font.bodySmall
+                    bordered: true
+                    hasCursor: root.selectedIndex === 9
+                    enabled: root.configEditable
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    onClicked: root.dispatch(9, 0)
+                    onHovered: function(on) { if (on) root.selectedIndex = 9 }
+                }
 
-            Row {
-                width: parent.width
-                spacing: Style.space(6)
                 Text {
-                    width: parent.width - decrease.width - increase.width - parent.spacing * 2
-                    text: "Scroll step: " + String(root.options.scroll_step || 1)
-                    color: Commons.Color.foreground
+                    id: hint
+                    textFormat: Text.PlainText
+                    text: root.settingsReady ? "Applies to new sessions" : "The configuration needs editing"
+                    color: Qt.darker(Commons.Color.foreground, 1.4)
                     font.family: Style.font.family
-                    font.pixelSize: Style.font.body
-                    verticalAlignment: Text.AlignVCenter
-                }
-                Button {
-                    id: decrease
-                    width: Style.space(32)
-                    text: "-"
-                    hasCursor: root.selectedIndex === 5
-                    enabled: root.settingsReady
-                    onClicked: root.dispatch(5, 0)
-                }
-                Button {
-                    id: increase
-                    width: Style.space(32)
-                    text: "+"
-                    hasCursor: root.selectedIndex === 6
-                    enabled: root.settingsReady
-                    onClicked: root.dispatch(6, 0)
+                    font.pixelSize: Style.font.caption
+                    horizontalAlignment: Text.AlignRight
+                    elide: Text.ElideLeft
+                    anchors.left: editConfig.right
+                    anchors.leftMargin: Style.space(10)
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
                 }
             }
+        }
+    }
 
-            Row {
-                width: parent.width
-                spacing: Style.space(6)
-                Text {
-                    width: parent.width - decreaseShift.width - increaseShift.width - parent.spacing * 2
-                    text: "Shift step: " + String(root.options.scroll_shift_step || 5)
-                    color: Commons.Color.foreground
-                    font.family: Style.font.family
-                    font.pixelSize: Style.font.body
-                    verticalAlignment: Text.AlignVCenter
-                }
-                Button {
-                    id: decreaseShift
-                    width: Style.space(32)
-                    text: "-"
-                    hasCursor: root.selectedIndex === 7
-                    enabled: root.settingsReady
-                    onClicked: root.dispatch(7, 0)
-                }
-                Button {
-                    id: increaseShift
-                    width: Style.space(32)
-                    text: "+"
-                    hasCursor: root.selectedIndex === 8
-                    enabled: root.settingsReady
-                    onClicked: root.dispatch(8, 0)
-                }
-            }
+    // A session mode: a bordered button with its icon, one of three across.
+    component ModeButton: Button {
+        required property int index
+        width: modes.cellWidth
+        fontSize: Style.font.bodySmall
+        iconSize: Style.font.title
+        bordered: true
+        verticalPadding: Style.spacing.controlPaddingY + Style.space(2)
+        hasCursor: root.selectedIndex === index
+        onClicked: root.dispatch(index, 0)
+        onHovered: function(on) { if (on) root.selectedIndex = index }
+    }
 
-            Button {
-                width: parent.width
-                text: root.settingsReady ? "Edit configuration" : "Edit configuration to fix settings"
-                leftAlign: true
-                hasCursor: root.selectedIndex === 9
-                enabled: root.configEditable
-                onClicked: root.dispatch(9, 0)
-            }
+    // A labelled setting with Toggle's metrics, surface and cursor styling:
+    // the title and description on the left, the control on the right.
+    component SettingRow: BorderSurface {
+        id: row
+        property string label: ""
+        property string description: ""
+        property bool hasCursor: false
+        default property alias control: slot.data
+        readonly property Item labelArea: labels
+        readonly property Item controlArea: slot
+        signal hovered(bool on)
+
+        readonly property bool hot: hasCursor || hover.hovered
+
+        width: parent ? parent.width : implicitWidth
+        implicitHeight: Math.max(54, labels.implicitHeight + Style.spacing.huge, slot.height + Style.spacing.huge)
+        radius: Style.cornerRadius
+        color: Style.controlFill(false, hot, Commons.Color.foreground, Commons.Color.accent)
+        borderSpec: Border.controlSpec(hot ? "hover-cursor" : "normal", Commons.Color.foreground, Commons.Color.accent)
+
+        Behavior on color { ColorAnimation { duration: 100 } }
+
+        Column {
+            id: labels
+            anchors.left: parent.left
+            anchors.leftMargin: row.borderLeft + Style.spacing.rowPaddingX
+            anchors.right: slot.left
+            anchors.rightMargin: Style.spacing.rowPaddingX
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.spacing.xs
 
             Text {
+                textFormat: Text.PlainText
+                text: row.label
+                color: Commons.Color.foreground
+                font.family: Style.font.family
+                font.pixelSize: Style.font.subtitle
+                font.bold: true
+                elide: Text.ElideRight
                 width: parent.width
-                text: root.settingsReady ? "Changes apply to new sessions. Esc closes."
-                    : "Configuration needs editing. Esc closes."
-                color: Qt.darker(Commons.Color.foreground, 1.3)
+            }
+            Text {
+                textFormat: Text.PlainText
+                visible: row.description !== ""
+                text: row.description
+                color: Qt.darker(Commons.Color.foreground, 1.5)
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption
                 wrapMode: Text.WordWrap
+                width: parent.width
             }
+        }
+
+        Item {
+            id: slot
+            anchors.right: parent.right
+            anchors.rightMargin: row.borderRight + Style.spacing.rowPaddingX
+            anchors.verticalCenter: parent.verticalCenter
+            width: childrenRect.width
+            height: childrenRect.height
+        }
+
+        HoverHandler {
+            id: hover
+            onHoveredChanged: row.hovered(hovered)
+        }
+    }
+
+    // A number with a minus and a plus button around it; each button is its
+    // own cursor stop, so Left and Right move between them and Enter steps.
+    component Stepper: Row {
+        id: stepper
+        property int value: 1
+        property int downIndex: 0
+        property int upIndex: 0
+
+        spacing: Style.space(4)
+
+        Button {
+            width: Style.spacing.controlHeight
+            iconText: ""
+            bordered: true
+            hasCursor: root.selectedIndex === stepper.downIndex
+            enabled: root.settingsReady && stepper.value > 1
+            anchors.verticalCenter: parent.verticalCenter
+            onClicked: root.dispatch(stepper.downIndex, 0)
+            onHovered: function(on) { if (on) root.selectedIndex = stepper.downIndex }
+        }
+        Text {
+            textFormat: Text.PlainText
+            text: String(stepper.value)
+            width: Style.space(28)
+            horizontalAlignment: Text.AlignHCenter
+            color: Commons.Color.foreground
+            font.family: Style.font.family
+            font.pixelSize: Style.font.body
+            font.bold: true
+            anchors.verticalCenter: parent.verticalCenter
+        }
+        Button {
+            width: Style.spacing.controlHeight
+            iconText: ""
+            bordered: true
+            hasCursor: root.selectedIndex === stepper.upIndex
+            enabled: root.settingsReady && stepper.value < 100
+            anchors.verticalCenter: parent.verticalCenter
+            onClicked: root.dispatch(stepper.upIndex, 0)
+            onHovered: function(on) { if (on) root.selectedIndex = stepper.upIndex }
         }
     }
 }

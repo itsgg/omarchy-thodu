@@ -2,7 +2,7 @@
 
 ## Hints
 
-The default hints session covers visible windows on the focused monitor and the Omarchy bar. Targets appear first; screenshot-based candidates arrive in a second pass. Press `Escape` to close. The Thodu bar control shows whether its service is ready, starts hints, grid, or scroll sessions, and opens the settings menu. The menu can change label mode, status detail and scroll steps; changes apply to new sessions. `Edit configuration` opens `~/.config/thodu/config.toml` in an Omarchy terminal editor.
+The default hints session covers visible windows on the focused monitor and the Omarchy bar. Targets appear first; screenshot-based candidates arrive in a second pass. Press `Escape` to close. The Thodu bar control shows whether its service is ready, starts hints, grid, or scroll sessions, and opens the settings menu. The menu can change label mode, status detail and scroll steps; changes apply to new sessions. `Edit configuration` opens `~/.config/thodu/config.toml` in an Omarchy terminal editor. A hotkey can open the menu as it opens Omarchy's own panels: `omarchy-shell io.github.itsgg.thodu.menu toggle` (also `open` and `close`).
 
 - In search-first mode, lowercase letters filter target text and `Shift`+label keys select a target. Uppercase the final label key to activate it. `Return` activates the focused target.
 - `Tab` and `Shift+Tab` change focus. `Space` opens the grid when no target is focused.

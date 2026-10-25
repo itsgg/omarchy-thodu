@@ -60,6 +60,16 @@ BarWidget {
         probe.close();
     }
 
+    // A hotkey opens the menu as it opens Omarchy's own panels:
+    // omarchy-shell io.github.itsgg.thodu.menu toggle
+    IpcHandler {
+        target: "io.github.itsgg.thodu.menu"
+
+        function open() { probe.open() }
+        function close() { probe.close() }
+        function toggle() { probe.toggle() }
+    }
+
     function refreshService() {
         if (!serviceProbe.running)
             serviceProbe.running = true;
