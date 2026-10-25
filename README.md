@@ -40,3 +40,7 @@ tools/gate
 ```
 
 The project contract is in [SEED.md](SEED.md) and [SPEC.md](SPEC.md). The screenshot fallback uses [Woints](https://github.com/wochap/woints), pinned in `Cargo.toml` under its MIT license.
+
+## License
+
+MIT; see [LICENSE](LICENSE).

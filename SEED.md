@@ -1,6 +1,6 @@
 # Thodu: Product Founding Brief
 
-Created 2026-10-21. Updated 2026-10-21 with the founder decision that Thodu reads web pages itself. Owner: GG. Status: current founding brief. Only the founder intent in section 1 is established; everything else is a product proposal, hypothesis or open decision.
+Created 2026-10-21. Updated 2026-10-21 with the founder decision that Thodu reads web pages itself, and 2026-10-25 with the decision to publish it under the MIT licence. Owner: GG. Status: current founding brief. Only the founder intent in section 1 is established; everything else is a product proposal, hypothesis or open decision.
 
 This document defines Thodu's purpose, intended behavior and decision boundaries. Specifications, architecture, tests and implementation plans derive from it. Thodu, Tamil for "touch", is the working name. Nothing in it has been built or measured, apart from the observations of the founder's machine in R8.
 
@@ -33,7 +33,7 @@ Omarchy: the Arch Linux setup that runs the Hyprland compositor and omarchy-shel
 
 ## 2. People and problems
 
-The first user is GG on his laptop. It runs Omarchy 4.0.6 and Hyprland 0.56.2 with the Lua configuration, on one 1920x1200 display at scale 1.25 [R8]. On 2026-10-21 his open windows were foot terminals, Zed, Chromium with Slack as an app window, and Evince [R8]. Other Omarchy users become users only if the project is published (open decision, section 12).
+The first user is GG on his laptop. It runs Omarchy 4.0.6 and Hyprland 0.56.2 with the Lua configuration, on one 1920x1200 display at scale 1.25 [R8]. On 2026-10-21 his open windows were foot terminals, Zed, Chromium with Slack as an app window, and Evince [R8]. The repository is public under the MIT licence (GG's decision, 2026-10-25), so other Omarchy users can run it; it stays a personal project built for his machine.
 
 Problem hypothesis: on Omarchy, windows, workspaces and launching are already on the keyboard. Acting inside an app is not. Pressing a toolbar button, picking a sidebar entry, choosing from a context menu or scrolling one pane of several still needs the touchpad, unless that app has its own keyboard path. How often this costs GG time has not been measured.
 
@@ -131,7 +131,7 @@ The strongest substitute is neru closing its Hyprland gaps, or woints maturing. 
 
 Thodu is a personal project. There is no buyer and no price.
 
-GG's earlier Omarchy plugins, Nodi and the headset widget, are public and MIT licensed, which suggests a route if he wants other Omarchy users to have Thodu. Whether to publish is an open decision.
+Thodu is public and MIT licensed, as GG's earlier Omarchy plugins, Nodi and the headset widget, are (GG's decision, 2026-10-25).
 
 The costs are coding agents' time on GG's subscriptions and his own time trying it. Chromium's tree, once woken, costs memory on every session's browser [R4]; it is measured, not assumed small.
 
@@ -139,7 +139,7 @@ The costs are coding agents' time on GG's subscriptions and his own time trying 
 
 Product proposal. The first coherent experience is click mode with search and the grid, in the focused window, on GG's laptop. Targets come from the accessibility tree for GTK3, GTK4, Qt Widgets, Electron apps and Chromium's own controls, and from the Omarchy bar. Every click action and Escape work. It is complete when coverage, placement, wrong actions and speed have been measured on the reference set and his daily apps, against thresholds fixed before that first measurement.
 
-Then, in order of what they unlock: scroll mode; web page targets; the screen image for foot and Zed; drag and hover; the Arivu interface; more monitors; and publishing, if GG chooses it. The order follows measured gaps, not dates.
+Then, in order of what they unlock: scroll mode; web page targets; the screen image for foot and Zed; drag and hover; the Arivu interface; and more monitors. The order follows measured gaps, not dates.
 
 Permanent boundary, from founder intent: Thodu is built for Omarchy, which means Hyprland and omarchy-shell. Other desktops are out of scope. The first experience does not narrow the product; supporting everything remains the goal. No staffing, budget or time constraint has been stated.
 
@@ -179,7 +179,7 @@ A source that underperforms is a component failure. The project fails if, after 
 
 Founder intent, stated 2026-10-21: replicate Homerow on Omarchy, complete, optimized for Omarchy, supporting everything, as a personal project. Everything else is a working proposal without separate founder approval.
 
-Working choices made when the project was created on 2026-10-21, open to GG's change: the name Thodu; the repository `omarchy-thodu`, following his Omarchy plugin repositories `omarchy-nodi` and `omarchy-headset`; a plugin id of the form `io.github.itsgg.thodu`, as Nodi uses; and a private repository until he decides to publish.
+Working choices made when the project was created on 2026-10-21, open to GG's change: the name Thodu; the repository `omarchy-thodu`, following his Omarchy plugin repositories `omarchy-nodi` and `omarchy-headset`; and a plugin id of the form `io.github.itsgg.thodu`, as Nodi uses. The repository started private; on 2026-10-25 GG confirmed it public and chose the MIT licence his other Omarchy plugins use.
 
 | Open choice | Next action | Interim direction |
 |---|---|---|
@@ -189,7 +189,6 @@ Working choices made when the project was created on 2026-10-21, open to GG's ch
 | Reuse of neru and woints | Decide per component when building it | Read both; reuse MIT code with attribution where it saves work |
 | Thresholds | Fix before the first measurement | None |
 | Keybindings | Pick keys free in his configuration (`omarchy menu keybindings --print`) | None bound |
-| Publishing and licence | GG decides once there is something to show | Private |
 
 ### How to build from this seed
 
@@ -203,6 +202,7 @@ Record material changes with their date, reason and effect on downstream work. K
 
 - 2026-10-21: created.
 - 2026-10-21: founder decision that Thodu reads web pages itself, with no dependence on Vimium; Vimium's labels in the Slack app window showed that extensions run there (R10). Sections 1, 5, 7, 9, 11 and 12 updated.
+- 2026-10-25: GG confirmed the repository is public and chose the MIT licence, as Nodi and the headset widget use. Sections 2, 8, 9 and 12 updated; a LICENSE file was added at the root, and SPEC.md is unaffected.
 
 ### Evidence register
 

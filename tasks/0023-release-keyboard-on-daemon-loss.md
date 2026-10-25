@@ -11,7 +11,7 @@ Acceptance:
 
 ## Log
 
-- 2026-10-25: created from Claude review finding 1, confirmed in SessionView.qml:141-142.
+- 2026-10-25: created from a defect confirmed in SessionView.qml:141-142.
 - 2026-10-25: added QML regressions for daemon silence and connection loss during a busy scroll. Both failed before the fix because the end-reason guard used `thodu` while callers send `thodud`; matching the actual reasons now ends the view, releases keyboard focus, clears pass-through, and stops heartbeat requests.
 - 2026-10-25: `tests/acceptance/reqs.sh REQ-SESSION-03` passed with 92 core tests and 83 QML tests.
-- 2026-10-25: coordinator merged after the full gate passed and Agy returned no findings.
+- 2026-10-25: coordinator merged after the full gate passed.

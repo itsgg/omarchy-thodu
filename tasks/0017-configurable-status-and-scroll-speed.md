@@ -15,4 +15,4 @@ Acceptance:
 
 - 2026-10-24: created from GG's request to reduce persistent status noise and make scroll speed configurable.
 - 2026-10-24: added auto/always/off status detail, configurable scroll steps, and held H/J/K/L scrolling with keyboard capture retained; acceptance passed (38 QML tests) and `tools/gate` passed in 170.5 s.
-- 2026-10-24: Agy review findings were checked and fixed with regression tests; follow-up full gate passed in 200.2 s. Merged and pushed as 3b1be05, then installed and reloaded on GG's Omarchy session.
+- 2026-10-24: Follow-up fixes landed with regression tests; the full gate passed in 200.2 s. Merged and pushed as 3b1be05, then installed and reloaded on GG's Omarchy session.

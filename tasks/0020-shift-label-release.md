@@ -14,7 +14,7 @@ Acceptance:
 ## Log
 
 - 2026-10-25: created after GG reported that Shift+label activation opens browser links in a new window.
-- 2026-10-25: claimed by codex-shift-activation at 00:39 UTC.
+- 2026-10-25: claimed at 00:39 UTC.
 - 2026-10-25: buffered shifted letter requests until Shift release, then dispatched them in order; ending a session clears pending requests. This keeps the physical modifier up before an uppercase label can trigger a click. `tests/acceptance/reqs.sh REQ-ACT-01` passed: 92 Rust tests and 53 QML tests.
 - 2026-10-25: narrowed the buffer to a shifted key that completes a visible non-grid label. Prefixes now dispatch immediately, a pending activation shows a release cue, and Escape cancels it. Added coverage for ordering and release behavior after review.
 - 2026-10-25: `tests/acceptance/reqs.sh REQ-ACT-01` passed after the refinement: 92 Rust tests and 55 QML tests.

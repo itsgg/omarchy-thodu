@@ -13,5 +13,5 @@ Acceptance:
 
 - 2026-10-24: created after code review found that stale-target refresh always enabled the overlay.
 - 2026-10-24: stored the overlay mode in each session and reused it with the test flag when stale-target refresh recollects. Corrected the exact acceptance selector after confirming the old command ran zero tests. The requirement test passed (1 test); `tools/gate` passed in 148.8 seconds. `cargo-deny` was unavailable and skipped.
-- 2026-10-24: Agy's first review found that the test did not cover the settings passed to the refreshed start. Routed the refresh through a testable start dispatcher and asserted the request, mode, overlay and both test values. A deliberate `overlay=true` mutation failed the acceptance test; restoring the implementation made it pass.
-- 2026-10-24: Agy verified the updated refresh-start test. The recheck passed the full gate (163.6 seconds); merged as `f8f40e7`.
+- 2026-10-24: Found that the test did not cover the settings passed to the refreshed start. Routed the refresh through a testable start dispatcher and asserted the request, mode, overlay and both test values. A deliberate `overlay=true` mutation failed the acceptance test; restoring the implementation made it pass.
+- 2026-10-24: The updated refresh-start test passed the full gate (163.6 seconds); merged as `f8f40e7`.

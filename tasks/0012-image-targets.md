@@ -17,6 +17,6 @@ Acceptance:
 - 2026-10-23: measured the Woints detector on the supplied screenshot: 20 file-list text lines at about 112 ms in release at 1920 px; set a 180 ms image budget and run it only for incomplete AT-SPI coverage.
 - 2026-10-23: SEED section 9 schedules general image coverage later; GG approved this narrower fallback for visible AT-SPI row gaps after the Flea report.
 - 2026-10-23: made sparse-row detection work under generic accessibility containers and reused the target builder's row roles; `tests/acceptance/reqs.sh REQ-SRC-06` and the full gate passed.
-- 2026-10-23: verified Agy's review: image targets were sorted after every AT-SPI target and skipped stale-window checks. Coordinate sorting now applies across both sources; window-scoped targets are stale-checked. Added REQ-LABEL-01 and REQ-ACT-03 regressions; all 40 core requirement tests and `tests/acceptance/reqs.sh REQ-SRC-06` pass.
-- 2026-10-23: landed on main at `5cb38ce`; the acceptance and full gate passed and the independent review was clean.
+- 2026-10-23: found that image targets were sorted after every AT-SPI target and skipped stale-window checks. Coordinate sorting now applies across both sources; window-scoped targets are stale-checked. Added REQ-LABEL-01 and REQ-ACT-03 regressions; all 40 core requirement tests and `tests/acceptance/reqs.sh REQ-SRC-06` pass.
+- 2026-10-23: landed on main at `5cb38ce`; the acceptance and full gate passed.
 - 2026-10-24: change 0014 superseded the original complete-tree opt-out after visible windows still lacked custom-painted controls; the acceptance now matches the current REQ-SRC-06 policy.
