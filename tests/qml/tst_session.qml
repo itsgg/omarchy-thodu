@@ -254,6 +254,35 @@ Item {
             verify(!view.active);
         }
 
+        function assert_req_session_03_daemon_loss_releases_busy_scroll(reason) {
+            view.scrollMode = true;
+            view.scrollBusy = true;
+            view.scrollPassThrough = true;
+            view.scrollReadySent = true;
+            view.heldScrollKey = "j";
+            top.answering = false;
+
+            view.end(reason, false);
+
+            tryVerify(() => top.ended !== null, 100, "daemon loss ends a busy scroll session immediately");
+            compare(top.ended.why, reason);
+            verify(!view.active, "the overlay no longer captures keyboard input");
+            verify(!view.activeFocus, "keyboard focus is released");
+            verify(!view.scrollBusy, "the pending scroll is cleared");
+            verify(!view.scrollPassThrough, "the pointer input region is restored");
+            const sent = top.sent.length;
+            wait(view.heartbeatMs * 2 + 20);
+            compare(top.sent.length, sent, "an ended session sends no more heartbeat requests");
+        }
+
+        function test_req_session_03_silence_during_scroll_releases_keyboard() {
+            assert_req_session_03_daemon_loss_releases_busy_scroll("thodud stopped answering");
+        }
+
+        function test_req_session_03_connection_loss_during_scroll_releases_keyboard() {
+            assert_req_session_03_daemon_loss_releases_busy_scroll("thodud closed the connection");
+        }
+
         function test_heartbeats_keep_a_session_open() {
             wait(view.silenceMs + 200);
             verify(view.active, "a live thodud keeps the session");

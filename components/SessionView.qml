@@ -138,8 +138,8 @@ FocusScope {
     function end(why, acting) {
         if (!view.active)
             return;
-        if (view.scrollMode && view.scrollBusy && why !== "thodu stopped answering" &&
-                why !== "thodu closed the connection" && why !== "escape") {
+        if (view.scrollMode && view.scrollBusy && why !== "thodud stopped answering" &&
+                why !== "thodud closed the connection" && why !== "escape") {
             view.stopScrollHold("");
             view.deferredEnd = { why: why, acting: acting };
             return;
