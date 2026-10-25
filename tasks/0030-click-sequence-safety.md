@@ -1,6 +1,6 @@
 # 0030: Check each click immediately before it, one click at a time
 
-Status: open
+Status: review
 Depends on: 0029
 Spec: REQ-ACT-01, REQ-ACT-02, REQ-ACT-03
 Goal: The click pipeline leaves room for a wrong click. Between the stale and ownership check and the press, thodud queries Hyprland several times for the pointer restore and, on the first Control-click, opens a uinput keyboard that sleeps 300 ms after the pointer has moved. Clicks from different sessions run on their own threads with no lock, though scrolls take one because the compositor has one pointer. The second click of a double Return clicks again after the 1 s wait even if the first click never happened, and never rechecks its target, so a first click that closes a dialog sends the second into whatever lies beneath. Take one pointer lock for clicks and scrolls alike, open the Control keyboard and compute the restore before the check, run the check right before the press, and give the second click the same check, skipping it when the first did not happen or the target moved or was covered.
@@ -14,3 +14,4 @@ Acceptance:
 ## Log
 
 - 2026-10-25: created from confirmed review findings on the click pipeline (second click without a check, check-to-click gap, clicks not serialised).
+- 2026-10-25: clicks and scroll actions share one pointer lock (`pointer_action`), held from the check until the last input. A click opens the Control keyboard and computes the pointer restore before its check, and `checked_click` runs the check and the press back to back. The second click of a double click is skipped when the first never happened within the wait or when its target moved or became covered. Four tests cover these; planted faults (second click without the first, without its recheck, clicks without the lock) were each caught. The order inside `act` is held by `checked_click`'s types, not by a test. `tests/acceptance/reqs.sh REQ-ACT-01 REQ-ACT-02 REQ-ACT-03` passes.

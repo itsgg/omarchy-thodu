@@ -143,9 +143,9 @@ struct Daemon {
     keyboard: Mutex<Option<keyboard::Keyboard>>,
     /// The uinput wheel for scroll mode, made on first use.
     wheel: Mutex<Option<wheel::Wheel>>,
-    /// Serializes pointer movement and temporary focus overrides across
-    /// scroll actions because the compositor has one pointer.
-    scroll_action: Mutex<()>,
+    /// The compositor has one pointer: clicks and scroll actions take turns
+    /// with it, each from its last check until its last input.
+    pointer_action: Mutex<()>,
     focus_records: Option<PathBuf>,
     dispatch_syntax: Option<focus::DispatchSyntax>,
 }
@@ -719,6 +719,18 @@ impl Daemon {
         pointer::perform(monitor, &input::plan(act), restore, &mut ctrl)
     }
 
+    /// Make the Control keyboard before a Control-click's check: the
+    /// compositor needs a moment to find a new device, which must not fall
+    /// between the check and the press. A failure here is left for the click
+    /// to report.
+    fn prepare_keyboard(&self) {
+        if let Ok(mut keyboard) = self.keyboard.lock()
+            && keyboard.is_none()
+        {
+            *keyboard = keyboard::Keyboard::open().ok();
+        }
+    }
+
     /// The first click of a session (REQ-ACT-01, REQ-ACT-02, REQ-ACT-03):
     /// wait for the overlay to be out of the way, recheck window targets and
     /// the latest shell item geometry, and click. A changed target gets a
@@ -755,42 +767,12 @@ impl Daemon {
             return;
         }
         let test = options.test;
-        let activation = dispatch_activation(
-            &target,
-            &self.shell,
-            &monitor,
+        let activation = checked_click(
+            &self.pointer_action,
             || {
-                if target.window.is_empty() {
-                    // The bar's layer must still own the point: a fullscreen
-                    // window or a notification over it would take the click.
-                    let (x, y) = target.bounds.center();
-                    return target.source == Source::Shell
-                        && hypr::owner_at(x, y)
-                            != Owner::Layer(sources::BAR_NAMESPACE.to_string());
+                if act.ctrl {
+                    self.prepare_keyboard();
                 }
-                let Some(window) = window.as_ref() else {
-                    return false;
-                };
-                let now = hypr::window(&window.address).ok().flatten();
-                let owner = hypr::window_at(target.bounds.center().0, target.bounds.center().1);
-                let newly_covered = visible_target_owner_changed(&target, owner.as_deref());
-                target_is_stale(&target, window, now.as_ref()) || newly_covered
-            },
-            || {
-                eprintln!("thodud: {id}: the target changed or became covered; collecting again");
-                self.remove(id);
-                let result = start_refreshed_session(
-                    options,
-                    refetch,
-                    |window, scope, mode, overlay, test| {
-                        self.start(window, scope, mode, overlay, test)
-                    },
-                );
-                if let Err(e) = result {
-                    eprintln!("thodud: {id}: {}", e.message.unwrap_or_default());
-                }
-            },
-            || {
                 let restore = hypr::cursor().ok().and_then(|p| {
                     hypr::monitors()
                         .ok()?
@@ -811,15 +793,43 @@ impl Daemon {
                 let workspace_before = (act.linger && source == Source::Shell)
                     .then(|| hypr::active_workspace_id(&monitor.name))
                     .flatten();
-                let now = if act.linger {
-                    None
-                } else {
-                    restore.as_ref().map(|(m, p)| (m, *p))
-                };
-                let click_result = self.perform(&monitor, act, now);
-                (restore, workspace_before, click_result)
+                (restore, workspace_before)
             },
-        );
+            |(restore, workspace_before)| {
+                dispatch_activation(
+                    &target,
+                    &self.shell,
+                    &monitor,
+                    || target_moved_or_covered(&target, window.as_ref()),
+                    || {
+                        eprintln!(
+                            "thodud: {id}: the target changed or became covered; collecting again"
+                        );
+                        self.remove(id);
+                        let result = start_refreshed_session(
+                            options,
+                            refetch,
+                            |window, scope, mode, overlay, test| {
+                                self.start(window, scope, mode, overlay, test)
+                            },
+                        );
+                        if let Err(e) = result {
+                            eprintln!("thodud: {id}: {}", e.message.unwrap_or_default());
+                        }
+                    },
+                    || {
+                        let now = if act.linger {
+                            None
+                        } else {
+                            restore.as_ref().map(|(m, p)| (m, *p))
+                        };
+                        let click_result = self.perform(&monitor, act, now);
+                        (restore, workspace_before, click_result)
+                    },
+                )
+            },
+        )
+        .flatten();
         let Some((restore, workspace_before, click_result)) = activation else {
             return;
         };
@@ -868,8 +878,21 @@ impl Daemon {
     }
 
     /// The second click of a double click: where the first one was, once it
-    /// has happened; then the pointer goes back.
+    /// has happened and only while its target still owns the point; then the
+    /// pointer goes back.
     fn act_again(&self, id: &str, act: &Act) {
+        self.act_again_with(id, act, target_moved_or_covered, |monitor| {
+            self.perform(monitor, act, None)
+        });
+    }
+
+    fn act_again_with(
+        &self,
+        id: &str,
+        act: &Act,
+        moved_or_covered: impl FnOnce(&Target, Option<&Window>) -> bool,
+        press: impl FnOnce(&Monitor) -> Result<(), String>,
+    ) {
         let Ok(sessions) = self.sessions.lock() else {
             return;
         };
@@ -878,12 +901,34 @@ impl Daemon {
         }) else {
             return;
         };
-        let Some(monitor) = sessions.get(id).map(|e| e.monitor.clone()) else {
+        let Some((clicked, target, window, monitor)) = sessions.get(id).map(|e| {
+            let target = e.session.targets[act.target].clone();
+            let window = window_for_target(e.window.as_ref(), &target).cloned();
+            (e.clicked, target, window, e.monitor.clone())
+        }) else {
             return;
         };
         drop(sessions);
-        if let Err(e) = self.perform(&monitor, act, None) {
-            eprintln!("thodud: {id}: the second click failed: {e}");
+        if !clicked {
+            eprintln!("thodud: {id}: the first click never happened; no second click");
+        } else {
+            let pressed = checked_click(
+                &self.pointer_action,
+                || (),
+                |()| {
+                    let moved = (!target.window.is_empty() && window.is_none())
+                        || moved_or_covered(&target, window.as_ref());
+                    (!moved).then(|| press(&monitor))
+                },
+            )
+            .flatten();
+            match pressed {
+                None => eprintln!(
+                    "thodud: {id}: the target changed or became covered after the first click; no second click"
+                ),
+                Some(Err(e)) => eprintln!("thodud: {id}: the second click failed: {e}"),
+                Some(Ok(())) => {}
+            }
         }
         if let Ok(mut sessions) = self.sessions.lock()
             && let Some(entry) = sessions.get_mut(id)
@@ -1103,7 +1148,7 @@ impl Daemon {
             ));
         }
         let _serial = self
-            .scroll_action
+            .pointer_action
             .lock()
             .map_err(|_| ScrollFailure::Input("scroll action lock failed".into()))?;
         let point = target.bounds.center();
@@ -1644,6 +1689,39 @@ fn visible_target_owner_changed(target: &Target, current_owner: Option<&str>) ->
     !target.window.is_empty() && current_owner != Some(target.window.as_str())
 }
 
+/// One action with the pointer, in the order that leaves the target no time
+/// to change (REQ-ACT-03): take the pointer, do the slow preparation, then
+/// check and press at once. Clicks and scroll actions never hold the pointer
+/// together.
+fn checked_click<P, R>(
+    pointer: &Mutex<()>,
+    prepare: impl FnOnce() -> P,
+    check_and_press: impl FnOnce(P) -> R,
+) -> Option<R> {
+    let _turn = pointer.lock().ok()?;
+    let prepared = prepare();
+    Some(check_and_press(prepared))
+}
+
+/// Whether a target's click point may no longer reach it: a bar target's
+/// point must still belong to the bar, and a window target's window must
+/// not have moved, resized, closed or left its workspace and must still
+/// own the point.
+fn target_moved_or_covered(target: &Target, window: Option<&Window>) -> bool {
+    let (x, y) = target.bounds.center();
+    if target.window.is_empty() {
+        return target.source == Source::Shell
+            && hypr::owner_at(x, y) != Owner::Layer(sources::BAR_NAMESPACE.to_string());
+    }
+    let Some(window) = window else {
+        return false;
+    };
+    let now = hypr::window(&window.address).ok().flatten();
+    let owner = hypr::window_at(x, y);
+    target_is_stale(target, window, now.as_ref())
+        || visible_target_owner_changed(target, owner.as_deref())
+}
+
 /// Click a target only while it is current: a shell target must match the
 /// latest bar report, and any target must still own its click point, which
 /// for a window target includes its window's geometry; otherwise refresh.
@@ -1886,7 +1964,7 @@ fn main() {
         listeners: Mutex::new(listeners::Listeners::new()),
         keyboard: Mutex::new(None),
         wheel: Mutex::new(None),
-        scroll_action: Mutex::new(()),
+        pointer_action: Mutex::new(()),
         focus_records,
         dispatch_syntax,
     });
@@ -1933,7 +2011,7 @@ mod tests {
 
     use super::{
         Daemon, Entry, ScrollFailure, ScrollFocus, WORKSPACE_CHANGE_WAIT, WindowScope,
-        dispatch_activation, grid_window, image_fallback_exclusions, merge_fallback,
+        checked_click, dispatch_activation, grid_window, image_fallback_exclusions, merge_fallback,
         no_active_window_scope, parse_key, perform_scroll_event_with, refresh_options,
         restart_address, scoped_windows, send_wheel_with, start_refreshed_session,
         status_persistent, visible_target_owner_changed, wait_for_workspace_change,
@@ -1962,7 +2040,7 @@ mod tests {
             listeners: Mutex::new(crate::listeners::Listeners::new()),
             keyboard: Mutex::new(None),
             wheel: Mutex::new(None),
-            scroll_action: Mutex::new(()),
+            pointer_action: Mutex::new(()),
             focus_records: None,
             dispatch_syntax: None,
         })
@@ -3120,6 +3198,194 @@ mod tests {
             escape.view.expect("Escape remains available").state,
             State::Closed
         );
+    }
+
+    fn click_monitor() -> Monitor {
+        Monitor {
+            name: "M".into(),
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+            scale: 1.0,
+            layers: Vec::new(),
+        }
+    }
+
+    fn bar_click_target() -> Target {
+        Target {
+            id: "b:item".into(),
+            bounds: Rect::new(10, 2, 20, 20),
+            role: Role::Button,
+            text: "item".into(),
+            source: TargetSource::Shell,
+            actions: vec![ActionKind::Click],
+            window: String::new(),
+        }
+    }
+
+    fn second_click_entry(clicked: bool) -> Entry {
+        let monitor = click_monitor();
+        let session = Session::new(vec![bar_click_target()], false).with_area(monitor.logical());
+        Entry {
+            session,
+            window: None,
+            monitor,
+            status: String::new(),
+            collecting: false,
+            overlay_bounds: None,
+            overlay: true,
+            test: true,
+            hidden: true,
+            created: Instant::now(),
+            timing: Timing::default(),
+            pending: 1,
+            clicked,
+            workspace_changed: false,
+            closing: false,
+            restore: None,
+            scroll_restore: None,
+            scroll_released: true,
+        }
+    }
+
+    fn second_click() -> thodu_core::session::Act {
+        thodu_core::session::Act {
+            target: 0,
+            point: (20, 12),
+            button: thodu_core::session::Button::Left,
+            count: 1,
+            ctrl: false,
+            again: true,
+            linger: false,
+        }
+    }
+
+    // REQ-ACT-03: a click takes the pointer, does its slow preparation, and
+    // only then checks the target and presses at once, still holding the
+    // pointer; a failed check presses nothing and refreshes.
+    #[test]
+    fn req_act_03_click_prepares_then_checks_right_before_pressing() {
+        let pointer = Mutex::new(());
+        let target = Target {
+            window: "0x1".into(),
+            source: TargetSource::Atspi,
+            ..bar_click_target()
+        };
+        let shell = sources::Shell {
+            items: Mutex::new(HashMap::new()),
+            budget: Duration::ZERO,
+            layer_origin: |_, _| None,
+        };
+        let monitor = click_monitor();
+        let log = RefCell::new(Vec::new());
+        let run = |stale: bool| {
+            checked_click(
+                &pointer,
+                || log.borrow_mut().push("prepare"),
+                |()| {
+                    dispatch_activation(
+                        &target,
+                        &shell,
+                        &monitor,
+                        || {
+                            assert!(pointer.try_lock().is_err(), "the check holds the pointer");
+                            log.borrow_mut().push("check");
+                            stale
+                        },
+                        || log.borrow_mut().push("refresh"),
+                        || {
+                            assert!(pointer.try_lock().is_err(), "the press holds the pointer");
+                            log.borrow_mut().push("press");
+                        },
+                    )
+                },
+            )
+            .flatten()
+        };
+        assert_eq!(run(false), Some(()));
+        assert_eq!(*log.borrow(), ["prepare", "check", "press"]);
+        log.borrow_mut().clear();
+        assert_eq!(run(true), None);
+        assert_eq!(*log.borrow(), ["prepare", "check", "refresh"]);
+        assert!(pointer.try_lock().is_ok(), "the pointer is free afterwards");
+    }
+
+    // REQ-ACT-03: clicks from different sessions take turns with the one
+    // pointer instead of interleaving their moves and presses.
+    #[test]
+    fn req_act_03_two_clicks_never_hold_the_pointer_at_once() {
+        use std::sync::atomic::AtomicUsize;
+        let pointer = Arc::new(Mutex::new(()));
+        let active = Arc::new(AtomicUsize::new(0));
+        let most = Arc::new(AtomicUsize::new(0));
+        let clicks: Vec<_> = (0..4)
+            .map(|_| {
+                let (pointer, active, most) =
+                    (Arc::clone(&pointer), Arc::clone(&active), Arc::clone(&most));
+                std::thread::spawn(move || {
+                    checked_click(
+                        &pointer,
+                        || (),
+                        |()| {
+                            let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+                            most.fetch_max(now, Ordering::SeqCst);
+                            std::thread::sleep(Duration::from_millis(5));
+                            active.fetch_sub(1, Ordering::SeqCst);
+                        },
+                    )
+                })
+            })
+            .collect();
+        for click in clicks {
+            click.join().expect("a click thread");
+        }
+        assert_eq!(most.load(Ordering::SeqCst), 1);
+    }
+
+    // REQ-ACT-02 and REQ-ACT-03: the second click of a double click waits
+    // for the first; when the first never happens within the wait, there is
+    // no second click.
+    #[test]
+    fn req_act_02_second_click_is_not_sent_without_the_first() {
+        let daemon = daemon_with_entry(second_click_entry(false));
+        let pressed = Cell::new(0);
+        daemon.act_again_with(
+            "s1",
+            &second_click(),
+            |_, _| false,
+            |_| {
+                pressed.set(pressed.get() + 1);
+                Ok(())
+            },
+        );
+        assert_eq!(pressed.get(), 0, "no second click without the first");
+        assert!(
+            daemon.sessions.lock().unwrap().get("s1").is_none(),
+            "the session ends"
+        );
+    }
+
+    // REQ-ACT-03: the second click rechecks its target; one that moved or was
+    // covered by the first click's effect, such as a dialog closing, gets no
+    // second click, and a current one gets exactly one.
+    #[test]
+    fn req_act_03_second_click_rechecks_its_target() {
+        for (moved, expected) in [(true, 0), (false, 1)] {
+            let daemon = daemon_with_entry(second_click_entry(true));
+            let pressed = Cell::new(0);
+            daemon.act_again_with(
+                "s1",
+                &second_click(),
+                |_, _| moved,
+                |_| {
+                    pressed.set(pressed.get() + 1);
+                    Ok(())
+                },
+            );
+            assert_eq!(pressed.get(), expected, "moved: {moved}");
+            assert!(daemon.sessions.lock().unwrap().get("s1").is_none());
+        }
     }
 
     // REQ-SEARCH-01: a letter typed with Control is a shortcut meant for an
