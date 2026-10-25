@@ -2,6 +2,7 @@ import QtQuick
 import QtTest
 import "../../components" as Components
 
+// REQ-SHELL-02: the menu navigates by keyboard and dispatches each session mode.
 Item {
     id: desktop
     width: 600

@@ -1,6 +1,6 @@
 # 0020: Make the Thodu bar widget visible and useful
 
-Status: proposed
+Status: merged
 Why: GG asked for a visible top-bar control that shows whether Thodu is running and provides a way to start modes and adjust settings.
 
 ## Added
