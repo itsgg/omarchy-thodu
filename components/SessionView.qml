@@ -57,10 +57,9 @@ FocusScope {
     property int scrollRepeatMs: 80
     property var deferredKey: null
     property var deferredEnd: null
-    // Keep physical Shift captured until shifted label keys are dispatched.
-    // Otherwise a virtual-pointer link click can inherit Shift and become a
-    // browser's open-in-new-window gesture.
-    property var pendingShiftLabelRequests: []
+    // Delay only an uppercase key that completes a visible label. The click
+    // must not inherit the physical Shift modifier from the browser surface.
+    property var pendingShiftActivation: null
 
     // A brief session request this often tells a live thodud from a dead
     // one, and shows changes made by keys sent over the IPC in test mode.
@@ -122,7 +121,7 @@ FocusScope {
         view.scrollReadySent = false;
         view.deferredKey = null;
         view.deferredEnd = null;
-        view.pendingShiftLabelRequests = [];
+        view.pendingShiftActivation = null;
         view.statusTimeoutMs = 2000;
         view.scrollRepeatMs = 80;
         view.active = true;
@@ -153,7 +152,7 @@ FocusScope {
         view.scrollPassThrough = false;
         view.deferredKey = null;
         view.deferredEnd = null;
-        view.pendingShiftLabelRequests = [];
+        view.pendingShiftActivation = null;
         silence.stop();
         linger.stop();
         statusExpiry.stop();
@@ -404,6 +403,8 @@ FocusScope {
                 return "no scroll areas | Esc exits";
             return "hold HJKL to scroll | Shift larger | Tab cycles | digits select | Esc exits";
         }
+        if (view.pendingShiftActivation)
+            return "release Shift to activate | Esc cancels";
         if (view.labelPrefix.length > 0)
             return "lowercase continues | uppercase final activates | Tab cycles hints";
         if (view.labelsOnly)
@@ -453,8 +454,12 @@ FocusScope {
     }
 
     function shouldWaitForShiftRelease(request) {
-        return !view.scrollMode && request && request.shift && request.key.length === 1 &&
-               request.key >= "A" && request.key <= "Z";
+        if (view.scrollMode || view.inGrid() || !request || !request.shift || request.key.length !== 1 ||
+                request.key < "A" || request.key > "Z")
+            return false;
+        const candidate = (view.labelPrefix + request.key.toLowerCase()).toLowerCase();
+        return view.targets.some(target => view.kept[target.id] === true &&
+            typeof target.label === "string" && target.label.toLowerCase() === candidate);
     }
 
     function dispatchKeyRequest(request) {
@@ -470,21 +475,27 @@ FocusScope {
     }
 
     function submitKeyRequest(request) {
+        // Once a visible label is ready to activate, later keys must not pass
+        // it and reach thodud after the activation. Escape cancels it.
+        if (view.pendingShiftActivation) {
+            if (request.key === "Escape") {
+                view.pendingShiftActivation = null;
+                view.dispatchKeyRequest(request);
+            }
+            return;
+        }
         if (view.shouldWaitForShiftRelease(request)) {
-            view.pendingShiftLabelRequests = view.pendingShiftLabelRequests.concat([request]);
+            view.pendingShiftActivation = request;
             return;
         }
         view.dispatchKeyRequest(request);
     }
 
-    function flushShiftLabelRequests() {
-        const requests = view.pendingShiftLabelRequests;
-        view.pendingShiftLabelRequests = [];
-        for (const request of requests) {
-            if (!view.active)
-                break;
+    function flushShiftActivation() {
+        const request = view.pendingShiftActivation;
+        view.pendingShiftActivation = null;
+        if (view.active && request)
             view.dispatchKeyRequest(request);
-        }
     }
 
     Keys.onPressed: event => {
@@ -524,7 +535,7 @@ FocusScope {
         if (!view.active || event.isAutoRepeat)
             return;
         if (event.key === Qt.Key_Shift) {
-            view.flushShiftLabelRequests();
+            view.flushShiftActivation();
             return;
         }
         if (!view.scrollMode)

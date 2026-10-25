@@ -1,6 +1,6 @@
 # 0019: Keep scroll pointer steady and refresh the guide
 
-Status: done
+Status: review
 Depends on: none
 Spec: REQ-ACT-06, REQ-SESSION-01
 Goal: Keep the pointer fixed over a selected scroll area across held wheel repeats, while giving new users a short setup guide and real screenshots of hints and scroll mode.

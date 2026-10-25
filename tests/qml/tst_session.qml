@@ -306,26 +306,60 @@ Item {
             verify(top.keysSent()[0].shift);
         }
 
-        function test_req_act_01_shifted_label_keys_wait_for_shift_release() {
+        function test_req_act_01_shifted_visible_label_waits_for_shift_release() {
+            view.targets = [{ id: "d0", label: "d", source: "atspi",
+                              bounds: { x: 120, y: 80, w: 60, h: 30 },
+                              placed: { x: 113, y: 86, w: 17, h: 18 } }];
+            view.kept = { d0: true };
             view.submitKeyRequest(view.keyRequest(Qt.Key_D, Qt.ShiftModifier, "d", false));
+            compare(top.keysSent().length, 0,
+                    "the completed label must wait until physical Shift is up");
+            compare(view.hintCue(), "release Shift to activate | Esc cancels");
+
+            view.submitKeyRequest(view.keyRequest(Qt.Key_Backspace, Qt.NoModifier, "", false));
             view.submitKeyRequest(view.keyRequest(Qt.Key_S, Qt.ShiftModifier, "s", false));
             compare(top.keysSent().length, 0,
-                    "the app must not receive shifted keys before physical Shift is released");
+                    "later keys cannot overtake or burst after a pending activation");
 
             keyRelease(Qt.Key_Shift);
-            compare(top.keysSent().map(k => k.key), ["D", "S"]);
-            verify(top.keysSent().every(k => k.shift),
-                   "the overlay keeps label semantics while dispatching after Shift release");
+            compare(top.keysSent().map(k => k.key), ["D"]);
+            verify(top.keysSent()[0].shift,
+                   "the uppercase request retains label activation semantics");
+        }
+
+        function test_req_act_01_shifted_label_prefix_is_sent_immediately() {
+            view.targets = [{ id: "df", label: "df", source: "atspi",
+                              bounds: { x: 120, y: 80, w: 60, h: 30 },
+                              placed: { x: 113, y: 86, w: 17, h: 18 } }];
+            view.kept = { df: true };
+            view.submitKeyRequest(view.keyRequest(Qt.Key_D, Qt.ShiftModifier, "d", false));
+            compare(top.keysSent().map(k => k.key), ["D"],
+                    "a shifted prefix gives immediate search and focus feedback");
         }
 
         function test_req_act_01_shifted_label_keys_are_discarded_when_session_ends() {
+            view.targets = [{ id: "d0", label: "d", source: "atspi",
+                              bounds: { x: 120, y: 80, w: 60, h: 30 },
+                              placed: { x: 113, y: 86, w: 17, h: 18 } }];
+            view.kept = { d0: true };
             view.submitKeyRequest(view.keyRequest(Qt.Key_D, Qt.ShiftModifier, "d", false));
             compare(top.keysSent().length, 0,
-                    "shifted input is still held by the overlay");
+                    "the completed label waits for Shift release");
             view.end("test cancellation", false);
             keyRelease(Qt.Key_Shift);
             compare(top.keysSent().length, 0,
-                    "closing the session discards pending input");
+                    "closing the session discards pending activation");
+        }
+
+        function test_req_act_01_escape_cancels_pending_shifted_activation() {
+            view.targets = [{ id: "d0", label: "d", source: "atspi",
+                              bounds: { x: 120, y: 80, w: 60, h: 30 },
+                              placed: { x: 113, y: 86, w: 17, h: 18 } }];
+            view.kept = { d0: true };
+            view.submitKeyRequest(view.keyRequest(Qt.Key_D, Qt.ShiftModifier, "d", false));
+            view.submitKeyRequest(view.keyRequest(Qt.Key_Escape, Qt.ShiftModifier, "", false));
+            compare(top.keysSent().map(k => k.key), ["Escape"]);
+            verify(!view.active, "Escape cancels the pending activation and closes the overlay");
         }
 
         function test_req_act_02_return_auto_repeat_is_ignored() {
