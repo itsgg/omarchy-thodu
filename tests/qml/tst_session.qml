@@ -633,8 +633,9 @@ Item {
             const message = findChild(view, "status-text");
             const cue = findChild(view, "hint-text");
             verify(message.visible, "auto shows routine details at first");
-            wait(60);
-            verify(!message.visible, "auto hides routine details after its timeout");
+            // The 30 ms timer only speeds the test; wait for it to fire rather
+            // than for a fixed 60 ms, which a loaded machine can overrun.
+            tryVerify(() => !message.visible, 1000, "auto hides routine details after its timeout");
             verify(cue.visible, "the keyboard cue remains visible");
 
             view.apply({ v: 1, ok: true, session: "s1", status: "2 targets from atspi in 3 ms",
