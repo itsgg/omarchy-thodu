@@ -11,7 +11,7 @@ Keyboard hints for everything visible on an Omarchy screen. Thodu finds controls
 - Click hints for GTK, Qt, Chromium, Electron and Omarchy bar controls.
 - Screenshot hints for visible controls missing from an app's accessibility tree.
 - Grid mode to click any point, and HJKL scroll mode across visible windows.
-- Labels-only, text search, uppercase final-key activation and configurable scroll speed.
+- Type a hint to click it, Shift+hint to select it for another action, `/` to search text, and configurable scroll speed.
 - A top-bar control for service status, mode launchers and live settings.
 
 ![Thodu's top-bar menu with service status, modes and settings](docs/screenshots/bar-widget.png)
@@ -26,7 +26,7 @@ Requires Omarchy with Hyprland. Follow the [installation instructions](docs/inst
 
 | Mode | Default shortcut | In-session keys |
 | --- | --- | --- |
-| Hints | `Super+Shift+F12` | Search text; `Shift`+label selects. Uppercase the final label key to activate. `Return` activates the focused target. |
+| Hints | `Super+Shift+F12` | Type a hint to click it. `Shift`+hint selects it; then `Return` clicks, `Shift+Return` right-clicks. `/` searches text. |
 | Grid | `Super+Ctrl+F12` | Type a label to refine the grid, then `Return` to click. |
 | Scroll | `Super+Alt+F12` | Hold `j`/`k` to scroll down/up, `h`/`l` left/right. `Tab` cycles areas, digits select, `Escape` exits. |
 

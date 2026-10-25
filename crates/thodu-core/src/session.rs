@@ -1,10 +1,12 @@
 //! A session's keys and what they do (REQ-SEARCH-01, REQ-SEARCH-02,
 //! REQ-ACT-01, REQ-ACT-02, REQ-GRID-01).
 //!
-//! Lowercase letters search the targets' text; Shift and uppercase letters
-//! type a label; uppercase completion activates it. Tab moves the focus;
-//! Return acts on the focused target; Escape ends the
-//! session. With labels_only, letters type labels and / starts a search.
+//! With labels_only, the default, letters type labels and / starts a
+//! search; otherwise lowercase letters search the targets' text and Shift
+//! types a label. The final label character's case decides: lowercase
+//! clicks at once, uppercase selects the target for Return to act on, so no
+//! click is sent while Shift is held. Tab moves the focus; Return acts on
+//! the focused target; Escape ends the session.
 //! Space with nothing focused opens the grid, where letters choose cells.
 //! The session decides; `thodud` carries the action out.
 
@@ -560,10 +562,12 @@ impl Session {
                 self.searching = true;
                 self.refocus();
             }
-            Key::Upper { c } => return self.type_label(c, true, at_ms),
+            // An uppercase final character selects; a lowercase one clicks,
+            // except on grid cells, which refine until Return.
+            Key::Upper { c } => return self.type_label(c, false, at_ms),
             Key::Digit { .. } => {}
             Key::Char { c, shift } if shift || labels_first || !self.label_prefix.is_empty() => {
-                return self.type_label(c, false, at_ms);
+                return self.type_label(c, !shift && !in_grid, at_ms);
             }
             Key::Char { c, .. } => {
                 self.search.push(c);

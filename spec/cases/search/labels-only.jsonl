@@ -1,8 +1,9 @@
-{"case": "letters type labels", "labels_only": true, "texts": ["Open", "Save", "Close"], "keys": ["s"], "kept": [0, 1, 2], "focused": 1, "search": ""}
+{"case": "a lowercase label clicks its target", "labels_only": true, "texts": ["Open", "Save", "Close"], "keys": ["s"], "kept": [0, 1, 2], "focused": 1, "search": "", "state": "acting"}
+{"case": "an uppercase final character selects without clicking", "labels_only": true, "texts": ["Open", "Save", "Close"], "keys": ["S"], "kept": [0, 1, 2], "focused": 1, "search": "", "state": "showing"}
 {"case": "slash starts a search", "labels_only": true, "texts": ["Open", "Save", "Close"], "keys": ["/", "c", "l"], "kept": [2], "focused": 2, "search": "cl"}
-{"case": "shift activates a final label during a search", "labels_only": true, "texts": ["Open", "Save", "Close"], "keys": ["/", "e", "D"], "kept": [0, 1, 2], "focused": 2, "search": "e", "state": "acting"}
+{"case": "shift selects a label during a search", "labels_only": true, "texts": ["Open", "Save", "Close"], "keys": ["/", "e", "D"], "kept": [0, 1, 2], "focused": 2, "search": "e", "state": "showing"}
 {"case": "a letter that starts no label does nothing", "labels_only": true, "texts": ["Open", "Save", "Close"], "keys": ["z"], "kept": [0, 1, 2], "focused": null, "search": ""}
-{"case": "backspace past an empty search goes back to labels", "labels_only": true, "texts": ["Open", "Save", "Close"], "keys": ["/", "c", "BackSpace", "BackSpace", "s"], "kept": [0, 1, 2], "focused": 1, "search": ""}
-{"case": "two-letter labels take two letters", "labels_only": true, "texts": ["t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9", "t10", "t11", "t12", "t13", "t14", "t15", "t16", "t17", "t18", "t19", "t20", "t21", "t22", "t23", "t24", "t25", "t26", "t27", "t28", "t29"], "keys": ["?label:29"], "kept": "all", "focused": 29, "search": ""}
-{"case": "the default stays search-first", "labels_only": false, "texts": ["Open", "Save", "Close"], "keys": ["s"], "kept": [1, 2], "focused": 1, "search": "s"}
-{"case": "the default searches for a slash like any other text", "labels_only": false, "texts": ["Open", "and/or", "Close"], "keys": ["/"], "kept": [1], "focused": 1, "search": "/"}
+{"case": "backspace past an empty search goes back to labels", "labels_only": true, "texts": ["Open", "Save", "Close"], "keys": ["/", "c", "BackSpace", "BackSpace", "s"], "kept": [0, 1, 2], "focused": 1, "search": "", "state": "acting"}
+{"case": "two-letter labels take two letters", "labels_only": true, "texts": ["t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9", "t10", "t11", "t12", "t13", "t14", "t15", "t16", "t17", "t18", "t19", "t20", "t21", "t22", "t23", "t24", "t25", "t26", "t27", "t28", "t29"], "keys": ["?label:29"], "kept": "all", "focused": 29, "search": "", "state": "acting"}
+{"case": "search-first mode searches lowercase letters", "labels_only": false, "texts": ["Open", "Save", "Close"], "keys": ["s"], "kept": [1, 2], "focused": 1, "search": "s"}
+{"case": "search-first mode searches for a slash like any other text", "labels_only": false, "texts": ["Open", "and/or", "Close"], "keys": ["/"], "kept": [1], "focused": 1, "search": "/"}

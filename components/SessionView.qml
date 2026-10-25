@@ -57,13 +57,6 @@ FocusScope {
     property int scrollRepeatMs: 80
     property var deferredKey: null
     property var deferredEnd: null
-    // Delay only an uppercase key that completes a visible label. The click
-    // must not inherit the physical Shift modifier from the browser surface.
-    property var pendingShiftActivation: null
-    // Scan codes of the keys pressed as Shift. A layout can give a Shift key
-    // another symbol at its shifted level (shift:both_capslock_cancel makes
-    // its release Caps_Lock), so the release is matched by physical key.
-    property var shiftScanCodes: []
 
     // A brief session request this often tells a live thodud from a dead
     // one, and shows changes made by keys sent over the IPC in test mode.
@@ -125,8 +118,6 @@ FocusScope {
         view.scrollReadySent = false;
         view.deferredKey = null;
         view.deferredEnd = null;
-        view.pendingShiftActivation = null;
-        view.shiftScanCodes = [];
         view.statusTimeoutMs = 2000;
         view.scrollRepeatMs = 80;
         view.active = true;
@@ -157,8 +148,6 @@ FocusScope {
         view.scrollPassThrough = false;
         view.deferredKey = null;
         view.deferredEnd = null;
-        view.pendingShiftActivation = null;
-        view.shiftScanCodes = [];
         silence.stop();
         linger.stop();
         statusExpiry.stop();
@@ -271,7 +260,7 @@ FocusScope {
     // A key as SPEC section 7 names it, or null for keys a session ignores.
     function keyRequest(key, modifiers, text, autoRepeat) {
         // Caps Lock can make text uppercase without Shift. Only Shift means
-        // activation; repeats cannot complete labels or double-click.
+        // selection; repeats cannot complete labels or double-click.
         const shift = (modifiers & Qt.ShiftModifier) !== 0;
         if (view.scrollMode && autoRepeat)
             return null;
@@ -419,14 +408,11 @@ FocusScope {
                 return "no scroll areas | Esc exits";
             return "hold HJKL to scroll | Shift larger | Tab cycles | digits select | Esc exits";
         }
-        if (view.pendingShiftActivation)
-            return "release Shift to activate | Esc cancels";
         if (view.labelPrefix.length > 0)
-            return "lowercase continues | uppercase final activates | Tab cycles hints";
-        if (view.labelsOnly)
-            return view.searching ? "lowercase searches | uppercase final activates | Tab cycles hints" :
-                "lowercase selects | uppercase final activates | / searches | Tab cycles hints";
-        return "type to search | Shift+hint activates | Tab cycles hints";
+            return "lowercase final clicks | uppercase final selects | Tab cycles hints";
+        if (view.labelsOnly && !view.searching)
+            return "hint clicks | Shift+hint selects | / searches | Tab cycles hints";
+        return "type to search | Return clicks | Shift+hint selects | Tab cycles hints";
     }
 
     // Send the exact geometry Thodu paints so the screenshot detector can
@@ -469,16 +455,7 @@ FocusScope {
         return { op: "drawn", session: view.session, overlays: view.overlayRects() };
     }
 
-    function shouldWaitForShiftRelease(request) {
-        if (view.scrollMode || view.inGrid() || !request || !request.shift || request.key.length !== 1 ||
-                request.key < "A" || request.key > "Z")
-            return false;
-        const candidate = (view.labelPrefix + request.key.toLowerCase()).toLowerCase();
-        return view.targets.some(target => view.kept[target.id] === true &&
-            typeof target.label === "string" && target.label.toLowerCase() === candidate);
-    }
-
-    function dispatchKeyRequest(request) {
+    function submitKeyRequest(request) {
         if (!view.active)
             return;
         view.send(request);
@@ -490,58 +467,10 @@ FocusScope {
             view.end("a key in the wait after a click", false);
     }
 
-    function submitKeyRequest(request) {
-        // Once a visible label is ready to activate, later keys must not pass
-        // it and reach thodud after the activation. Escape cancels it.
-        if (view.pendingShiftActivation) {
-            if (request.key === "Escape") {
-                view.pendingShiftActivation = null;
-                view.dispatchKeyRequest(request);
-            }
-            return;
-        }
-        if (view.shouldWaitForShiftRelease(request)) {
-            view.pendingShiftActivation = request;
-            return;
-        }
-        view.dispatchKeyRequest(request);
-    }
-
-    function flushShiftActivation() {
-        const request = view.pendingShiftActivation;
-        view.pendingShiftActivation = null;
-        if (view.active && request)
-            view.dispatchKeyRequest(request);
-    }
-
-    // A key arriving without Shift means Shift is already up.
-    function notePress(key, modifiers, scanCode) {
-        if (key === Qt.Key_Shift && scanCode && view.shiftScanCodes.indexOf(scanCode) < 0)
-            view.shiftScanCodes = view.shiftScanCodes.concat([scanCode]);
-        if (view.pendingShiftActivation && (modifiers & Qt.ShiftModifier) === 0)
-            view.flushShiftActivation();
-    }
-
-    // Whether a release lifts a Shift key; the last one up activates a
-    // pending label. A Shift whose press was never seen, held since the
-    // session's hotkey, is known only by the Shift or Caps Lock symbol.
-    function noteRelease(key, modifiers, scanCode) {
-        const pressed = scanCode ? view.shiftScanCodes.indexOf(scanCode) >= 0 : false;
-        if (pressed)
-            view.shiftScanCodes = view.shiftScanCodes.filter(code => code !== scanCode);
-        const unseen = view.shiftScanCodes.length === 0 && (key === Qt.Key_Shift || key === Qt.Key_CapsLock);
-        const lifted = pressed || unseen;
-        if (view.pendingShiftActivation &&
-                ((lifted && view.shiftScanCodes.length === 0) || (modifiers & Qt.ShiftModifier) === 0))
-            view.flushShiftActivation();
-        return lifted;
-    }
-
     Keys.onPressed: event => {
         event.accepted = true;
         if (!view.active)
             return;
-        view.notePress(event.key, event.modifiers, event.nativeScanCode);
         const scrollKey = view.scrollMode ? view.scrollKeyName(event.key) : "";
         if (scrollKey.length > 0) {
             if (view.isChord(event.modifiers))
@@ -578,11 +507,7 @@ FocusScope {
 
     Keys.onReleased: event => {
         event.accepted = true;
-        if (!view.active || event.isAutoRepeat)
-            return;
-        if (view.noteRelease(event.key, event.modifiers, event.nativeScanCode))
-            return;
-        if (!view.scrollMode)
+        if (!view.active || event.isAutoRepeat || !view.scrollMode)
             return;
         const name = view.scrollKeyName(event.key);
         if (name.length > 0)

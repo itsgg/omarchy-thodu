@@ -371,85 +371,19 @@ Item {
             compare(top.keysSent().length, 0, "no area selection or wheel action");
         }
 
-        function test_req_act_01_shifted_visible_label_waits_for_shift_release() {
+        // REQ-ACT-01: a Shift-completed label only selects, so it is sent at
+        // once; no click waits on the physical Shift.
+        function test_req_act_01_shifted_label_is_sent_at_once_to_select() {
             view.targets = [{ id: "d0", label: "d", source: "atspi",
                               bounds: { x: 120, y: 80, w: 60, h: 30 },
                               placed: { x: 113, y: 86, w: 17, h: 18 } }];
             view.kept = { d0: true };
-            view.submitKeyRequest(view.keyRequest(Qt.Key_D, Qt.ShiftModifier, "d", false));
-            compare(top.keysSent().length, 0,
-                    "the completed label must wait until physical Shift is up");
-            compare(view.hintCue(), "release Shift to activate | Esc cancels");
-
-            view.submitKeyRequest(view.keyRequest(Qt.Key_Backspace, Qt.NoModifier, "", false));
-            view.submitKeyRequest(view.keyRequest(Qt.Key_S, Qt.ShiftModifier, "s", false));
-            compare(top.keysSent().length, 0,
-                    "later keys cannot overtake or burst after a pending activation");
-
-            keyRelease(Qt.Key_Shift);
+            keyClick(Qt.Key_D, Qt.ShiftModifier);
             compare(top.keysSent().map(k => k.key), ["D"]);
-            verify(top.keysSent()[0].shift,
-                   "the uppercase request retains label activation semantics");
-        }
-
-        function pendDOnLabel() {
-            view.targets = [{ id: "d0", label: "d", source: "atspi",
-                              bounds: { x: 120, y: 80, w: 60, h: 30 },
-                              placed: { x: 113, y: 86, w: 17, h: 18 } }];
-            view.kept = { d0: true };
-            view.submitKeyRequest(view.keyRequest(Qt.Key_D, Qt.ShiftModifier, "d", false));
-            compare(top.keysSent().length, 0, "the completed label waits for Shift to come up");
-        }
-
-        // REQ-ACT-01: shift:both_capslock_cancel gives the Shift key Caps_Lock
-        // at its shifted level, so its release arrives as Caps Lock; the
-        // physical key, by scan code, still ends the wait.
-        function test_req_act_01_shift_released_as_caps_lock_activates_by_scan_code() {
-            view.notePress(Qt.Key_Shift, Qt.ShiftModifier, 50);
-            pendDOnLabel();
-            view.noteRelease(Qt.Key_D, Qt.ShiftModifier, 40);
-            compare(top.keysSent().length, 0, "the letter's release with Shift held does not activate");
-            view.noteRelease(Qt.Key_CapsLock, Qt.ShiftModifier, 50);
-            compare(top.keysSent().map(k => k.key), ["D"]);
-        }
-
-        function test_req_act_01_a_key_event_without_shift_ends_the_wait() {
-            view.notePress(Qt.Key_Shift, Qt.ShiftModifier, 50);
-            pendDOnLabel();
-            view.noteRelease(Qt.Key_D, Qt.NoModifier, 40);
-            compare(top.keysSent().map(k => k.key), ["D"], "Shift is up once a key arrives without it");
-        }
-
-        function test_req_act_01_unseen_shift_released_as_caps_lock_activates() {
-            // Shift held since the session's hotkey: its press never reached the overlay.
-            pendDOnLabel();
-            view.noteRelease(Qt.Key_CapsLock, Qt.ShiftModifier, 50);
-            compare(top.keysSent().map(k => k.key), ["D"]);
-        }
-
-        function test_req_act_01_both_shift_keys_wait_for_the_last() {
-            view.notePress(Qt.Key_Shift, Qt.ShiftModifier, 50);
-            view.notePress(Qt.Key_Shift, Qt.ShiftModifier, 62);
-            pendDOnLabel();
-            view.noteRelease(Qt.Key_CapsLock, Qt.ShiftModifier, 50);
-            compare(top.keysSent().length, 0, "the other Shift is still down");
-            view.noteRelease(Qt.Key_CapsLock, Qt.ShiftModifier, 62);
-            compare(top.keysSent().map(k => k.key), ["D"]);
-        }
-
-        function test_req_act_01_caps_lock_symbol_release_through_the_key_handlers() {
-            view.targets = [{ id: "d0", label: "d", source: "atspi",
-                              bounds: { x: 120, y: 80, w: 60, h: 30 },
-                              placed: { x: 113, y: 86, w: 17, h: 18 } }];
-            view.kept = { d0: true };
-            // The fake's heartbeat replies keep the label visible.
-            top.shownView = Object.assign({}, top.shownView, { visible: ["d0"] });
-            // QtTest releases its own Shift with any release that names it, so
-            // the release arrives here as Caps Lock alone, as the layout sends it.
-            keyPress(Qt.Key_D, Qt.ShiftModifier);
-            compare(top.keysSent().length, 0, "the completed label waits for Shift to come up");
-            keyRelease(Qt.Key_CapsLock, Qt.NoModifier);
-            compare(top.keysSent().map(k => k.key), ["D"]);
+            verify(top.keysSent()[0].shift);
+            verify(view.hintCue().indexOf("release Shift") === -1, "there is no release cue");
+            keyClick(Qt.Key_D);
+            compare(top.keysSent().map(k => k.key), ["D", "d"], "a lowercase label is sent at once to click");
         }
 
         function test_req_act_01_shifted_label_prefix_is_sent_immediately() {
@@ -460,31 +394,6 @@ Item {
             view.submitKeyRequest(view.keyRequest(Qt.Key_D, Qt.ShiftModifier, "d", false));
             compare(top.keysSent().map(k => k.key), ["D"],
                     "a shifted prefix gives immediate search and focus feedback");
-        }
-
-        function test_req_act_01_shifted_label_keys_are_discarded_when_session_ends() {
-            view.targets = [{ id: "d0", label: "d", source: "atspi",
-                              bounds: { x: 120, y: 80, w: 60, h: 30 },
-                              placed: { x: 113, y: 86, w: 17, h: 18 } }];
-            view.kept = { d0: true };
-            view.submitKeyRequest(view.keyRequest(Qt.Key_D, Qt.ShiftModifier, "d", false));
-            compare(top.keysSent().length, 0,
-                    "the completed label waits for Shift release");
-            view.end("test cancellation", false);
-            keyRelease(Qt.Key_Shift);
-            compare(top.keysSent().length, 0,
-                    "closing the session discards pending activation");
-        }
-
-        function test_req_act_01_escape_cancels_pending_shifted_activation() {
-            view.targets = [{ id: "d0", label: "d", source: "atspi",
-                              bounds: { x: 120, y: 80, w: 60, h: 30 },
-                              placed: { x: 113, y: 86, w: 17, h: 18 } }];
-            view.kept = { d0: true };
-            view.submitKeyRequest(view.keyRequest(Qt.Key_D, Qt.ShiftModifier, "d", false));
-            view.submitKeyRequest(view.keyRequest(Qt.Key_Escape, Qt.ShiftModifier, "", false));
-            compare(top.keysSent().map(k => k.key), ["Escape"]);
-            verify(!view.active, "Escape cancels the pending activation and closes the overlay");
         }
 
         function test_req_act_02_return_auto_repeat_is_ignored() {
@@ -690,7 +599,8 @@ Item {
             compare(chip.color, view.selectedBackground);
             verify(toast !== null);
             verify(message !== null && message.implicitHeight > 18, "long status wraps into more than one line");
-            verify(cue.text.indexOf("lowercase selects") !== -1);
+            verify(cue.text.indexOf("hint clicks") !== -1);
+            verify(cue.text.indexOf("Shift+hint selects") !== -1);
             verify(cue.text.indexOf("Tab cycles hints") !== -1);
             verify(toast.width <= 640, "the status toast stays within its maximum width");
             verify(toast.height > 38, "the wrapped status and activation cue fit in the toast");
@@ -699,15 +609,16 @@ Item {
                 view: { state: "showing", visible: ["a0"], focused: "a0", search: "o", searching: true, label_prefix: "", label_selected: false, labels_only: true, status_persistent: true }
             });
             verify(ring.visible, "text-search focus keeps the target outline");
-            verify(cue.text.indexOf("lowercase searches") !== -1);
+            verify(cue.text.indexOf("type to search") !== -1);
+            verify(cue.text.indexOf("Return clicks") !== -1);
             verify(cue.text.indexOf("Tab cycles hints") !== -1);
             view.apply({
                 v: 1, ok: true, session: "s1", status: longStatus,
                 view: { state: "showing", visible: ["a0"], focused: "a0", search: "", label_prefix: "", label_selected: false, labels_only: false, status_persistent: true }
             });
             verify(cue.text.indexOf("type to search") !== -1);
-            verify(cue.text.indexOf("lowercase selects") === -1,
-                   "the cue does not claim labels select in search-first mode");
+            verify(cue.text.indexOf("hint clicks") === -1,
+                   "the cue does not claim plain letters click hints in search-first mode");
         }
 
         function test_req_session_08_status_detail_modes_keep_guidance_and_attention() {

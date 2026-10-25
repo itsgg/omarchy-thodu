@@ -4,10 +4,10 @@
 
 The default hints session covers visible windows on the focused monitor and the Omarchy bar. Targets appear first; screenshot-based candidates arrive in a second pass. Press `Escape` to close. The Thodu bar control shows whether its service is ready, starts hints, grid, or scroll sessions, and opens the settings menu. The menu can change label mode, status detail and scroll steps; changes apply to new sessions. `Edit configuration` opens `~/.config/thodu/config.toml` in an Omarchy terminal editor. A hotkey can open the menu as it opens Omarchy's own panels: `omarchy-shell io.github.itsgg.thodu.menu toggle` (also `open` and `close`).
 
-- In search-first mode, lowercase letters filter target text and `Shift`+label keys select a target. Uppercase the final label key to activate it. `Return` activates the focused target.
+- Type a hint in lowercase to click its target at once. Type its final letter with `Shift` to select it instead; `Return` then clicks it. The final letter's case decides, so no click is sent while `Shift` is held.
 - `Tab` and `Shift+Tab` change focus. `Space` opens the grid when no target is focused.
 - `Shift+Return` right-clicks, `Control+Return` clicks with Control held, and two distinct `Return` presses within 300 ms double-click.
-- In labels-only mode, type labels directly; `/` starts text search.
+- `/` starts a text search; `Return` clicks the highlighted result. With `labels_only = false`, lowercase letters search text and hints need `Shift`.
 - Use `--scope focused` or `--window ADDRESS` to limit target collection.
 
 ## Grid and scroll
@@ -21,7 +21,7 @@ Scroll mode selects panes across visible app windows. Hold `h`, `j`, `k` or `l` 
 Settings are read from `~/.config/thodu/config.toml` at the start of each session:
 
 ```toml
-labels_only = false
+labels_only = true
 status_display = "auto"
 scroll_step = 1
 scroll_shift_step = 5

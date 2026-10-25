@@ -27,7 +27,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            labels_only: false,
+            labels_only: true,
             status_display: StatusDisplay::Auto,
             scroll_step: 1,
             scroll_shift_step: 5,

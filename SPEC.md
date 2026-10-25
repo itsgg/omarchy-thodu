@@ -19,7 +19,7 @@ Out of this milestone, and designed for so that no code assumes they never come:
 ## 3. Terms
 
 - Target: something a mouse could act on, with bounds, a role, text and a source (section 5).
-- Label: the letters drawn over a target; typing it with Shift selects the target.
+- Label: the letters drawn over a target; typing it clicks the target, and typing its final letter with Shift selects it.
 - Visible window: a mapped, non-hidden client on the focused window's monitor that is on its active workspace, pinned, or on a shown special workspace.
 - Source: where targets come from: `atspi`, `shell`, a bounded `image` supplement for every visible-window collection, a window-sized fallback in scroll mode, and `grid` in this milestone; full `image` coverage and direct `web` targets later.
 - Session: one press of the key until an action or Escape.
@@ -167,28 +167,28 @@ Acceptance:
 ### Search
 
 ### REQ-SEARCH-01: Typing searches; Shift types a label
-While a session is showing in search-first mode, lowercase letters typed without Shift and with no active label prefix shall keep only the targets whose text contains the typed letters, ignoring case and spaces, and focus the first in reading order. In labels-only mode, lowercase letters type labels until `/` starts a search. Shifted letters type a target label in either mode. Lowercase letters continue an active label prefix. Completing a label with a lowercase final character focuses its target; completing it with an uppercase final character activates it according to REQ-ACT-01. A label that is hidden by the current search shall not activate or take focus. An invalid label prefix shall leave the prior focus intact. Operating-system key repeats shall not complete or activate a label. A key typed with Control, Alt or Super held shall neither search, type a label, select a scroll area nor scroll; Escape keeps its meaning with any modifier, and Return with Control is the Control click of REQ-ACT-02. Tab and Shift-Tab move the focus through the kept targets. This follows Homerow's defaults (SEED R1).
+While a session is showing in search-first mode, lowercase letters typed without Shift and with no active label prefix shall keep only the targets whose text contains the typed letters, ignoring case and spaces, and focus the first in reading order. In labels-only mode, lowercase letters type labels until `/` starts a search. Shifted letters type a target label in either mode. Lowercase letters continue an active label prefix. Completing a label with a lowercase final character clicks its target according to REQ-ACT-01; completing it with an uppercase final character selects the target without clicking, for Return, Shift-Return, Control-Return or a double Return to act on. A label that is hidden by the current search shall not activate or take focus. An invalid label prefix shall leave the prior focus intact. Operating-system key repeats shall not complete or activate a label. A key typed with Control, Alt or Super held shall neither search, type a label, select a scroll area nor scroll; Escape keeps its meaning with any modifier, and Return with Control is the Control click of REQ-ACT-02. Tab and Shift-Tab move the focus through the kept targets. This follows Homerow's defaults (SEED R1).
 Acceptance:
 - cases: `spec/cases/search/filter.jsonl`, typed input against target texts with the expected kept targets and focus.
-- scenario: a session test covers an uppercase prefix and lowercase completion in search-first mode.
+- scenario: a session test covers an uppercase prefix completed in lowercase in search-first mode, which clicks, and a label typed wholly with Shift, which selects.
 - scenario: session tests cover hidden labels, invalid prefixes, prefix cancellation with `/`, and focus restoration on Backspace.
-- scenario: a QML test covers a shifted key whose event text is lowercase, ignores Caps Lock text as an activation signal, and filters repeats while label input is active but preserves search repeats.
+- scenario: a QML test covers a shifted key whose event text is lowercase, ignores Caps Lock text as a selection signal, and filters repeats while label input is active but preserves search repeats.
 - scenario: QML and daemon tests send Control, Alt and Super chords on letters, digits, Space, Tab, `/`, Backspace and scroll keys; none searches, types a label, selects an area or scrolls, Escape with a modifier still ends the session, and Control-Return still clicks with Control held.
 
 ### REQ-SEARCH-02: Labels-only mode
-Where the setting `labels_only` is true, letters without Shift type labels and `/` starts a search.
+The setting `labels_only` defaults to true. Where it is true, letters without Shift type labels and `/` starts a search; where it is false, a session is search-first as REQ-SEARCH-01 describes.
 Acceptance:
 - cases: `spec/cases/search/labels-only.jsonl`.
 
 ### Actions
 
 ### REQ-ACT-01: Return clicks
-When Return is pressed with a focused target, or the final character of a target label is uppercase, the system shall move the pointer to the target's center, click the left button there through the virtual pointer, end the session and return the pointer to where it was, unless Hyprland's focus follows the mouse and that point is not over the clicked window, where returning it would take the keyboard from that window; then the pointer stays on the target. A session started with `test` always returns it. Completing an active label prefix in lowercase focuses the target without acting; in labels-only mode, typing a complete label in lowercase also focuses it. An uppercase label activation performs one click and does not begin the double-Return wait. When the uppercase final character is typed with Shift, the activation waits until Shift is physically released, so the click does not carry Shift; the release is recognised by the key that was pressed as Shift whatever symbol the keyboard layout gives its release, by a Shift or Caps Lock release when that press was not seen, or by any later key event without Shift held, and Escape cancels the waiting activation.
+When Return is pressed with a focused target, or a target label is completed with a lowercase final character, the system shall move the pointer to the target's center, click the left button there through the virtual pointer, end the session and return the pointer to where it was, unless Hyprland's focus follows the mouse and that point is not over the clicked window, where returning it would take the keyboard from that window; then the pointer stays on the target. A session started with `test` always returns it. Completing a label with an uppercase final character selects the target without acting. A label click performs one click and does not begin the double-Return wait. Since an uppercase final character never clicks, no click is sent while Shift is held and none waits for its release.
 Acceptance:
 - scenario: WHEN a session on a recorded tree focuses a button at bounds (100, 200, 80, 30) on a monitor at scale 1.25 THEN the fake pointer receives a move to (140, 215) logical and one left click.
 - scenario: WHEN focus follows the mouse and the pointer was over another window, or over none while the click was on a window, THEN it is not returned; over the same window, over none after a click on none, or with focus on click, it is.
-- scenario: a session test types a two-letter label with lowercase completion and then uppercase completion, confirming focus-only then the same action as Return.
-- scenario: QML tests hold a Shift-completed label until Shift is up: a Shift released as Caps Lock (`shift:both_capslock_cancel`) with the scan code it was pressed with, any later key event without Shift, a Shift held since the session's hotkey and released as Caps Lock, and two Shift keys held, which wait for the last; Escape cancels the wait.
+- scenario: session tests type a two-letter label with lowercase completion, which clicks once with no double-Return wait, and with uppercase completion, which selects without clicking, after which Return and Shift-Return act.
+- scenario: a QML test sends a Shift-completed label at once, with no wait for Shift release and no release cue.
 
 ### REQ-ACT-02: The other clicks and deliberate double Return
 When Shift-Return is pressed the system shall right-click, when Return is pressed twice within 300 ms it shall double-click, and when Control-Return is pressed it shall click with Control held. After a plain Return on a target that is not an entry, the overlay keeps the keyboard for 300 ms, drawing nothing and letting the pointer through, so a second Return can come; any other key ends the session. After an entry, a right click or a Control click it gives the keyboard back at once. A key event generated by operating-system key repeat shall not count as the second Return.
@@ -293,7 +293,7 @@ A `window` is a Hyprland address, or `class:NAME` for the first window of that c
 
 Errors are `{"v":1,"ok":false,"error":KIND,"message":TEXT}` with KIND one of no-window, no-tree, busy, stale, internal, bad-request. The command line prints an ERROR line with the message and exits 1 on any error, 2 on bad arguments.
 
-Keys inside a hints session: in search-first mode lowercase letters search, while in labels-only mode they type labels until `/` starts a search (REQ-SEARCH-01, REQ-SEARCH-02); Shift with letters types a label, and an uppercase final label character activates its visible target (REQ-SEARCH-01, REQ-ACT-01); Tab and Shift-Tab move the focus, Return, Shift-Return, Control-Return and a double Return act (REQ-ACT-01, REQ-ACT-02), Space opens the grid, Backspace deletes the last letter, Escape ends the session. In scroll mode, number keys select an area, Tab and Shift-Tab cycle areas, holding H/J/K/L sends wheel actions immediately and every 80 ms until release, Shift+H/J/K/L use the configured Shift step, Return clears the number prefix, and Escape ends the session (REQ-SESSION-07, REQ-ACT-04, REQ-ACT-06).
+Keys inside a hints session: in labels-only mode, the default, lowercase letters type labels until `/` starts a search, while in search-first mode they search (REQ-SEARCH-01, REQ-SEARCH-02); Shift with letters types a label; a lowercase final label character clicks its visible target and an uppercase one selects it (REQ-SEARCH-01, REQ-ACT-01); Tab and Shift-Tab move the focus, Return, Shift-Return, Control-Return and a double Return act (REQ-ACT-01, REQ-ACT-02), Space opens the grid, Backspace deletes the last letter, Escape ends the session. In scroll mode, number keys select an area, Tab and Shift-Tab cycle areas, holding H/J/K/L sends wheel actions immediately and every 80 ms until release, Shift+H/J/K/L use the configured Shift step, Return clears the number prefix, and Escape ends the session (REQ-SESSION-07, REQ-ACT-04, REQ-ACT-06).
 
 ## 8. Unwanted behavior
 
@@ -357,7 +357,7 @@ Unit tests and properties cover labels, search, the grid, coordinates and the st
 
 - O1. Rust or another language for `thodud`: consequence, every later task; interim, Rust, measured on the GTK3 reference window at 61.2 ms median and 72.6 ms at the 95th percentile (release build, 50 sessions, 2026-10-21); next action, Slack's window after task 0005; owner, the coordinator, GG if it changes SEED.
 - O2. An accessibility bus inside a private headless display, so live checks can run without GG's session: interim, recorded trees and nightly live checks on his session; next action, a task after 0004.
-- O3. Labels-only or search-first as the default: interim, search-first as Homerow does; next action, GG's use after the first slice.
+- O3. Labels-only or search-first as the default: resolved 2026-10-25 by change 0024 after GG's use; labels-only is the default and search-first a setting.
 
 ## 13. Changes and retired requirements
 
@@ -382,6 +382,7 @@ Unit tests and properties cover labels, search, the grid, coordinates and the st
 - 2026-10-25: change 0021, stable per-object bar item identities, updated `shell-items` shape, and legacy report compatibility.
 - 2026-10-25: change 0022, keys typed with Control, Alt or Super neither search, type labels, select scroll areas nor scroll.
 - 2026-10-25: change 0023, a Shift-completed label activates once Shift is physically released, recognised whatever symbol the layout gives the release.
+- 2026-10-25: change 0024, a lowercase final label character clicks and an uppercase one selects; labels-only is the default, O3 is resolved, and change 0023's wait for Shift release is retired.
 
 ### Retired
 

@@ -740,7 +740,7 @@ fn req_session_06_fallback_keeps_displayed_labels() {
 
     let visual_label = label_for("visual").clone();
     for (i, c) in visual_label.chars().enumerate() {
-        let action = session.key(Key::Upper { c });
+        let action = session.key(Key::Char { c, shift: false });
         if i + 1 == visual_label.len() {
             assert_eq!(action.map(|act| act.target), Some(1));
         }
@@ -819,7 +819,7 @@ fn req_search_01_filter_cases() {
     }
 }
 
-// REQ-SEARCH-01: Shift starts a label; lowercase completion focuses it.
+// REQ-SEARCH-01: Shift types a label; uppercase completion selects it.
 #[test]
 fn req_search_01_shift_types_labels_and_tab_moves() {
     let targets: Vec<Target> = (0..30)
@@ -827,13 +827,13 @@ fn req_search_01_shift_types_labels_and_tab_moves() {
         .collect();
     let mut s = Session::new(targets, false);
     let label = s.labels[29].clone();
-    let mut chars = label.chars();
-    let first = chars.next().expect("a two-letter label");
-    s.key(Key::Upper {
-        c: first.to_ascii_uppercase(),
-    });
-    for c in chars {
-        s.key(Key::Char { c, shift: false });
+    for c in label.chars() {
+        assert!(
+            s.key(Key::Upper {
+                c: c.to_ascii_uppercase(),
+            })
+            .is_none()
+        );
     }
     assert_eq!(s.focused, Some(29));
     assert!(s.search.is_empty());
@@ -866,18 +866,18 @@ fn req_search_01_lowercase_continues_a_shifted_label_prefix() {
     assert_eq!(s.label_prefix, first.to_string());
     assert_eq!(s.focused, None);
     let last = label.chars().nth(1).expect("second label letter");
-    assert!(
-        s.key(Key::Char {
+    let act = s
+        .key(Key::Char {
             c: last,
-            shift: false
+            shift: false,
         })
-        .is_none()
+        .expect("a lowercase final character clicks");
+    assert_eq!(Some(act.target), s.labels.iter().position(|l| l == &label));
+    assert!(
+        !act.linger,
+        "a label click does not wait for a second Return"
     );
-    assert_eq!(
-        s.focused,
-        Some(s.labels.iter().position(|l| l == &label).unwrap())
-    );
-    assert_eq!(s.state, State::Showing);
+    assert_eq!(s.state, State::Acting);
 }
 
 // REQ-SEARCH-01: a label that is not visible in the current search cannot act.
@@ -964,77 +964,83 @@ fn req_act_01_return_clicks_the_center() {
     assert_eq!(physical, (175, 269), "at scale 1.25");
 }
 
-// REQ-ACT-01: uppercase completion clicks; lowercase completion only focuses.
+// REQ-ACT-01: lowercase completion clicks at once; uppercase completion
+// only selects, so no click is sent while Shift is held.
 #[test]
-fn req_act_01_uppercase_completion_acts_but_lowercase_only_focuses() {
+fn req_act_01_lowercase_completion_clicks_but_uppercase_only_selects() {
     let targets: Vec<Target> = (0..30)
         .map(|i| target(&format!("t{i}"), Rect::new(0, i * 40, 100, 30)))
         .collect();
-    let mut automatic = Session::new(targets.clone(), true);
-    let index = automatic
+    let mut clicked = Session::new(targets.clone(), true);
+    let index = clicked
         .labels
         .iter()
         .position(|label| label.len() == 2)
         .expect("a two-letter label");
-    let label = automatic.labels[index].clone();
+    let label = clicked.labels[index].clone();
     let mut action = None;
-    for (position, c) in label.chars().enumerate() {
-        action = if position + 1 == label.len() {
-            automatic.key(Key::Upper {
-                c: c.to_ascii_uppercase(),
-            })
-        } else {
-            automatic.key(Key::Char { c, shift: false })
-        };
+    for c in label.chars() {
+        action = clicked.key(Key::Char { c, shift: false });
     }
-    let action = action.expect("uppercase completion clicks");
+    let action = action.expect("lowercase completion clicks");
     assert_eq!(action.target, index);
     assert_eq!(action.button, Button::Left);
-    assert!(!action.linger, "uppercase activation ends after one click");
-    assert_eq!(automatic.state, State::Acting);
+    assert!(!action.linger, "a label click ends after one click");
+    assert_eq!(clicked.state, State::Acting);
 
-    let mut focused = Session::new(targets, true);
-    let label = focused.labels[index].clone();
-    for c in label.chars() {
-        assert!(focused.key(Key::Char { c, shift: false }).is_none());
+    let mut selected = Session::new(targets, true);
+    for (position, c) in label.chars().enumerate() {
+        let key = if position + 1 == label.len() {
+            Key::Upper {
+                c: c.to_ascii_uppercase(),
+            }
+        } else {
+            Key::Char { c, shift: false }
+        };
+        assert!(
+            selected.key(key).is_none(),
+            "uppercase completion only selects"
+        );
     }
-    assert_eq!(focused.focused, Some(index));
-    assert_eq!(focused.state, State::Showing);
+    assert_eq!(selected.focused, Some(index));
+    assert!(selected.label_selected);
+    assert_eq!(selected.state, State::Showing);
+    let act = selected
+        .key(Key::Return {
+            shift: true,
+            ctrl: false,
+        })
+        .expect("Shift-Return acts on the selected target");
+    assert_eq!((act.target, act.button), (index, Button::Right));
 }
 
 #[test]
-fn req_act_01_single_letter_d_selects_and_uppercase_d_acts() {
+fn req_act_01_single_letter_d_clicks_and_uppercase_d_selects() {
     let targets: Vec<Target> = (0..20)
         .map(|i| target(&format!("t{i}"), Rect::new(0, i * 40, 100, 30)))
         .collect();
-    let mut focused = Session::new(targets.clone(), true);
-    assert_eq!(focused.labels[2], "d");
-    assert!(
-        focused
-            .key(Key::Char {
-                c: 'd',
-                shift: false
-            })
-            .is_none()
-    );
-    assert_eq!(focused.focused, Some(2));
-    let action = focused
+    let mut clicked = Session::new(targets.clone(), true);
+    assert_eq!(clicked.labels[2], "d");
+    let action = clicked
+        .key(Key::Char {
+            c: 'd',
+            shift: false,
+        })
+        .expect("d clicks its single-letter target");
+    assert_eq!(action.target, 2);
+    assert!(!action.linger, "d does not start a double-click wait");
+
+    let mut selected = Session::new(targets, true);
+    assert!(selected.key(Key::Upper { c: 'D' }).is_none());
+    assert_eq!(selected.focused, Some(2));
+    let action = selected
         .key(Key::Return {
             shift: false,
             ctrl: false,
         })
-        .expect("Return activates the focused d target");
+        .expect("Return clicks the selected d target");
     assert_eq!(action.target, 2);
-
-    let mut automatic = Session::new(targets, true);
-    let action = automatic
-        .key(Key::Upper { c: 'D' })
-        .expect("uppercase D activates its single-letter target");
-    assert_eq!(action.target, 2);
-    assert!(
-        !action.linger,
-        "uppercase D does not start a double-click wait"
-    );
+    assert!(action.linger, "Return keeps its double-click wait");
 }
 
 // REQ-SESSION-01: a new label prefix clears the previous target focus.
@@ -1044,13 +1050,7 @@ fn req_session_01_new_label_prefix_clears_previous_focus() {
         .map(|i| target(&format!("t{i}"), Rect::new(0, i * 40, 100, 30)))
         .collect();
     let mut s = Session::new(targets, true);
-    assert!(
-        s.key(Key::Char {
-            c: 'd',
-            shift: false
-        })
-        .is_none()
-    );
+    assert!(s.key(Key::Upper { c: 'D' }).is_none());
     assert_eq!(s.focused, s.labels.iter().position(|label| label == "d"));
     assert!(s.label_selected);
 
@@ -1338,9 +1338,9 @@ fn open_event_round_trips() {
     );
 }
 
-// REQ-SEARCH-02: with labels_only, letters type labels and / starts a
-// search; without it, the default stays search-first. A key "?label:N"
-// types the whole label of target N, without Shift.
+// REQ-SEARCH-02: with labels_only, the default, letters type labels and /
+// starts a search; without it, letters search. A key "?label:N" types the
+// whole label of target N, without Shift.
 #[test]
 fn req_search_02_labels_only_cases() {
     for case in jsonl("search/labels-only.jsonl") {
@@ -1397,19 +1397,16 @@ fn req_search_02_labels_only_cases() {
     }
 }
 
-// REQ-SEARCH-02: the setting comes from config.toml, off unless set, and a
+// REQ-SEARCH-02: the setting comes from config.toml, on unless set, and a
 // typo is an error instead of a silent default.
 #[test]
 fn req_search_02_setting() {
     assert_eq!(config::parse(""), Ok(Config::default()));
-    assert!(
-        !Config::default().labels_only,
-        "search-first is the default"
-    );
+    assert!(Config::default().labels_only, "labels-only is the default");
     assert_eq!(
-        config::parse("labels_only = true\n"),
+        config::parse("labels_only = false\n"),
         Ok(Config {
-            labels_only: true,
+            labels_only: false,
             ..Config::default()
         })
     );

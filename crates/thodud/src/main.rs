@@ -3515,10 +3515,10 @@ mod tests {
         );
     }
 
-    // REQ-ACT-01: shifted lowercase key text activates the label just like
-    // the uppercase key text sent by the overlay.
+    // REQ-ACT-01: shifted lowercase key text is the same uppercase key as the
+    // text the overlay sends, which selects a label without clicking.
     #[test]
-    fn req_act_01_shifted_lowercase_key_text_activates_label() {
+    fn req_act_01_shifted_lowercase_key_text_is_uppercase() {
         assert_eq!(parse_key("d", true, false), Some(Key::Upper { c: 'D' }));
     }
 }
