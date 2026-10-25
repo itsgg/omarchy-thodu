@@ -1,13 +1,16 @@
 //! Image-derived targets found by the bounded classical detector (REQ-SRC-06).
 
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Mutex, mpsc};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use thodu_core::model::{
-    self, ActionKind, Layer, Monitor, Rect, Role, Source as From, Target, Window,
+    self, ActionKind, Layer, Monitor, PixelCheck, Rect, Role, Source as From, Target, TargetCheck,
+    Window,
 };
+use thodu_core::pixels;
 use woints_core::geom::{Global, Rect as VisionRect};
 use woints_vision::{ClassicalDetector, DetectParams, DetectionClass, Detector, Frame};
 
@@ -140,14 +143,21 @@ impl ImageSource {
                 })
             })
             .collect();
-        let targets = targets_from_monitor_detections(
-            windows,
-            visible_windows,
-            &monitor.layers,
+        let targets = with_pixel_checks(
+            targets_from_monitor_detections(
+                windows,
+                visible_windows,
+                &monitor.layers,
+                visible,
+                monitor.scale,
+                &boxes,
+                excluded,
+            ),
+            &frame.rgba,
+            frame.width,
+            frame.height,
             visible,
             monitor.scale,
-            &boxes,
-            excluded,
         );
         let took = started.elapsed().as_millis();
         let count = targets.len();
@@ -155,6 +165,101 @@ impl ImageSource {
             targets,
             format!("{count} visual candidates from image in {took} ms"),
         ))
+    }
+}
+
+/// Give each image target a fingerprint of its region in the capture it was
+/// detected in, to compare with a fresh capture just before a click.
+fn with_pixel_checks(
+    mut targets: Vec<Target>,
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    visible: Rect,
+    scale: f64,
+) -> Vec<Target> {
+    for target in &mut targets {
+        let crop = crop_in(visible, target.bounds, scale);
+        target.check = Some(TargetCheck::Pixels(PixelCheck {
+            region: target.bounds,
+            area: visible,
+            scale_permille: (scale * 1000.0).round() as u32,
+            fingerprint: pixels::fingerprint(rgba, width, height, crop),
+        }));
+    }
+    targets
+}
+
+/// Where a logical `region` lies, in physical pixels, in a capture of the
+/// logical `area` taken at `scale`.
+fn crop_in(area: Rect, region: Rect, scale: f64) -> (u32, u32, u32, u32) {
+    let physical = |v: i32| (f64::from(v) * scale).round().max(0.0) as u32;
+    (
+        physical(region.x - area.x),
+        physical(region.y - area.y),
+        physical(region.w),
+        physical(region.h),
+    )
+}
+
+/// Whether an image target's region now looks markedly different from when
+/// it was detected (REQ-ACT-03). A capture that fails or takes too long
+/// counts as changed, so the session refreshes instead of clicking unchecked.
+pub fn pixels_changed(check: &PixelCheck) -> bool {
+    pixels_changed_with(check, capture_region)
+}
+
+fn pixels_changed_with(
+    check: &PixelCheck,
+    capture: impl FnOnce(&PixelCheck) -> Result<(u32, u32, Vec<u8>), String>,
+) -> bool {
+    let scale = f64::from(check.scale_permille) / 1000.0;
+    match capture(check) {
+        Ok((width, height, rgba)) => pixels::differ(
+            &check.fingerprint,
+            &pixels::fingerprint(
+                &rgba,
+                width,
+                height,
+                crop_in(check.area, check.region, scale),
+            ),
+        ),
+        Err(_) => true,
+    }
+}
+
+/// How long the recapture before a click may take.
+const RECAPTURE_LIMIT: Duration = Duration::from_millis(500);
+
+/// The monitor area the target was detected in, at the same scale, through
+/// grim, read on its own thread so the image cannot fill the pipe, within
+/// RECAPTURE_LIMIT.
+fn capture_region(check: &PixelCheck) -> Result<(u32, u32, Vec<u8>), String> {
+    let r = check.area;
+    let scale = f64::from(check.scale_permille) / 1000.0;
+    let geometry = format!("{},{} {}x{}", r.x, r.y, r.w, r.h);
+    let mut child = Command::new("grim")
+        .args(["-l", "0", "-g", &geometry, "-s", &scale.to_string(), "-"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| "grim did not start".to_string())?;
+    let mut stdout = child.stdout.take().ok_or("grim gave no output")?;
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = tx.send(stdout.read_to_end(&mut bytes).map(|_| bytes));
+    });
+    match rx.recv_timeout(RECAPTURE_LIMIT) {
+        Ok(Ok(bytes)) => {
+            let _ = child.wait();
+            decode_png(&bytes)
+        }
+        _ => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err("grim did not capture the region in time".into())
+        }
     }
 }
 
@@ -355,10 +460,14 @@ fn decode_png(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DetectionBox, DetectionKind, covered_by_accessible, targets_from_monitor_detections,
+        DetectionBox, DetectionKind, covered_by_accessible, pixels_changed_with,
+        targets_from_monitor_detections, with_pixel_checks,
     };
     use std::time::{Duration, Instant};
-    use thodu_core::model::{ActionKind, Rect, Role, Source, Target, Window};
+    use thodu_core::model::{
+        ActionKind, PixelCheck, Rect, Role, Source, Target, TargetCheck, Window,
+    };
+    use thodu_core::pixels;
 
     fn window() -> Window {
         Window {
@@ -547,6 +656,68 @@ mod tests {
 
     // REQ-SRC-06 and REQ-SRC-07: visual candidates from one monitor image
     // belong to the topmost window at their click point, and AT-SPI wins.
+    // REQ-SRC-06 and REQ-ACT-03: an image target carries a fingerprint of its
+    // own region in the capture it was detected in, at the capture's scale.
+    #[test]
+    fn req_src_06_image_targets_carry_pixel_fingerprints() {
+        let (width, height) = (250u32, 125u32);
+        let mut rgba = vec![255u8; (width * height * 4) as usize];
+        for y in 25..50 {
+            for x in 25..75 {
+                let i = ((y * width + x) * 4) as usize;
+                rgba[i..i + 3].copy_from_slice(&[0, 0, 0]);
+            }
+        }
+        let target = Target {
+            id: "0x1:i0".into(),
+            bounds: Rect::new(20, 20, 40, 20),
+            role: Role::Text,
+            text: String::new(),
+            source: thodu_core::model::Source::Image,
+            actions: vec![ActionKind::Click],
+            window: "0x1".into(),
+            check: None,
+        };
+        let targets = with_pixel_checks(
+            vec![target],
+            &rgba,
+            width,
+            height,
+            Rect::new(0, 0, 200, 100),
+            1.25,
+        );
+        let Some(TargetCheck::Pixels(check)) = &targets[0].check else {
+            panic!("an image target carries a pixel check");
+        };
+        assert_eq!(check.region, Rect::new(20, 20, 40, 20));
+        assert_eq!(check.area, Rect::new(0, 0, 200, 100));
+        assert_eq!(check.scale_permille, 1250);
+        assert_eq!(
+            check.fingerprint,
+            pixels::fingerprint(&rgba, width, height, (25, 25, 50, 25))
+        );
+    }
+
+    // REQ-ACT-03: before a click the region is captured again; the same
+    // pixels pass, different ones and a failed capture count as changed.
+    #[test]
+    fn req_act_03_image_pixels_are_captured_again_before_a_click() {
+        let (w, h) = (40u32, 20u32);
+        let dark = vec![0u8; (w * h * 4) as usize];
+        let light = vec![255u8; (w * h * 4) as usize];
+        let check = PixelCheck {
+            region: Rect::new(0, 0, 40, 20),
+            area: Rect::new(0, 0, 40, 20),
+            scale_permille: 1000,
+            fingerprint: pixels::fingerprint(&dark, w, h, (0, 0, w, h)),
+        };
+        assert!(!pixels_changed_with(&check, |_| Ok((w, h, dark.clone()))));
+        assert!(pixels_changed_with(&check, |_| Ok((w, h, light.clone()))));
+        assert!(pixels_changed_with(&check, |_| Err(
+            "grim did not capture the region in time".into()
+        )));
+    }
+
     // REQ-SRC-07: a detection under a layer that takes input, such as the
     // bar strip or a notification's toast column, belongs to no window.
     #[test]

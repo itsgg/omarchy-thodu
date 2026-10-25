@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::model::{
-    ActionKind, ElementCheck, ElementRef, Monitor, Rect, Role, Source, Target, Window,
+    ActionKind, ElementCheck, ElementRef, Monitor, Rect, Role, Source, Target, TargetCheck, Window,
 };
 
 /// One accessible element, with its extents relative to its window.
@@ -327,7 +327,7 @@ pub fn scroll_targets(frame: &Node, window: &Window, monitor: &Monitor) -> Vec<T
                             source: Source::Atspi,
                             actions: vec![ActionKind::Scroll],
                             window: self.window.address.clone(),
-                            check: node.check(),
+                            check: node.check().map(TargetCheck::Element),
                         },
                     ));
                 }
@@ -439,7 +439,7 @@ fn walk(node: &Node, at: &mut Walk<'_>, div: f64, parent: Option<[i32; 4]>, insi
                     source: Source::Atspi,
                     actions: actions_for(role).to_vec(),
                     window: at.window.address.clone(),
-                    check: node.check(),
+                    check: node.check().map(TargetCheck::Element),
                 },
                 order: *at.order,
             });

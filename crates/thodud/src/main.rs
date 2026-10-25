@@ -26,7 +26,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thodu_core::config::{self, Config};
 use thodu_core::input;
 use thodu_core::labels;
-use thodu_core::model::{ElementCheck, Monitor, Owner, Rect, Source, Target, Window};
+use thodu_core::model::{Monitor, Owner, Rect, Source, Target, TargetCheck, Window};
 use thodu_core::protocol::{
     self, Envelope, ErrorKind, LabeledTarget, MonitorInfo, OpenEvent, Reply, Request, Timing, View,
 };
@@ -719,6 +719,16 @@ impl Daemon {
         pointer::perform(monitor, &input::plan(act), restore, &mut ctrl)
     }
 
+    /// Whether a target's own check fails just before a click: its element
+    /// moved, or its pixels changed (REQ-ACT-03).
+    fn target_check_failed(&self, check: &TargetCheck) -> bool {
+        check_failed_with(
+            check,
+            |element| self.atspi.element_moved(element),
+            image::pixels_changed,
+        )
+    }
+
     /// Make the Control keyboard before a Control-click's check: the
     /// compositor needs a moment to find a new device, which must not fall
     /// between the check and the press. A failure here is left for the click
@@ -800,7 +810,7 @@ impl Daemon {
             || {
                 target_is_current(&target, &self.shell, &monitor, || {
                     target_moved_or_covered(&target, window.as_ref(), |check| {
-                        self.atspi.element_moved(check)
+                        self.target_check_failed(check)
                     })
                 })
             },
@@ -875,7 +885,7 @@ impl Daemon {
             id,
             act,
             |target, window| {
-                target_moved_or_covered(target, window, |check| self.atspi.element_moved(check))
+                target_moved_or_covered(target, window, |check| self.target_check_failed(check))
             },
             |monitor| self.perform(monitor, act, None),
         );
@@ -1738,6 +1748,19 @@ fn record_first_click(entry: &mut Entry, happened: bool, workspace_changed: bool
     entry.pending = entry.pending.saturating_sub(1);
 }
 
+/// A target's own check, read with `element_moved` for an accessible element
+/// and `pixels_changed` for an image target.
+fn check_failed_with(
+    check: &TargetCheck,
+    element_moved: impl FnOnce(&thodu_core::model::ElementCheck) -> bool,
+    pixels_changed: impl FnOnce(&thodu_core::model::PixelCheck) -> bool,
+) -> bool {
+    match check {
+        TargetCheck::Element(element) => element_moved(element),
+        TargetCheck::Pixels(pixels) => pixels_changed(pixels),
+    }
+}
+
 /// Whether a target's click point may no longer reach it: a bar target's
 /// point must still belong to the bar, and a window target's window must
 /// not have moved, resized, closed or left its workspace and must still
@@ -1745,12 +1768,12 @@ fn record_first_click(entry: &mut Entry, happened: bool, workspace_changed: bool
 fn target_moved_or_covered(
     target: &Target,
     window: Option<&Window>,
-    element_moved: impl FnOnce(&ElementCheck) -> bool,
+    check_failed: impl FnOnce(&TargetCheck) -> bool,
 ) -> bool {
     let (x, y) = target.bounds.center();
     let owner = hypr::owner_at(x, y);
     let now = window.and_then(|window| hypr::window(&window.address).ok().flatten());
-    moved_or_covered_given(target, window, now.as_ref(), &owner, element_moved)
+    moved_or_covered_given(target, window, now.as_ref(), &owner, check_failed)
 }
 
 /// `target_moved_or_covered` once Hyprland has answered: `now` is the
@@ -1761,7 +1784,7 @@ fn moved_or_covered_given(
     window: Option<&Window>,
     now: Option<&Window>,
     owner: &Owner,
-    element_moved: impl FnOnce(&ElementCheck) -> bool,
+    check_failed: impl FnOnce(&TargetCheck) -> bool,
 ) -> bool {
     if target.window.is_empty() {
         return target.source == Source::Shell
@@ -1772,7 +1795,7 @@ fn moved_or_covered_given(
     };
     target_is_stale(target, window, now)
         || visible_target_owner_changed(target, owner.window())
-        || target.check.as_ref().is_some_and(element_moved)
+        || target.check.as_ref().is_some_and(check_failed)
 }
 
 /// Whether a target may be clicked now: a shell target must match the
@@ -2056,7 +2079,7 @@ mod tests {
 
     use super::{
         Daemon, Entry, ScrollFailure, ScrollFocus, WORKSPACE_CHANGE_WAIT, WindowScope,
-        checked_click, grid_window, image_fallback_exclusions, merge_fallback,
+        check_failed_with, checked_click, grid_window, image_fallback_exclusions, merge_fallback,
         moved_or_covered_given, no_active_window_scope, parse_key, perform_scroll_event_with,
         record_first_click, refresh_options, restart_address, scoped_windows, send_wheel_with,
         start_refreshed_session, status_persistent, target_is_current,
@@ -3549,19 +3572,21 @@ mod tests {
             source: TargetSource::Atspi,
             actions: vec![ActionKind::Click],
             window: "0x1".into(),
-            check: Some(thodu_core::model::ElementCheck {
-                at: thodu_core::model::ElementRef {
-                    bus: ":1.5".into(),
-                    path: "/send".into(),
+            check: Some(thodu_core::model::TargetCheck::Element(
+                thodu_core::model::ElementCheck {
+                    at: thodu_core::model::ElementRef {
+                        bus: ":1.5".into(),
+                        path: "/send".into(),
+                    },
+                    extents: [10, 10, 20, 20],
                 },
-                extents: [10, 10, 20, 20],
-            }),
+            )),
         };
         let owner = thodu_core::model::Owner::Window("0x1".into());
         let read = Cell::new(0);
         let element = |moved: bool| {
             let read = &read;
-            move |_: &thodu_core::model::ElementCheck| {
+            move |_: &thodu_core::model::TargetCheck| {
                 read.set(read.get() + 1);
                 moved
             }
@@ -3607,6 +3632,84 @@ mod tests {
             !watches_workspace(false, true),
             "a click that does not linger"
         );
+    }
+
+    // REQ-ACT-03: an image target whose region changed is refused while its
+    // window and click point are unchanged; the pixel check is what decides.
+    #[test]
+    fn req_act_03_an_image_target_with_changed_pixels_refuses_the_click() {
+        let window = Window {
+            address: "0x1".into(),
+            at: (0, 0),
+            size: (200, 200),
+            workspace: 1,
+            ..Window::default()
+        };
+        let target = Target {
+            id: "0x1:i0".into(),
+            bounds: Rect::new(10, 10, 40, 20),
+            role: Role::Text,
+            text: String::new(),
+            source: TargetSource::Image,
+            actions: vec![ActionKind::Click],
+            window: "0x1".into(),
+            check: Some(thodu_core::model::TargetCheck::Pixels(
+                thodu_core::model::PixelCheck {
+                    region: Rect::new(10, 10, 40, 20),
+                    area: Rect::new(0, 0, 200, 200),
+                    scale_permille: 1000,
+                    fingerprint: [0; thodu_core::pixels::CELLS],
+                },
+            )),
+        };
+        let owner = thodu_core::model::Owner::Window("0x1".into());
+        let pixels = |changed: bool| {
+            move |check: &thodu_core::model::TargetCheck| {
+                assert!(matches!(check, thodu_core::model::TargetCheck::Pixels(_)));
+                changed
+            }
+        };
+        assert!(!moved_or_covered_given(
+            &target,
+            Some(&window),
+            Some(&window),
+            &owner,
+            pixels(false)
+        ));
+        assert!(moved_or_covered_given(
+            &target,
+            Some(&window),
+            Some(&window),
+            &owner,
+            pixels(true)
+        ));
+    }
+
+    // REQ-ACT-03: each kind of target check goes to its own recheck.
+    #[test]
+    fn req_act_03_each_target_check_goes_to_its_own_recheck() {
+        let element = thodu_core::model::TargetCheck::Element(thodu_core::model::ElementCheck {
+            at: thodu_core::model::ElementRef::default(),
+            extents: [0, 0, 1, 1],
+        });
+        let pixels = thodu_core::model::TargetCheck::Pixels(thodu_core::model::PixelCheck {
+            region: Rect::new(0, 0, 1, 1),
+            area: Rect::new(0, 0, 1, 1),
+            scale_permille: 1000,
+            fingerprint: [0; thodu_core::pixels::CELLS],
+        });
+        assert!(check_failed_with(
+            &element,
+            |_| true,
+            |_| panic!("not an image target")
+        ));
+        assert!(!check_failed_with(&element, |_| false, |_| true));
+        assert!(check_failed_with(
+            &pixels,
+            |_| panic!("not an element"),
+            |_| true
+        ));
+        assert!(!check_failed_with(&pixels, |_| true, |_| false));
     }
 
     // REQ-SEARCH-01: a letter typed with Control is a shortcut meant for an

@@ -111,7 +111,27 @@ pub struct Target {
     /// How to tell before a click that the element is still where it was;
     /// left out of the IPC and recorded cases.
     #[serde(skip)]
-    pub check: Option<ElementCheck>,
+    pub check: Option<TargetCheck>,
+}
+
+/// How a target is checked just before a click (REQ-ACT-03): an accessible
+/// element is read again, an image target's region captured again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TargetCheck {
+    Element(ElementCheck),
+    Pixels(PixelCheck),
+}
+
+/// An image target's region, the monitor area and scale (in thousandths) of
+/// the capture it was detected in, and the fingerprint of its pixels then.
+/// The recheck captures the same area at the same scale, so unchanged pixels
+/// are sampled exactly as before.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PixelCheck {
+    pub region: Rect,
+    pub area: Rect,
+    pub scale_permille: u32,
+    pub fingerprint: [u8; crate::pixels::CELLS],
 }
 
 /// An accessible element's address on the accessibility bus.

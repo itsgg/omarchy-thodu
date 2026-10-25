@@ -8,6 +8,7 @@ pub mod input;
 pub mod labels;
 pub mod model;
 pub mod perf;
+pub mod pixels;
 pub mod protocol;
 pub mod session;
 pub mod stale;

@@ -2022,7 +2022,12 @@ fn req_act_03_live_targets_carry_element_checks() {
     };
     let targets = tree::targets(&frame, &window, &monitor());
     assert_eq!(targets.len(), 1);
-    assert_eq!(targets[0].check, live_button().check());
+    assert_eq!(
+        targets[0].check,
+        live_button()
+            .check()
+            .map(thodu_core::model::TargetCheck::Element)
+    );
 }
 
 // REQ-GRID-01: a lowercase label refines a coarse cell, and one that chooses
@@ -2081,4 +2086,59 @@ fn req_grid_01_return_on_a_coarse_cell_refines() {
     );
     assert!(s.focused.is_none());
     assert_eq!(s.state, State::Showing);
+}
+
+/// A white strip with dark glyph blocks every `pitch` pixels from `offset`.
+fn text_strip(width: u32, height: u32, offset: u32, pitch: u32) -> Vec<u8> {
+    let mut rgba = vec![255u8; (width * height * 4) as usize];
+    for y in 4..height - 4 {
+        for x in 0..width {
+            if x >= offset && (x - offset) % pitch < pitch / 2 {
+                let i = ((y * width + x) * 4) as usize;
+                rgba[i..i + 3].copy_from_slice(&[20, 20, 20]);
+            }
+        }
+    }
+    rgba
+}
+
+// REQ-ACT-03: an image target's fingerprint stays the same for the same
+// pixels and for a blinking cursor, and changes for other text in the region.
+#[test]
+fn req_act_03_pixel_fingerprints_tell_new_text_from_a_blinking_cursor() {
+    use thodu_core::pixels::{differ, fingerprint};
+    let (w, h) = (300, 25);
+    let whole = (0, 0, w, h);
+    let text = text_strip(w, h, 0, 14);
+    let then = fingerprint(&text, w, h, whole);
+    assert_eq!(then, fingerprint(&text, w, h, whole));
+    assert!(!differ(&then, &fingerprint(&text, w, h, whole)));
+
+    let mut blink = text.clone();
+    for y in 4..20 {
+        for x in 280..290 {
+            let i = ((y * w + x) * 4) as usize;
+            blink[i..i + 3].copy_from_slice(&[255, 255, 255]);
+        }
+    }
+    assert!(
+        !differ(&then, &fingerprint(&blink, w, h, whole)),
+        "a cursor blink is not new text"
+    );
+
+    let scrolled = text_strip(w, h, 9, 22);
+    assert!(
+        differ(&then, &fingerprint(&scrolled, w, h, whole)),
+        "other text in the region"
+    );
+    let blank = vec![255u8; (w * h * 4) as usize];
+    assert!(
+        differ(&then, &fingerprint(&blank, w, h, whole)),
+        "text that scrolled away"
+    );
+    assert_eq!(
+        fingerprint(&text, w, h, (w, 0, 10, 10)),
+        [0; thodu_core::pixels::CELLS],
+        "a crop outside the image"
+    );
 }
