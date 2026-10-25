@@ -1,0 +1,26 @@
+# 0020: Make the Thodu bar widget visible and useful
+
+Status: proposed
+Why: GG asked for a visible top-bar control that shows whether Thodu is running and provides a way to start modes and adjust settings.
+
+## Added
+
+### REQ-SHELL-02: The bar widget shows Thodu status and controls
+When the Thodu bar widget is configured, it shall show a visible, themed control with a tooltip. The control shall indicate whether the `thodud` user service is ready. Activating it shall open a themed, keyboard-navigable menu with actions to start hints, grid, and scroll sessions; controls to change `labels_only`, `status_display`, `scroll_step`, and `scroll_shift_step`; and an action to open the Thodu configuration file in an Omarchy terminal editor. Configuration changes shall persist to `~/.config/thodu/config.toml`, preserve unrelated entries, use the existing value constraints, and apply to newly started sessions. Escape or an outside click shall close the menu. The bar widget shall continue to report other clickable bar items for hint sessions.
+Acceptance:
+- scenario: QML tests verify the widget's settings are read, changed, persisted without dropping unrelated settings, and bounded by the existing configuration rules.
+- scenario: a QML test verifies the menu dispatches all three session modes and closes after a mode is selected.
+- live: the visible control appears in the bar, indicates service readiness, opens and closes its menu, launches each mode, and persists setting changes.
+
+## Modified
+
+None.
+
+## Removed
+
+None.
+
+## Tests
+
+- Add REQ-SHELL-02 QML tests for settings persistence and menu actions.
+- Add `tests/acceptance/reqs.sh REQ-SHELL-02` to the task acceptance.
