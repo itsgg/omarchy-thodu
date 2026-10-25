@@ -747,11 +747,11 @@ fn req_cli_02_no_hyprland_socket_exits_1_with_error() {
     let socket = hypr_dir.join(".socket.sock");
     std::fs::create_dir_all(socket.parent().expect("socket parent"))
         .expect("create fake Hyprland runtime");
-    drop(UnixListener::bind(&socket).expect("bind temporary Hyprland socket"));
-    assert!(
-        socket.exists(),
-        "dropped Unix listener leaves a stale socket"
-    );
+    // A stale entry nothing listens on, as a crashed Hyprland leaves. A bound
+    // and dropped listener would race: a child spawned by a parallel test
+    // holds a copy of it until exec, so a connect could still succeed.
+    std::fs::write(&socket, b"").expect("write stale Hyprland socket entry");
+    assert!(socket.exists(), "the stale socket entry exists");
 
     let output = Command::new(env!("CARGO_BIN_EXE_thodu"))
         .args(["hints", "--no-overlay"])
