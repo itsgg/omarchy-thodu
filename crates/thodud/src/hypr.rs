@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde_json::Value;
-use thodu_core::model::{Monitor, Window};
+use thodu_core::model::{self, Layer, Monitor, Owner, Rect, Window, shown_beside_fullscreen};
 use thodu_core::protocol::hyprland_socket_path as hypr_socket_path;
 
 use crate::focus::DispatchSyntax;
@@ -82,8 +82,36 @@ pub fn window_from(v: &Value) -> Option<Window> {
             .get("focusHistoryID")
             .and_then(Value::as_i64)
             .unwrap_or(i64::MAX),
+        allowed_over_fullscreen: v.get("allowedOverFullscreen").and_then(Value::as_bool)
+            == Some(true),
+        ignores_input: v.get("acceptsInput").and_then(Value::as_bool) == Some(false),
         focused: false,
     })
+}
+
+/// The layer-shell surfaces Hyprland reports on the monitor `name`.
+fn layers_from(layers: &Value, name: &str) -> Vec<Layer> {
+    let Some(levels) = layers
+        .get(name)
+        .and_then(|m| m.get("levels"))
+        .and_then(Value::as_object)
+    else {
+        return Vec::new();
+    };
+    levels
+        .iter()
+        .filter_map(|(level, list)| Some((level.parse::<u8>().ok()?, list.as_array()?)))
+        .flat_map(|(level, list)| {
+            list.iter().filter_map(move |l| {
+                let get = |k: &str| l.get(k).and_then(Value::as_i64).unwrap_or_default() as i32;
+                Some(Layer {
+                    namespace: l.get("namespace")?.as_str()?.to_string(),
+                    level,
+                    rect: Rect::new(get("x"), get("y"), get("w"), get("h")),
+                })
+            })
+        })
+        .collect()
 }
 
 pub fn active_window() -> Result<Option<Window>, String> {
@@ -137,7 +165,12 @@ fn visible_windows_from(monitors: &Value, clients: &Value, monitor_id: i64) -> V
         })
         .collect();
     windows.sort_by_key(|(key, _)| *key);
-    windows.into_iter().map(|(_, window)| window).collect()
+    let windows: Vec<Window> = windows.into_iter().map(|(_, window)| window).collect();
+    windows
+        .iter()
+        .filter(|window| shown_beside_fullscreen(window, &windows))
+        .cloned()
+        .collect()
 }
 
 /// The window at `address`, or with `class:NAME` the first window of that
@@ -161,28 +194,38 @@ pub struct MonitorEntry {
     pub monitor: Monitor,
 }
 
+/// Every monitor, each with the layer surfaces on it. Without Hyprland's
+/// layer report a monitor has none, so no bar target is kept.
 pub fn monitors() -> Result<Vec<MonitorEntry>, String> {
     let list = json("monitors")?;
-    Ok(list
-        .as_array()
+    let layers = json("layers").unwrap_or(Value::Null);
+    Ok(monitors_from(&list, &layers))
+}
+
+fn monitors_from(list: &Value, layers: &Value) -> Vec<MonitorEntry> {
+    list.as_array()
         .into_iter()
         .flatten()
-        .map(|m| MonitorEntry {
-            id: m.get("id").and_then(Value::as_i64).unwrap_or_default(),
-            monitor: Monitor {
-                name: m
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                x: m.get("x").and_then(Value::as_i64).unwrap_or_default() as i32,
-                y: m.get("y").and_then(Value::as_i64).unwrap_or_default() as i32,
-                width: m.get("width").and_then(Value::as_i64).unwrap_or_default() as i32,
-                height: m.get("height").and_then(Value::as_i64).unwrap_or_default() as i32,
-                scale: m.get("scale").and_then(Value::as_f64).unwrap_or(1.0),
-            },
+        .map(|m| {
+            let name = m
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            MonitorEntry {
+                id: m.get("id").and_then(Value::as_i64).unwrap_or_default(),
+                monitor: Monitor {
+                    layers: layers_from(layers, &name),
+                    name,
+                    x: m.get("x").and_then(Value::as_i64).unwrap_or_default() as i32,
+                    y: m.get("y").and_then(Value::as_i64).unwrap_or_default() as i32,
+                    width: m.get("width").and_then(Value::as_i64).unwrap_or_default() as i32,
+                    height: m.get("height").and_then(Value::as_i64).unwrap_or_default() as i32,
+                    scale: m.get("scale").and_then(Value::as_f64).unwrap_or(1.0),
+                },
+            }
         })
-        .collect())
+        .collect()
 }
 
 /// The monitor Hyprland has focused, with its id.
@@ -286,43 +329,37 @@ pub fn follows_mouse() -> bool {
         .is_none_or(|n| n != 0)
 }
 
-/// The address of the frontmost window under a logical point on a shown
-/// workspace.
-pub fn window_at(x: i32, y: i32) -> Option<String> {
-    let monitors = json("monitors").ok()?;
-    let clients = json("clients").ok()?;
-    window_at_from(&monitors, &clients, x, y)
+/// What receives a click at a logical point: a layer, the frontmost
+/// window that takes input, or nothing (REQ-SRC-07).
+pub fn owner_at(x: i32, y: i32) -> Owner {
+    let (Ok(list), Ok(clients)) = (json("monitors"), json("clients")) else {
+        return Owner::Nothing;
+    };
+    let layers = json("layers").unwrap_or(Value::Null);
+    owner_at_from(&list, &clients, &layers, x, y)
 }
 
-fn window_at_from(monitors: &Value, clients: &Value, x: i32, y: i32) -> Option<String> {
-    let shown: Vec<i64> = monitors
-        .as_array()?
-        .iter()
-        .flat_map(|m| {
-            ["activeWorkspace", "specialWorkspace"]
-                .into_iter()
-                .filter_map(|k| m.get(k)?.get("id")?.as_i64())
-        })
-        .filter(|id| *id != 0)
-        .collect();
-    clients
-        .as_array()?
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| c.get("mapped").and_then(Value::as_bool) != Some(false))
-        .filter(|(_, c)| c.get("hidden").and_then(Value::as_bool) != Some(true))
-        .filter_map(|(order, c)| {
-            let w = window_from(c)?;
-            ((w.pinned || shown.contains(&w.workspace)) && w.rect().contains_point(x, y))
-                .then_some((w.stacking_key(), order, w.address))
-        })
-        .min_by_key(|(key, order, _)| (*key, *order))
-        .map(|(_, _, address)| address)
+fn owner_at_from(list: &Value, clients: &Value, layers: &Value, x: i32, y: i32) -> Owner {
+    let Some(entry) = monitors_from(list, layers)
+        .into_iter()
+        .find(|entry| entry.monitor.logical().contains_point(x, y))
+    else {
+        return Owner::Nothing;
+    };
+    let windows = visible_windows_from(list, clients, entry.id);
+    model::owner_at(&windows, &entry.monitor, x, y)
+}
+
+/// The address of the window that receives a click at a logical point, or
+/// None when a layer or nothing does.
+pub fn window_at(x: i32, y: i32) -> Option<String> {
+    owner_at(x, y).window().map(str::to_string)
 }
 
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+    use thodu_core::model::Owner;
 
     use super::cursor_focus_refresh_command;
     use crate::focus::DispatchSyntax;
@@ -415,9 +452,78 @@ mod tests {
 
     // REQ-SRC-07: Hyprland draws floating windows above tiled windows even
     // when the tiled window has the newer focus history.
+    // REQ-SRC-07: Hyprland's layer report becomes each monitor's layers, and
+    // a point is owned through the whole stack.
+    #[test]
+    fn req_src_07_layers_are_read_per_monitor_and_own_their_points() {
+        let monitors = json!([{
+            "id": 0, "name": "M", "x": 0, "y": 0, "width": 1000, "height": 800, "scale": 1.0,
+            "activeWorkspace": { "id": 1 }, "specialWorkspace": { "id": 0 }
+        }]);
+        let layers = json!({ "M": { "levels": {
+            "0": [{ "namespace": "omarchy-background", "x": 0, "y": 0, "w": 1000, "h": 800 }],
+            "2": [{ "namespace": "omarchy-bar", "x": 0, "y": 0, "w": 1000, "h": 26 }],
+            "3": [{ "namespace": "omarchy-notifications", "x": 0, "y": 0, "w": 1000, "h": 800 }]
+        } } });
+        let clients = json!([{
+            "address": "0xapp", "class": "app", "title": "app", "pid": 10,
+            "at": [0, 0], "size": [1000, 800], "workspace": { "id": 1 }, "monitor": 0,
+            "mapped": true, "hidden": false, "floating": false, "pinned": false,
+            "fullscreen": 0, "focusHistoryID": 0, "acceptsInput": true
+        }]);
+        let monitor = &super::monitors_from(&monitors, &layers)[0].monitor;
+        assert_eq!(monitor.layers.len(), 3);
+        assert!(
+            monitor
+                .layers
+                .iter()
+                .any(|l| l.namespace == "omarchy-bar" && l.level == 2)
+        );
+        let owner = |x, y| super::owner_at_from(&monitors, &clients, &layers, x, y);
+        assert_eq!(owner(500, 10), Owner::Layer("omarchy-bar".into()));
+        assert_eq!(
+            owner(950, 400),
+            Owner::Layer("omarchy-notifications".into())
+        );
+        assert_eq!(owner(300, 400), Owner::Window("0xapp".into()));
+    }
+
+    // REQ-SRC-07: windows behind a fullscreen window are not collected, and
+    // a window Hyprland allows over fullscreen is.
+    #[test]
+    fn req_src_07_windows_behind_a_fullscreen_window_are_not_visible() {
+        let monitors =
+            json!([{ "id": 0, "activeWorkspace": { "id": 1 }, "specialWorkspace": { "id": 0 } }]);
+        let client = |address: &str, fullscreen: i64, over: bool| {
+            json!({
+                "address": address, "class": "app", "title": address, "pid": 10,
+                "at": [0, 0], "size": [500, 500], "workspace": { "id": 1 }, "monitor": 0,
+                "mapped": true, "hidden": false, "floating": over, "pinned": false,
+                "fullscreen": fullscreen, "focusHistoryID": 1, "allowedOverFullscreen": over
+            })
+        };
+        let clients = json!([
+            client("0xbehind", 0, false),
+            client("0xfull", 2, false),
+            client("0xdialog", 0, true)
+        ]);
+        let visible: Vec<_> = super::visible_windows_from(&monitors, &clients, 0)
+            .into_iter()
+            .map(|w| w.address)
+            .collect();
+        assert_eq!(visible, ["0xdialog", "0xfull"]);
+    }
+
     #[test]
     fn req_src_07_floating_window_owns_an_overlap_above_the_active_tiled_window() {
         let monitors = json!([{
+            "id": 0,
+            "name": "M",
+            "x": 0,
+            "y": 0,
+            "width": 200,
+            "height": 200,
+            "scale": 1.0,
             "activeWorkspace": { "id": 5 },
             "specialWorkspace": { "id": 0 }
         }]);
@@ -442,7 +548,7 @@ mod tests {
         let clients = json!([client("0xtiled", false, 0), client("0xfloating", true, 3)]);
 
         assert_eq!(
-            super::window_at_from(&monitors, &clients, 50, 50).as_deref(),
+            super::owner_at_from(&monitors, &clients, &serde_json::Value::Null, 50, 50).window(),
             Some("0xfloating")
         );
     }

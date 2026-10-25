@@ -26,7 +26,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thodu_core::config::{self, Config};
 use thodu_core::input;
 use thodu_core::labels;
-use thodu_core::model::{Monitor, Rect, Source, Target, Window};
+use thodu_core::model::{Monitor, Owner, Rect, Source, Target, Window};
 use thodu_core::protocol::{
     self, Envelope, ErrorKind, LabeledTarget, MonitorInfo, OpenEvent, Reply, Request, Timing, View,
 };
@@ -761,7 +761,12 @@ impl Daemon {
             &monitor,
             || {
                 if target.window.is_empty() {
-                    return false;
+                    // The bar's layer must still own the point: a fullscreen
+                    // window or a notification over it would take the click.
+                    let (x, y) = target.bounds.center();
+                    return target.source == Source::Shell
+                        && hypr::owner_at(x, y)
+                            != Owner::Layer(sources::BAR_NAMESPACE.to_string());
                 }
                 let Some(window) = window.as_ref() else {
                     return false;
@@ -1574,7 +1579,8 @@ fn merge_fallback(
     }
     let mut targets = entry.session.targets.clone();
     targets.extend(fallback.targets);
-    sources::finish_visible_targets(&mut targets, visible_windows);
+    let monitor = entry.monitor.clone();
+    sources::finish_visible_targets(&mut targets, visible_windows, &monitor);
     entry.session.merge_targets_preserving_labels(targets);
     if entry.session.targets.is_empty() {
         entry.session.open_grid();
@@ -1638,19 +1644,19 @@ fn visible_target_owner_changed(target: &Target, current_owner: Option<&str>) ->
     !target.window.is_empty() && current_owner != Some(target.window.as_str())
 }
 
+/// Click a target only while it is current: a shell target must match the
+/// latest bar report, and any target must still own its click point, which
+/// for a window target includes its window's geometry; otherwise refresh.
 fn dispatch_activation<R>(
     target: &Target,
     shell: &sources::Shell,
     monitor: &Monitor,
-    window_target_stale: impl FnOnce() -> bool,
+    moved_or_covered: impl FnOnce() -> bool,
     refresh: impl FnOnce(),
     activate: impl FnOnce() -> R,
 ) -> Option<R> {
-    let stale = if target.source == Source::Shell {
-        shell.target_is_stale(target, monitor)
-    } else {
-        window_target_stale()
-    };
+    let stale = (target.source == Source::Shell && shell.target_is_stale(target, monitor))
+        || moved_or_covered();
     if stale {
         refresh();
         None
@@ -2344,6 +2350,7 @@ mod tests {
             width: 100,
             height: 100,
             scale: 1.0,
+            layers: Vec::new(),
         };
         let window = on(0);
         let target = Target {
@@ -2424,6 +2431,7 @@ mod tests {
             width: 100,
             height: 100,
             scale: 1.0,
+            layers: Vec::new(),
         };
         let target = Target {
             id: "pane".into(),
@@ -2507,6 +2515,7 @@ mod tests {
             width: 100,
             height: 100,
             scale: 1.0,
+            layers: Vec::new(),
         };
         let daemon = daemon_with_entry(Entry {
             session: Session::new_scroll(vec![Target {
@@ -2626,6 +2635,7 @@ mod tests {
             width: 1536,
             height: 864,
             scale: 1.0,
+            layers: Vec::new(),
         };
         let got = sources::collect(&sources, &on(0), &monitor);
         let session = Session::begin(got.targets, monitor.logical(), false, false);
@@ -2650,6 +2660,11 @@ mod tests {
             width: 100,
             height: 50,
             scale: 1.0,
+            layers: vec![thodu_core::model::Layer {
+                namespace: "omarchy-bar".into(),
+                level: 2,
+                rect: Rect::new(120, 0, 100, 26),
+            }],
         };
         let (active, monitor, windows, visible_windows) =
             no_active_window_scope("visible", chosen_monitor.clone(), Vec::new());
@@ -2708,6 +2723,7 @@ mod tests {
             width: 200,
             height: 100,
             scale: 1.0,
+            layers: Vec::new(),
         };
         let primary = Target {
             id: "a0".into(),
@@ -2797,6 +2813,7 @@ mod tests {
             width: 1200,
             height: 900,
             scale: 1.0,
+            layers: Vec::new(),
         };
         let target = Target {
             id: "a0".into(),
@@ -2866,6 +2883,7 @@ mod tests {
             width: 100,
             height: 100,
             scale: 1.0,
+            layers: Vec::new(),
         };
         let target = Target {
             id: "a0".into(),
@@ -2930,6 +2948,7 @@ mod tests {
             width: 100,
             height: 100,
             scale: 1.0,
+            layers: Vec::new(),
         };
         let target = Target {
             id: "a0".into(),
@@ -2994,6 +3013,7 @@ mod tests {
             width: 100,
             height: 100,
             scale: 1.0,
+            layers: Vec::new(),
         };
         let target = Target {
             id: "a0".into(),
@@ -3045,6 +3065,7 @@ mod tests {
             width: 100,
             height: 100,
             scale: 1.0,
+            layers: Vec::new(),
         };
         let target = Target {
             id: "a0".into(),
@@ -3112,6 +3133,7 @@ mod tests {
             width: 100,
             height: 100,
             scale: 1.0,
+            layers: Vec::new(),
         };
         let target = Target {
             id: "a0".into(),
@@ -3249,6 +3271,7 @@ mod tests {
                 width: 100,
                 height: 100,
                 scale: 1.0,
+                layers: Vec::new(),
             };
             let entry = Entry {
                 session: Session::begin(Vec::new(), monitor.logical(), false, false),
@@ -3322,6 +3345,7 @@ mod tests {
             width: 100,
             height: 50,
             scale: 1.0,
+            layers: Vec::new(),
         };
         let item = thodu_core::protocol::ShellItem {
             identity: "tray-item".into(),
@@ -3357,7 +3381,7 @@ mod tests {
             &shell_target,
             &shell,
             &monitor,
-            || panic!("shell targets do not use window validation"),
+            || false,
             || refreshed += 1,
             || activated += 1,
         );
@@ -3377,7 +3401,7 @@ mod tests {
             &shell_target,
             &shell,
             &monitor,
-            || panic!("shell targets do not use window validation"),
+            || false,
             || refreshed += 1,
             || activated += 1,
         );
@@ -3387,6 +3411,20 @@ mod tests {
             activated, 1,
             "a current target may reach pointer activation"
         );
+
+        let result = dispatch_activation(
+            &shell_target,
+            &shell,
+            &monitor,
+            || true,
+            || refreshed += 1,
+            || activated += 1,
+        );
+        assert_eq!(
+            result, None,
+            "REQ-SRC-07: a covered bar target is not clicked"
+        );
+        assert_eq!((refreshed, activated), (2, 1));
     }
 
     // REQ-SRC-07: defaults include every visible window; focused and named
@@ -3463,6 +3501,7 @@ mod tests {
                 width: 100,
                 height: 100,
                 scale: 1.0,
+                layers: Vec::new(),
             },
             status: String::new(),
             collecting: false,

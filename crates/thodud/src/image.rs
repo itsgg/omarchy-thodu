@@ -5,7 +5,9 @@ use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use thodu_core::model::{ActionKind, Monitor, Rect, Role, Source as From, Target, Window};
+use thodu_core::model::{
+    self, ActionKind, Layer, Monitor, Rect, Role, Source as From, Target, Window,
+};
 use woints_core::geom::{Global, Rect as VisionRect};
 use woints_vision::{ClassicalDetector, DetectParams, DetectionClass, Detector, Frame};
 
@@ -141,6 +143,7 @@ impl ImageSource {
         let targets = targets_from_monitor_detections(
             windows,
             visible_windows,
+            &monitor.layers,
             visible,
             monitor.scale,
             &boxes,
@@ -181,12 +184,14 @@ struct DetectionBox {
     confidence: f32,
 }
 
-/// Convert monitor-image candidates and attach each one to the frontmost
-/// visible window at its click point. A candidate whose click point shifts
-/// when clipped to its window is dropped, keeping its eventual click safe.
+/// Convert monitor-image candidates and attach each one to the window that
+/// owns its click point; one under a layer, such as the bar or a
+/// notification, is dropped. A candidate whose click point shifts when
+/// clipped to its window is dropped too, keeping its eventual click safe.
 fn targets_from_monitor_detections(
     selected_windows: &[Window],
     visible_windows: &[Window],
+    layers: &[Layer],
     visible: Rect,
     scale: f64,
     detections: &[DetectionBox],
@@ -206,10 +211,10 @@ fn targets_from_monitor_detections(
             let bottom = visible.y + logical(d.bounds.bottom());
             let bounds = Rect::new(x, y, right - x, bottom - y).intersect(&visible)?;
             let center = bounds.center();
+            let owner = model::owner_among(visible_windows, layers, center.0, center.1);
             let window = visible_windows
                 .iter()
-                .filter(|window| window.rect().contains_point(center.0, center.1))
-                .min_by_key(|window| window.stacking_key())?;
+                .find(|window| Some(window.address.as_str()) == owner.window())?;
             if !selected_windows
                 .iter()
                 .any(|selected| selected.address == window.address)
@@ -398,6 +403,7 @@ mod tests {
         let found = targets_from_monitor_detections(
             std::slice::from_ref(&file_window),
             std::slice::from_ref(&file_window),
+            &[],
             Rect::new(0, 0, 400, 300),
             1.25,
             &detections,
@@ -473,6 +479,7 @@ mod tests {
         let found = targets_from_monitor_detections(
             std::slice::from_ref(&app),
             std::slice::from_ref(&app),
+            &[],
             Rect::new(0, 0, 400, 300),
             1.0,
             &detections,
@@ -518,6 +525,7 @@ mod tests {
         let targets = targets_from_monitor_detections(
             std::slice::from_ref(&app),
             std::slice::from_ref(&app),
+            &[],
             Rect::new(0, 0, 1920, 120),
             1.0,
             &found
@@ -535,6 +543,49 @@ mod tests {
 
     // REQ-SRC-06 and REQ-SRC-07: visual candidates from one monitor image
     // belong to the topmost window at their click point, and AT-SPI wins.
+    // REQ-SRC-07: a detection under a layer that takes input, such as the
+    // bar strip or a notification's toast column, belongs to no window.
+    #[test]
+    fn req_src_07_monitor_detections_under_layers_are_dropped() {
+        let mut app = window();
+        app.address = "0xapp".into();
+        app.at = (0, 0);
+        app.size = (1000, 600);
+        let layers = [
+            thodu_core::model::Layer {
+                namespace: "omarchy-bar".into(),
+                level: 2,
+                rect: Rect::new(0, 0, 1000, 26),
+            },
+            thodu_core::model::Layer {
+                namespace: "omarchy-notifications".into(),
+                level: 3,
+                rect: Rect::new(0, 0, 1000, 600),
+            },
+        ];
+        let detection = |x, y| DetectionBox {
+            bounds: Rect::new(x, y, 20, 10),
+            kind: DetectionKind::TextLine,
+            confidence: 0.9,
+        };
+        let windows = [app];
+        let targets = targets_from_monitor_detections(
+            &windows,
+            &windows,
+            &layers,
+            Rect::new(0, 0, 1000, 600),
+            1.0,
+            &[detection(100, 5), detection(900, 200), detection(100, 200)],
+            &[],
+        );
+        assert_eq!(
+            targets.len(),
+            1,
+            "only the detection on the app itself remains"
+        );
+        assert_eq!(targets[0].bounds, Rect::new(100, 200, 20, 10));
+    }
+
     #[test]
     fn req_src_07_monitor_detections_are_addressed_to_the_topmost_window() {
         let mut front = window();
@@ -565,6 +616,7 @@ mod tests {
         let targets = targets_from_monitor_detections(
             &visible_windows,
             &visible_windows,
+            &[],
             Rect::new(0, 0, 200, 100),
             1.0,
             &[detection(20), detection(130)],
@@ -606,6 +658,7 @@ mod tests {
         let targets = targets_from_monitor_detections(
             &[selected],
             &visible_windows,
+            &[],
             Rect::new(0, 0, 200, 100),
             1.0,
             &detections,

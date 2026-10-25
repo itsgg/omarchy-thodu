@@ -8,7 +8,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use thodu_core::model::{ActionKind, Monitor, Rect, Role, Source as From, Target, Window};
+use thodu_core::model::{
+    self, ActionKind, Monitor, Owner, Rect, Role, Source as From, Target, Window,
+};
 use thodu_core::protocol::ShellItem;
 use thodu_core::{tree, unregistered};
 
@@ -123,7 +125,7 @@ pub fn collect_visible_scoped(
         got.targets.extend(fallback.targets);
         got.status.extend(fallback.status);
     }
-    finish_visible_targets(&mut got.targets, visible_windows);
+    finish_visible_targets(&mut got.targets, visible_windows, monitor);
     got.fallback_requested = false;
     got
 }
@@ -150,7 +152,7 @@ pub fn collect_primary_visible_scoped(
     let got = collect_phase(&primary, windows, visible_windows, monitor, &[]);
     let fallback_requested = got.request_fallback && !fallback.is_empty();
     let mut targets = got.targets;
-    finish_visible_targets(&mut targets, visible_windows);
+    finish_visible_targets(&mut targets, visible_windows, monitor);
     Collected {
         targets,
         status: got.status,
@@ -180,7 +182,7 @@ pub fn collect_fallback_visible_scoped(
     let (_, fallback): (Vec<_>, Vec<_>) = sources.iter().partition(|source| !source.is_fallback());
     let got = collect_phase(&fallback, windows, visible_windows, monitor, excluded);
     let mut targets = got.targets;
-    finish_visible_targets(&mut targets, visible_windows);
+    finish_visible_targets(&mut targets, visible_windows, monitor);
     Collected {
         targets,
         status: got.status,
@@ -189,8 +191,8 @@ pub fn collect_fallback_visible_scoped(
 }
 
 /// Apply the ownership and deduplication rules after source results merge.
-pub fn finish_visible_targets(targets: &mut Vec<Target>, windows: &[Window]) {
-    keep_targets_on_topmost_windows(targets, windows);
+pub fn finish_visible_targets(targets: &mut Vec<Target>, windows: &[Window], monitor: &Monitor) {
+    keep_reachable_targets(targets, windows, monitor);
     remove_covered_image_targets(targets);
 }
 
@@ -292,22 +294,25 @@ fn remove_covered_image_targets(targets: &mut Vec<Target>) {
     });
 }
 
-/// A window target is actionable only when its click point belongs to the
-/// frontmost collected window. Shell targets use their own layer and remain.
-fn keep_targets_on_topmost_windows(targets: &mut Vec<Target>, windows: &[Window]) {
+/// A target is actionable only when its click point would reach it: a window
+/// target's window, or the bar's layer for a shell target, must own the
+/// point, so a notification, the bar or a fullscreen window over it takes the
+/// target out (REQ-SRC-07).
+pub(crate) fn keep_reachable_targets(
+    targets: &mut Vec<Target>,
+    windows: &[Window],
+    monitor: &Monitor,
+) {
     targets.retain(|target| {
-        if target.window.is_empty() {
-            return true;
+        let (x, y) = target.bounds.center();
+        let owner = model::owner_at(windows, monitor, x, y);
+        if target.source == From::Shell {
+            owner == Owner::Layer(BAR_NAMESPACE.to_string())
+        } else if target.window.is_empty() {
+            true
+        } else {
+            owner.window() == Some(target.window.as_str())
         }
-        windows
-            .iter()
-            .filter(|window| {
-                window
-                    .rect()
-                    .contains_point(target.bounds.center().0, target.bounds.center().1)
-            })
-            .min_by_key(|window| window.stacking_key())
-            .is_some_and(|window| window.address == target.window)
     });
 }
 
@@ -425,7 +430,7 @@ impl Atspi {
                 }
             }
         }
-        finish_visible_targets(&mut targets, visible_windows);
+        finish_visible_targets(&mut targets, visible_windows, monitor);
         let mut status = format!(
             "{} scroll areas from atspi and {} window fallbacks across {} windows in {} ms",
             semantic_count,
@@ -668,7 +673,7 @@ fn shell_item_identity(item: &ShellItem, index: usize) -> String {
 }
 
 /// The layer-shell namespace of Omarchy's bar.
-const BAR_NAMESPACE: &str = "omarchy-bar";
+pub(crate) const BAR_NAMESPACE: &str = "omarchy-bar";
 
 #[cfg(test)]
 mod tests {
@@ -827,6 +832,7 @@ mod tests {
             width: 100,
             height: 100,
             scale: 1.0,
+            layers: Vec::new(),
         }
     }
 
@@ -848,7 +854,7 @@ mod tests {
                 && target.actions == [ActionKind::Scroll]
                 && target.source == From::Window
         }));
-        finish_visible_targets(&mut targets, &[back, front]);
+        finish_visible_targets(&mut targets, &[back, front], &monitor());
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].window, "0x2");
     }
@@ -864,6 +870,60 @@ mod tests {
         let (targets, status) = source.collect_scroll_areas(&[], &[], &monitor());
         assert!(targets.is_empty());
         assert!(status.contains("0 scroll areas across 0 windows"));
+    }
+
+    // REQ-SRC-07: a target survives only where a click would reach it: a
+    // window target under a notification's toast column or the bar strip is
+    // omitted, and the bar's own target needs the bar to own its point, which
+    // a fullscreen window takes away.
+    #[test]
+    fn req_src_07_targets_under_layers_and_fullscreen_are_omitted() {
+        let mut app = window();
+        app.size = (1536, 960);
+        let mut screen = monitor();
+        screen.width = 1536;
+        screen.height = 960;
+        screen.layers = vec![
+            thodu_core::model::Layer {
+                namespace: "omarchy-bar".into(),
+                level: 2,
+                rect: Rect::new(0, 0, 1536, 26),
+            },
+            thodu_core::model::Layer {
+                namespace: "omarchy-notifications".into(),
+                level: 3,
+                rect: Rect::new(0, 0, 1536, 960),
+            },
+        ];
+        let target = |id: &str, x, y, source: From, window: &str| Target {
+            id: id.into(),
+            bounds: Rect::new(x, y, 20, 10),
+            role: Role::Button,
+            text: id.into(),
+            source,
+            actions: vec![ActionKind::Click],
+            window: window.into(),
+        };
+        let all = vec![
+            target("under-toast", 1490, 100, From::Atspi, "0x1"),
+            target("under-bar", 400, 5, From::Atspi, "0x1"),
+            target("bar-item", 400, 5, From::Shell, ""),
+            target("open", 400, 400, From::Atspi, "0x1"),
+        ];
+        let ids = |targets: &[Target]| targets.iter().map(|t| t.id.clone()).collect::<Vec<_>>();
+
+        let mut targets = all.clone();
+        finish_visible_targets(&mut targets, std::slice::from_ref(&app), &screen);
+        assert_eq!(ids(&targets), ["bar-item", "open"]);
+
+        app.fullscreen = 2;
+        let mut targets = all;
+        finish_visible_targets(&mut targets, std::slice::from_ref(&app), &screen);
+        assert_eq!(
+            ids(&targets),
+            ["under-bar", "open"],
+            "a fullscreen window covers the bar"
+        );
     }
 
     // REQ-SRC-07: a floating window stays actionable over a tiled window,
@@ -892,7 +952,7 @@ mod tests {
             target("visible", 120, "0x2"),
         ];
 
-        keep_targets_on_topmost_windows(&mut targets, &[tiled, floating]);
+        keep_reachable_targets(&mut targets, &[tiled, floating], &monitor());
 
         assert_eq!(
             targets
@@ -1109,6 +1169,7 @@ mod tests {
             width: 100,
             height: 50,
             scale: 1.0,
+            layers: Vec::new(),
         };
         let got = shell_targets(&items, (1536, 0), &m);
         let summary: Vec<(Rect, From, &str, &str)> = got
@@ -1143,6 +1204,7 @@ mod tests {
             width: 100,
             height: 50,
             scale: 1.0,
+            layers: Vec::new(),
         };
         let original = vec![
             ShellItem {
@@ -1259,6 +1321,7 @@ mod tests {
             width: 100,
             height: 50,
             scale: 1.0,
+            layers: Vec::new(),
         };
         let legacy: ShellItem = serde_json::from_value(serde_json::json!({
             "x": 10,
@@ -1316,6 +1379,7 @@ mod tests {
             width: 100,
             height: 50,
             scale: 1.0,
+            layers: Vec::new(),
         };
         let shell = Shell {
             items: Mutex::new(std::collections::HashMap::from([(

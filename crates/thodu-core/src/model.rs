@@ -120,6 +120,10 @@ pub struct Monitor {
     pub width: i32,
     pub height: i32,
     pub scale: f64,
+    /// The layer-shell surfaces Hyprland reports on this monitor, for deciding
+    /// what takes a click; left out of recorded snapshots.
+    #[serde(skip)]
+    pub layers: Vec<Layer>,
 }
 
 impl Monitor {
@@ -166,6 +170,12 @@ pub struct Window {
     pub fullscreen: i64,
     #[serde(skip)]
     pub focus_history_id: i64,
+    /// Hyprland draws this window above a fullscreen window on its workspace.
+    #[serde(skip)]
+    pub allowed_over_fullscreen: bool,
+    /// The window takes no pointer input, so it owns no point.
+    #[serde(skip)]
+    pub ignores_input: bool,
     /// Whether Hyprland's active-window query selected this window for the
     /// current collection request.
     #[serde(skip)]
@@ -178,12 +188,18 @@ impl Window {
     }
 
     /// Approximate Hyprland's top-to-bottom scene layers. Hyprland draws
-    /// pinned windows over fullscreen, floating windows over tiled windows,
-    /// and its focused window last within a layer.
+    /// pinned windows over everything, a special workspace over the regular
+    /// one, floating windows allowed over fullscreen above a fullscreen
+    /// window and the rest below it, floating windows over tiled windows,
+    /// and its focused window last within a layer. Entering fullscreen clears
+    /// `allowed_over_fullscreen` on every other window of the workspace, so
+    /// without a fullscreen window every floating window carries it.
     pub fn stacking_key(&self) -> (std::cmp::Reverse<u8>, i64) {
         let layer = if self.pinned {
-            4
+            5
         } else if self.workspace < 0 {
+            4
+        } else if self.floating && self.allowed_over_fullscreen {
             3
         } else if self.fullscreen == 2 {
             2
@@ -193,5 +209,135 @@ impl Window {
             0
         };
         (std::cmp::Reverse(layer), self.focus_history_id)
+    }
+}
+
+/// The width Omarchy's notification toasts take at a monitor's right edge:
+/// a card of 380 units and its gap, with room for a larger spacing scale.
+const NOTIFICATION_BAND: i32 = 440;
+
+/// A layer-shell surface on a monitor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Layer {
+    pub namespace: String,
+    /// Hyprland's level: 0 background, 1 bottom, 2 top, 3 overlay.
+    pub level: u8,
+    pub rect: Rect,
+}
+
+impl Layer {
+    /// Whether the surface takes pointer input at a point. Hyprland reports a
+    /// layer's whole surface but not its input region, so Omarchy's
+    /// full-screen surfaces with input masks are known by namespace: Thodu's
+    /// own overlay and the OSD take none, and notifications take only their
+    /// toast column. Any other layer above the windows takes its whole surface.
+    pub fn takes_input_at(&self, x: i32, y: i32) -> bool {
+        match self.namespace.as_str() {
+            "thodu" | "omarchy-osd" => false,
+            "omarchy-notifications" => Rect::new(
+                self.rect.right() - NOTIFICATION_BAND,
+                self.rect.y,
+                NOTIFICATION_BAND,
+                self.rect.h,
+            )
+            .contains_point(x, y),
+            _ => self.level >= 2 && self.rect.contains_point(x, y),
+        }
+    }
+}
+
+/// What receives a click at a point.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Owner {
+    Window(String),
+    Layer(String),
+    Nothing,
+}
+
+impl Owner {
+    /// The owning window's address, when a window owns the point.
+    pub fn window(&self) -> Option<&str> {
+        match self {
+            Owner::Window(address) => Some(address),
+            _ => None,
+        }
+    }
+}
+
+/// What receives a click at a point among a monitor's visible windows and
+/// layers, in Hyprland's drawing order: overlay layers first; then, when a
+/// fullscreen window is shown, the pinned, special-workspace and
+/// allowed-over-fullscreen windows above it and the fullscreen window
+/// itself, which covers top layers and the windows behind it ("if in
+/// fullscreen, only overlay can be above", Hyprland 0.56's LayerSurface.cpp);
+/// otherwise top layers such as the bar, then windows front to back. A top
+/// layer mapped after the window went fullscreen is drawn above it, but
+/// Hyprland's layer report does not say so; Omarchy's menus and panels use
+/// the overlay level.
+pub fn owner_at(windows: &[Window], monitor: &Monitor, x: i32, y: i32) -> Owner {
+    owner_among(windows, &monitor.layers, x, y)
+}
+
+/// `owner_at` over a monitor's windows and layers given apart.
+pub fn owner_among(windows: &[Window], layers: &[Layer], x: i32, y: i32) -> Owner {
+    let layer_at = |level: u8| {
+        layers
+            .iter()
+            .find(|layer| layer.level == level && layer.takes_input_at(x, y))
+            .map(|layer| Owner::Layer(layer.namespace.clone()))
+    };
+    if let Some(owner) = layer_at(3) {
+        return owner;
+    }
+    let under = |window: &&Window| !window.ignores_input && window.rect().contains_point(x, y);
+    let front = |candidates: Vec<&Window>| {
+        candidates
+            .into_iter()
+            .min_by_key(|window| window.stacking_key())
+            .map(|window| Owner::Window(window.address.clone()))
+    };
+    if let Some(fullscreen) = windows
+        .iter()
+        .find(|window| window.fullscreen == 2 && window.workspace >= 0)
+    {
+        let above = windows
+            .iter()
+            .filter(under)
+            .filter(|window| {
+                window.address != fullscreen.address
+                    && (window.pinned || window.workspace < 0 || window.allowed_over_fullscreen)
+            })
+            .collect();
+        if let Some(owner) = front(above) {
+            return owner;
+        }
+        if fullscreen.rect().contains_point(x, y) {
+            return if fullscreen.ignores_input {
+                Owner::Nothing
+            } else {
+                Owner::Window(fullscreen.address.clone())
+            };
+        }
+    }
+    if let Some(owner) = layer_at(2) {
+        return owner;
+    }
+    front(windows.iter().filter(under).collect()).unwrap_or(Owner::Nothing)
+}
+
+/// Whether a window is drawn at all beside a fullscreen window among the
+/// visible ones: the fullscreen window and those Hyprland draws above it.
+pub fn shown_beside_fullscreen(window: &Window, windows: &[Window]) -> bool {
+    match windows
+        .iter()
+        .find(|other| other.fullscreen == 2 && other.workspace >= 0)
+    {
+        None => true,
+        Some(fullscreen) => {
+            window.address == fullscreen.address
+                || window.pinned
+                || window.workspace < 0
+                || window.allowed_over_fullscreen
+        }
     }
 }

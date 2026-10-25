@@ -11,7 +11,9 @@ use thodu_core::config::{self, Config};
 use thodu_core::grid;
 use thodu_core::input;
 use thodu_core::labels::{self, ALPHABET};
-use thodu_core::model::{Monitor, Rect, Role, Source, Target, Window};
+use thodu_core::model::{
+    Layer, Monitor, Owner, Rect, Role, Source, Target, Window, owner_at, shown_beside_fullscreen,
+};
 use thodu_core::perf;
 use thodu_core::protocol::{Envelope, LabeledTarget, OpenEvent, Reply, Request, Timing};
 use thodu_core::session::{Button, DOUBLE_MS, Key, ScrollAxis, Session, State};
@@ -51,6 +53,7 @@ fn monitor() -> Monitor {
         width: 1920,
         height: 1200,
         scale: 1.25,
+        layers: Vec::new(),
     }
 }
 
@@ -1822,4 +1825,116 @@ fn req_session_05_unregistered_apps_are_told_what_they_need() {
         unregistered::inspection_failed("org.example.App"),
         "org.example.App is not on the accessibility bus: could not inspect its process; Space opens the grid"
     );
+}
+
+fn stack_window(address: &str, at: (i32, i32), size: (i32, i32)) -> Window {
+    Window {
+        address: address.into(),
+        at,
+        size,
+        workspace: 1,
+        ..Window::default()
+    }
+}
+
+fn layer(namespace: &str, level: u8, rect: Rect) -> Layer {
+    Layer {
+        namespace: namespace.into(),
+        level,
+        rect,
+    }
+}
+
+// REQ-SRC-07: layers own the points where they take input. Omarchy's
+// full-screen notification surface takes only its toast column; the OSD and
+// Thodu's own overlay take none; the bar takes its strip; a bottom layer
+// sits under the windows.
+#[test]
+fn req_src_07_layers_own_the_points_where_they_take_input() {
+    let app = stack_window("0xapp", (0, 26), (1536, 934));
+    let mut screen = monitor();
+    let full = Rect::new(0, 0, 1536, 960);
+    screen.layers = vec![
+        layer("omarchy-notifications", 3, full),
+        layer("omarchy-osd", 3, full),
+        layer("thodu", 3, full),
+        layer("omarchy-bar", 2, Rect::new(0, 0, 1536, 26)),
+        layer("other-panel", 2, Rect::new(600, 300, 200, 200)),
+        layer("wallpaper-widget", 1, Rect::new(0, 600, 400, 300)),
+    ];
+    let windows = [app];
+    let at = |x, y| owner_at(&windows, &screen, x, y);
+    assert_eq!(at(1500, 100), Owner::Layer("omarchy-notifications".into()));
+    assert_eq!(
+        at(500, 100),
+        Owner::Window("0xapp".into()),
+        "outside the toast column"
+    );
+    assert_eq!(at(500, 10), Owner::Layer("omarchy-bar".into()));
+    assert_eq!(at(700, 400), Owner::Layer("other-panel".into()));
+    assert_eq!(
+        at(100, 700),
+        Owner::Window("0xapp".into()),
+        "a bottom layer is under the windows"
+    );
+}
+
+// REQ-SRC-07: a fullscreen window covers the bar and the windows behind it;
+// a window Hyprland allows over fullscreen stays above it, and overlay
+// layers stay above everything.
+#[test]
+fn req_src_07_fullscreen_window_covers_bar_and_windows_behind_it() {
+    let tiled = stack_window("0xtiled", (0, 26), (768, 934));
+    let mut floating = stack_window("0xfloating", (100, 100), (300, 300));
+    floating.floating = true;
+    let mut fullscreen = stack_window("0xfull", (0, 0), (1536, 960));
+    fullscreen.fullscreen = 2;
+    let mut dialog = stack_window("0xdialog", (600, 400), (300, 200));
+    dialog.floating = true;
+    dialog.allowed_over_fullscreen = true;
+    let mut screen = monitor();
+    screen.layers = vec![
+        layer("omarchy-bar", 2, Rect::new(0, 0, 1536, 26)),
+        layer("omarchy-notifications", 3, Rect::new(0, 0, 1536, 960)),
+    ];
+    let windows = [
+        tiled.clone(),
+        floating.clone(),
+        fullscreen.clone(),
+        dialog.clone(),
+    ];
+    let at = |x, y| owner_at(&windows, &screen, x, y);
+    assert_eq!(
+        at(300, 10),
+        Owner::Window("0xfull".into()),
+        "the bar is under the fullscreen window"
+    );
+    assert_eq!(
+        at(200, 200),
+        Owner::Window("0xfull".into()),
+        "a floating window behind it is hidden"
+    );
+    assert_eq!(at(700, 500), Owner::Window("0xdialog".into()));
+    assert_eq!(at(1500, 100), Owner::Layer("omarchy-notifications".into()));
+    let shown: Vec<_> = windows
+        .iter()
+        .filter(|window| shown_beside_fullscreen(window, &windows))
+        .map(|window| window.address.as_str())
+        .collect();
+    assert_eq!(shown, ["0xfull", "0xdialog"]);
+}
+
+// REQ-SRC-07: a window that takes no pointer input owns no point.
+#[test]
+fn req_src_07_window_without_input_owns_nothing() {
+    let below = stack_window("0xbelow", (0, 0), (500, 500));
+    let mut glass = stack_window("0xglass", (0, 0), (500, 500));
+    glass.floating = true;
+    glass.ignores_input = true;
+    let screen = monitor();
+    assert_eq!(
+        owner_at(&[glass.clone(), below], &screen, 100, 100),
+        Owner::Window("0xbelow".into())
+    );
+    assert_eq!(owner_at(&[glass], &screen, 100, 100), Owner::Nothing);
 }
