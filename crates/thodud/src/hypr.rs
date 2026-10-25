@@ -240,8 +240,8 @@ pub fn cursor() -> Result<(i32, i32), String> {
 
 fn cursor_focus_refresh_command((x, y): (i32, i32), syntax: DispatchSyntax) -> String {
     match syntax {
-        DispatchSyntax::Lua => format!("/dispatch hl.dsp.cursor.move({{ x = {x}, y = {y} }})"),
-        DispatchSyntax::Hyprlang => format!("/dispatch movecursor {x} {y}"),
+        DispatchSyntax::Lua => format!("dispatch hl.dsp.cursor.move({{ x = {x}, y = {y} }})"),
+        DispatchSyntax::Hyprlang => format!("dispatch movecursor {x} {y}"),
     }
 }
 
@@ -333,11 +333,11 @@ mod tests {
     fn req_act_06_focus_refresh_dispatch_keeps_the_pointer_stationary() {
         assert_eq!(
             cursor_focus_refresh_command((768, 493), DispatchSyntax::Lua),
-            "/dispatch hl.dsp.cursor.move({ x = 768, y = 493 })"
+            "dispatch hl.dsp.cursor.move({ x = 768, y = 493 })"
         );
         assert_eq!(
             cursor_focus_refresh_command((768, 493), DispatchSyntax::Hyprlang),
-            "/dispatch movecursor 768 493"
+            "dispatch movecursor 768 493"
         );
     }
 
