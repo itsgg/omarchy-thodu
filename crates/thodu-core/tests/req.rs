@@ -1087,7 +1087,12 @@ fn req_session_01_fine_grid_cell_is_not_a_label_selected_target() {
     s.open_grid();
     let label = s.labels[0].clone();
     for c in label.chars() {
-        assert!(s.key(Key::Char { c, shift: false }).is_none());
+        assert!(
+            s.key(Key::Upper {
+                c: c.to_ascii_uppercase()
+            })
+            .is_none()
+        );
     }
     assert_eq!(s.focused, Some(0));
     assert!(!s.label_selected);
@@ -1547,9 +1552,17 @@ proptest! {
             prop_assert!(cells.len() <= 26 * 26);
             let i = s.targets.iter().position(|t| t.bounds.contains_point(px, py));
             prop_assert!(i.is_some(), "the cells cover ({px}, {py})");
+            // The final character typed with Shift selects a fine cell
+            // without clicking it, so Return clicks it below; a coarse cell
+            // refines either way.
             let label = s.labels[i.expect("a cell")].clone();
-            for c in label.chars() {
-                s.key(Key::Char { c, shift: false });
+            let last = label.len() - 1;
+            for (position, c) in label.chars().enumerate() {
+                if position == last {
+                    s.key(Key::Upper { c: c.to_ascii_uppercase() });
+                } else {
+                    s.key(Key::Char { c, shift: false });
+                }
             }
             choices += 1;
         }
@@ -2010,4 +2023,62 @@ fn req_act_03_live_targets_carry_element_checks() {
     let targets = tree::targets(&frame, &window, &monitor());
     assert_eq!(targets.len(), 1);
     assert_eq!(targets[0].check, live_button().check());
+}
+
+// REQ-GRID-01: a lowercase label refines a coarse cell, and one that chooses
+// a fine cell clicks its center at once, with no double-Return wait.
+#[test]
+fn req_grid_01_a_lowercase_label_on_a_fine_cell_clicks() {
+    let mut s = Session::new(Vec::new(), false).with_area(Rect::new(0, 0, 1536, 864));
+    s.open_grid();
+    let type_label = |s: &mut Session, label: String| {
+        let mut act = None;
+        for c in label.chars() {
+            act = s.key(Key::Char { c, shift: false });
+        }
+        act
+    };
+    let coarse = s.labels[0].clone();
+    assert!(
+        type_label(&mut s, coarse).is_none(),
+        "a coarse cell refines"
+    );
+    assert_eq!(s.grid.len(), 2);
+    assert!(s.focused.is_none());
+    let fine = s.labels[0].clone();
+    let cell = s.targets[0].bounds;
+    assert!(cell.w <= grid::FINE && cell.h <= grid::FINE);
+    let act = type_label(&mut s, fine).expect("a fine cell clicks");
+    assert_eq!(act.point, cell.center());
+    assert!(
+        !act.linger,
+        "a label click does not wait for a second Return"
+    );
+    assert_eq!(s.state, State::Acting);
+}
+
+// REQ-GRID-01: Return on a focused cell that is not yet fine refines into it
+// instead of clicking a coarse cell's center.
+#[test]
+fn req_grid_01_return_on_a_coarse_cell_refines() {
+    let mut s = Session::new(Vec::new(), false).with_area(Rect::new(0, 0, 1536, 864));
+    s.open_grid();
+    s.key(Key::Tab { shift: false });
+    let coarse = s.targets[s.focused.expect("Tab focuses a cell")].bounds;
+    assert!(coarse.w > grid::FINE);
+    assert!(
+        s.key(Key::Return {
+            shift: false,
+            ctrl: false
+        })
+        .is_none(),
+        "no click on a coarse cell"
+    );
+    assert_eq!(
+        s.grid.last(),
+        Some(&coarse),
+        "the coarse cell became the grid"
+    );
+    assert!(s.focused.is_none());
+    assert_eq!(s.state, State::Showing);
 }

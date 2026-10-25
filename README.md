@@ -27,7 +27,7 @@ Requires Omarchy with Hyprland. Follow the [installation instructions](docs/inst
 | Mode | Default shortcut | In-session keys |
 | --- | --- | --- |
 | Hints | `Super+Shift+F12` | Type a hint to click it. `Shift`+hint selects it; then `Return` clicks, `Shift+Return` right-clicks. `/` searches text. |
-| Grid | `Super+Ctrl+F12` | Type a label to refine the grid, then `Return` to click. |
+| Grid | `Super+Ctrl+F12` | Type labels to zoom in; the label on a fine cell clicks it. `Shift` on its last letter selects it for `Return` or `Shift+Return`. |
 | Scroll | `Super+Alt+F12` | Hold `j`/`k` to scroll down/up, `h`/`l` left/right. `Tab` cycles areas, digits select, `Escape` exits. |
 
 See [usage and configuration](docs/usage.md) to change shortcuts, scroll steps or hint behavior.

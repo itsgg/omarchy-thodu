@@ -1,6 +1,6 @@
 # 0032: The grid follows the label rule
 
-Status: open
+Status: review
 Depends on: none
 Spec: REQ-GRID-01, REQ-ACT-01
 Goal: Hints click when a label is completed in lowercase and select with Shift, but the grid still needs Return after its last label, and Return on a cell that Tab focused before it is fine clicks the center of a coarse cell, such as 59 by 37 units, which is imprecise enough to hit the wrong thing. Make the grid follow the label rule: labels on cells larger than 10 units refine as now, a label that chooses a fine cell clicks its center at once when its final character is lowercase and selects it when uppercase, and Return on a focused cell that is not yet fine refines into it instead of clicking.
@@ -13,3 +13,4 @@ Acceptance:
 ## Log
 
 - 2026-10-25: created at GG's request after change 0024, and from a confirmed review finding that Tab and Return could click an unrefined grid cell.
+- 2026-10-25: a label that chooses a fine grid cell clicks it when its final character is lowercase and selects it when uppercase; Return on a coarse cell refines into it. GG also found that a grid click on a bar workspace switched and switched back: only bar targets were watched for a workspace switch, so any lingering click whose point the bar owns is now watched. Tests cover the label rule, the refine on Return and the watch; two planted faults were caught and a third was equivalent, since refining already clears focus. Change 0027 records this and merges change 0009. Installed live. `tests/acceptance/reqs.sh REQ-GRID-01 REQ-ACT-01` passes.

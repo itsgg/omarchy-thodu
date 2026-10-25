@@ -789,7 +789,10 @@ impl Daemon {
                 hypr::window_at(act.point.0, act.point.1).as_deref(),
             )
         });
-        let workspace_before = (act.linger && source == Source::Shell)
+        let on_bar = source == Source::Shell
+            || hypr::owner_at(act.point.0, act.point.1)
+                == Owner::Layer(sources::BAR_NAMESPACE.to_string());
+        let workspace_before = watches_workspace(act.linger, on_bar)
             .then(|| hypr::active_workspace_id(&monitor.name))
             .flatten();
         let pressed = checked_click(
@@ -1719,6 +1722,14 @@ fn under_pointer<R>(
     f()
 }
 
+/// Whether a click is watched for a workspace switch: a click on the bar,
+/// whether through a bar target or a grid cell over it, can switch
+/// workspaces, and the overlay must then end instead of taking the keyboard
+/// back for a second Return, which would switch back (REQ-ACT-02).
+fn watches_workspace(linger: bool, on_bar: bool) -> bool {
+    linger && on_bar
+}
+
 /// Note the first click's outcome; a second click goes only after one that
 /// happened.
 fn record_first_click(entry: &mut Entry, happened: bool, workspace_changed: bool) {
@@ -2049,7 +2060,8 @@ mod tests {
         moved_or_covered_given, no_active_window_scope, parse_key, perform_scroll_event_with,
         record_first_click, refresh_options, restart_address, scoped_windows, send_wheel_with,
         start_refreshed_session, status_persistent, target_is_current,
-        visible_target_owner_changed, wait_for_workspace_change, window_for_target, with_grid_note,
+        visible_target_owner_changed, wait_for_workspace_change, watches_workspace,
+        window_for_target, with_grid_note,
     };
     use crate::sources::{self, Found, Source};
 
@@ -3581,6 +3593,19 @@ mod tests {
             read.get(),
             2,
             "a covered point refuses before reading the element"
+        );
+    }
+
+    // REQ-ACT-02: a lingering click on the bar, through a bar target or a
+    // grid cell over it, is watched for a workspace switch; other clicks are
+    // not delayed by the watch.
+    #[test]
+    fn req_act_02_clicks_on_the_bar_watch_for_a_workspace_switch() {
+        assert!(watches_workspace(true, true));
+        assert!(!watches_workspace(true, false), "a click off the bar");
+        assert!(
+            !watches_workspace(false, true),
+            "a click that does not linger"
         );
     }
 

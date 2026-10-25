@@ -396,15 +396,19 @@ impl Session {
     }
 
     /// A cell chosen by its label: refined, or focused once it is fine.
-    fn choose_cell(&mut self, i: usize) {
+    /// Choose a grid cell: a fine one is focused and true is returned; a
+    /// coarse one becomes the next level of the grid.
+    fn choose_cell(&mut self, i: usize) -> bool {
         let cell = self.targets[i].bounds;
         if grid::is_fine(&cell) {
             self.focused = Some(i);
             // A fine grid cell still needs its bounds outlined. The selected
             // label treatment is for a labelled app or bar target.
             self.label_selected = false;
+            true
         } else {
             self.show_grid(cell);
+            false
         }
     }
 
@@ -456,8 +460,8 @@ impl Session {
             if self.grid.is_empty() {
                 self.focused = Some(i);
                 self.label_selected = true;
-            } else {
-                self.choose_cell(i);
+            } else if !self.choose_cell(i) {
+                return None;
             }
             if activate {
                 return self.act_focused(false, false, false, at_ms);
@@ -562,12 +566,12 @@ impl Session {
                 self.searching = true;
                 self.refocus();
             }
-            // An uppercase final character selects; a lowercase one clicks,
-            // except on grid cells, which refine until Return.
+            // An uppercase final character selects; a lowercase one clicks.
+            // A grid label refines until its cell is fine, then does the same.
             Key::Upper { c } => return self.type_label(c, false, at_ms),
             Key::Digit { .. } => {}
             Key::Char { c, shift } if shift || labels_first || !self.label_prefix.is_empty() => {
-                return self.type_label(c, !shift && !in_grid, at_ms);
+                return self.type_label(c, !shift, at_ms);
             }
             Key::Char { c, .. } => {
                 self.search.push(c);
@@ -601,6 +605,13 @@ impl Session {
                 }
             }
             Key::Return { shift, ctrl } => {
+                if in_grid
+                    && let Some(i) = self.focused
+                    && !grid::is_fine(&self.targets[i].bounds)
+                {
+                    self.choose_cell(i);
+                    return None;
+                }
                 return self.act_focused(shift, ctrl, true, at_ms);
             }
         }

@@ -12,7 +12,7 @@ The default hints session covers visible windows on the focused monitor and the 
 
 ## Grid and scroll
 
-Grid mode selects a point on the focused monitor. Select a cell to refine it, then press `Return` to click its center.
+Grid mode selects a point on the focused monitor. Type a cell's label to zoom into it; once the cells are small enough, a lowercase label clicks its cell's center, and `Shift` on its last letter selects the cell for `Return`, `Shift+Return` or a double `Return`. `Return` on a larger cell zooms into it. A click that switches workspace from the bar ends the session.
 
 Scroll mode selects panes across visible app windows. Hold `h`, `j`, `k` or `l` to repeat horizontal or vertical wheel input; a tap sends one action. `Shift` uses the larger configured step. `Tab` and `Shift+Tab` cycle areas, digits select an area, `Return` clears a numeric prefix, and `Escape` exits.
 

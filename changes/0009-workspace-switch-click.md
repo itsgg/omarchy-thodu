@@ -1,6 +1,8 @@
 # 0009: End a lingering click when it changes workspace
 
-Status: proposed
+Status: merged
+
+Merged on 2026-10-25 as part of change 0027, generalized from shell targets to any lingering click on the bar, grid cells included, after GG asked for workspace switching from the grid.
 Why: Task 0009 live testing on Hyprland 0.56.2 showed a plain Return on the bar's workspace 2 target switched from workspace 1 to 2, then back to 1 when Thodu reclaimed Exclusive keyboard focus. A single Return reached QML; there was no second keypress. Keeping the layer OnDemand preserved workspace 2, but stopped a second Return from reaching Thodu. A workspace-changing bar click therefore needs to end its lingering session instead of reclaiming Exclusive focus.
 
 ## Modified
