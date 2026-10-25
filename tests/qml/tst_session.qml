@@ -392,6 +392,66 @@ Item {
                    "the uppercase request retains label activation semantics");
         }
 
+        function pendDOnLabel() {
+            view.targets = [{ id: "d0", label: "d", source: "atspi",
+                              bounds: { x: 120, y: 80, w: 60, h: 30 },
+                              placed: { x: 113, y: 86, w: 17, h: 18 } }];
+            view.kept = { d0: true };
+            view.submitKeyRequest(view.keyRequest(Qt.Key_D, Qt.ShiftModifier, "d", false));
+            compare(top.keysSent().length, 0, "the completed label waits for Shift to come up");
+        }
+
+        // REQ-ACT-01: shift:both_capslock_cancel gives the Shift key Caps_Lock
+        // at its shifted level, so its release arrives as Caps Lock; the
+        // physical key, by scan code, still ends the wait.
+        function test_req_act_01_shift_released_as_caps_lock_activates_by_scan_code() {
+            view.notePress(Qt.Key_Shift, Qt.ShiftModifier, 50);
+            pendDOnLabel();
+            view.noteRelease(Qt.Key_D, Qt.ShiftModifier, 40);
+            compare(top.keysSent().length, 0, "the letter's release with Shift held does not activate");
+            view.noteRelease(Qt.Key_CapsLock, Qt.ShiftModifier, 50);
+            compare(top.keysSent().map(k => k.key), ["D"]);
+        }
+
+        function test_req_act_01_a_key_event_without_shift_ends_the_wait() {
+            view.notePress(Qt.Key_Shift, Qt.ShiftModifier, 50);
+            pendDOnLabel();
+            view.noteRelease(Qt.Key_D, Qt.NoModifier, 40);
+            compare(top.keysSent().map(k => k.key), ["D"], "Shift is up once a key arrives without it");
+        }
+
+        function test_req_act_01_unseen_shift_released_as_caps_lock_activates() {
+            // Shift held since the session's hotkey: its press never reached the overlay.
+            pendDOnLabel();
+            view.noteRelease(Qt.Key_CapsLock, Qt.ShiftModifier, 50);
+            compare(top.keysSent().map(k => k.key), ["D"]);
+        }
+
+        function test_req_act_01_both_shift_keys_wait_for_the_last() {
+            view.notePress(Qt.Key_Shift, Qt.ShiftModifier, 50);
+            view.notePress(Qt.Key_Shift, Qt.ShiftModifier, 62);
+            pendDOnLabel();
+            view.noteRelease(Qt.Key_CapsLock, Qt.ShiftModifier, 50);
+            compare(top.keysSent().length, 0, "the other Shift is still down");
+            view.noteRelease(Qt.Key_CapsLock, Qt.ShiftModifier, 62);
+            compare(top.keysSent().map(k => k.key), ["D"]);
+        }
+
+        function test_req_act_01_caps_lock_symbol_release_through_the_key_handlers() {
+            view.targets = [{ id: "d0", label: "d", source: "atspi",
+                              bounds: { x: 120, y: 80, w: 60, h: 30 },
+                              placed: { x: 113, y: 86, w: 17, h: 18 } }];
+            view.kept = { d0: true };
+            // The fake's heartbeat replies keep the label visible.
+            top.shownView = Object.assign({}, top.shownView, { visible: ["d0"] });
+            // QtTest releases its own Shift with any release that names it, so
+            // the release arrives here as Caps Lock alone, as the layout sends it.
+            keyPress(Qt.Key_D, Qt.ShiftModifier);
+            compare(top.keysSent().length, 0, "the completed label waits for Shift to come up");
+            keyRelease(Qt.Key_CapsLock, Qt.NoModifier);
+            compare(top.keysSent().map(k => k.key), ["D"]);
+        }
+
         function test_req_act_01_shifted_label_prefix_is_sent_immediately() {
             view.targets = [{ id: "df", label: "df", source: "atspi",
                               bounds: { x: 120, y: 80, w: 60, h: 30 },

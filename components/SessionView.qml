@@ -60,6 +60,10 @@ FocusScope {
     // Delay only an uppercase key that completes a visible label. The click
     // must not inherit the physical Shift modifier from the browser surface.
     property var pendingShiftActivation: null
+    // Scan codes of the keys pressed as Shift. A layout can give a Shift key
+    // another symbol at its shifted level (shift:both_capslock_cancel makes
+    // its release Caps_Lock), so the release is matched by physical key.
+    property var shiftScanCodes: []
 
     // A brief session request this often tells a live thodud from a dead
     // one, and shows changes made by keys sent over the IPC in test mode.
@@ -122,6 +126,7 @@ FocusScope {
         view.deferredKey = null;
         view.deferredEnd = null;
         view.pendingShiftActivation = null;
+        view.shiftScanCodes = [];
         view.statusTimeoutMs = 2000;
         view.scrollRepeatMs = 80;
         view.active = true;
@@ -153,6 +158,7 @@ FocusScope {
         view.deferredKey = null;
         view.deferredEnd = null;
         view.pendingShiftActivation = null;
+        view.shiftScanCodes = [];
         silence.stop();
         linger.stop();
         statusExpiry.stop();
@@ -508,10 +514,34 @@ FocusScope {
             view.dispatchKeyRequest(request);
     }
 
+    // A key arriving without Shift means Shift is already up.
+    function notePress(key, modifiers, scanCode) {
+        if (key === Qt.Key_Shift && scanCode && view.shiftScanCodes.indexOf(scanCode) < 0)
+            view.shiftScanCodes = view.shiftScanCodes.concat([scanCode]);
+        if (view.pendingShiftActivation && (modifiers & Qt.ShiftModifier) === 0)
+            view.flushShiftActivation();
+    }
+
+    // Whether a release lifts a Shift key; the last one up activates a
+    // pending label. A Shift whose press was never seen, held since the
+    // session's hotkey, is known only by the Shift or Caps Lock symbol.
+    function noteRelease(key, modifiers, scanCode) {
+        const pressed = scanCode ? view.shiftScanCodes.indexOf(scanCode) >= 0 : false;
+        if (pressed)
+            view.shiftScanCodes = view.shiftScanCodes.filter(code => code !== scanCode);
+        const unseen = view.shiftScanCodes.length === 0 && (key === Qt.Key_Shift || key === Qt.Key_CapsLock);
+        const lifted = pressed || unseen;
+        if (view.pendingShiftActivation &&
+                ((lifted && view.shiftScanCodes.length === 0) || (modifiers & Qt.ShiftModifier) === 0))
+            view.flushShiftActivation();
+        return lifted;
+    }
+
     Keys.onPressed: event => {
         event.accepted = true;
         if (!view.active)
             return;
+        view.notePress(event.key, event.modifiers, event.nativeScanCode);
         const scrollKey = view.scrollMode ? view.scrollKeyName(event.key) : "";
         if (scrollKey.length > 0) {
             if (view.isChord(event.modifiers))
@@ -550,10 +580,8 @@ FocusScope {
         event.accepted = true;
         if (!view.active || event.isAutoRepeat)
             return;
-        if (event.key === Qt.Key_Shift) {
-            view.flushShiftActivation();
+        if (view.noteRelease(event.key, event.modifiers, event.nativeScanCode))
             return;
-        }
         if (!view.scrollMode)
             return;
         const name = view.scrollKeyName(event.key);
