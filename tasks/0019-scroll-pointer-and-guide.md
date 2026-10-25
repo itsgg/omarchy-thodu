@@ -1,6 +1,6 @@
 # 0019: Keep scroll pointer steady and refresh the guide
 
-Status: review
+Status: done
 Depends on: none
 Spec: REQ-ACT-06, REQ-SESSION-01
 Goal: Keep the pointer fixed over a selected scroll area across held wheel repeats, while giving new users a short setup guide and real screenshots of hints and scroll mode.
@@ -21,3 +21,4 @@ Acceptance:
 - 2026-10-25: bound cleanup to the monitor's active workspace ID captured before collection, including replies arriving after a workspace switch. All REQ-ACT-06 and REQ-SESSION-01 tests pass (92 Rust, 50 QML); the docs check and format check pass. Installed the release binaries and plugin, and `thodu doctor` is clean. A live scroll overlay on workspace 7 disappeared on switching to empty workspace 8 and stayed gone when returning to 7.
 - 2026-10-25: cursor-focus refresh now follows the detected Lua or hyprlang dispatcher, and the workspace guard treats an absent `activeWorkspace` as inactive. REQ-ACT-06 and REQ-SESSION-01 acceptance passes with 92 Rust and 51 QML tests.
 - 2026-10-25: changed the cursor refresh commands to Hyprland's request-socket syntax without a leading slash. The focused REQ-ACT-06 command test passes, and a live same-coordinate Lua dispatch returned `ok` with the pointer unchanged at 768,493.
+- 2026-10-25: coordinator confirmed the merged implementation and passing acceptance, then marked the task done.
