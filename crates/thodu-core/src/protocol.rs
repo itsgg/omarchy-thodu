@@ -106,6 +106,9 @@ pub enum Request {
 /// One of the bar's clickable items, relative to the bar's window.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShellItem {
+    /// Stable for this QML object while the bar process is running.
+    #[serde(default)]
+    pub identity: String,
     pub x: i32,
     pub y: i32,
     pub w: i32,

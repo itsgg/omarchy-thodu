@@ -78,9 +78,23 @@ Item {
         function test_req_shell_01_a_fake_bar_reports_its_three_items() {
             const found = BarScan.scan(BarScan.rootOf(probe), probe);
             compare(found.length, 3, JSON.stringify(found));
-            compare(found[0], { x: 10, y: 2, w: 30, h: 22, text: "1" });
-            compare(found[1], { x: 40, y: 2, w: 30, h: 22, text: "Workspace 2" }, "the tooltip before a glyph");
-            compare(found[2], { x: 72, y: 3, w: 20, h: 20, text: "omarchy.tray" });
+            compare(Object.keys(found[0]).sort(), ["h", "identity", "text", "w", "x", "y"]);
+            compare([found[0].x, found[0].y, found[0].w, found[0].h, found[0].text], [10, 2, 30, 22, "1"]);
+            compare([found[1].x, found[1].y, found[1].w, found[1].h, found[1].text], [40, 2, 30, 22, "Workspace 2"], "the tooltip before a glyph");
+            compare([found[2].x, found[2].y, found[2].w, found[2].h, found[2].text], [72, 3, 20, 20, "omarchy.tray"]);
+            verify(found.every(item => item.identity.length > 0));
+        }
+
+        function test_req_shell_01_item_identity_is_stable_and_distinguishes_replacements() {
+            const original = { text: "Clock 1:30" };
+            const identity = BarScan.identityOf(original);
+            original.text = "Clock 1:31";
+            compare(BarScan.identityOf(original), identity);
+            verify(BarScan.identityOf({ text: "Clock 1:31" }) !== identity);
+
+            const firstScan = BarScan.scan(BarScan.rootOf(probe), probe);
+            const secondScan = BarScan.scan(BarScan.rootOf(probe), probe);
+            compare(firstScan[0].identity, secondScan[0].identity);
         }
 
         function test_req_shell_01_the_root_is_the_bar_window_content() {

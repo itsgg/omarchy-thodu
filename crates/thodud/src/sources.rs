@@ -556,16 +556,19 @@ pub struct Shell {
 /// The bar's targets on `monitor`, its items placed at the bar's origin.
 pub fn shell_targets(items: &[ShellItem], origin: (i32, i32), monitor: &Monitor) -> Vec<Target> {
     let area = monitor.logical();
-    items
+    let visible: Vec<(Rect, String, String)> = items
         .iter()
-        .filter_map(|it| {
+        .enumerate()
+        .filter_map(|(index, it)| {
             let bounds =
                 Rect::new(origin.0 + it.x, origin.1 + it.y, it.w, it.h).intersect(&area)?;
-            Some((bounds, it.text.clone()))
+            Some((bounds, it.text.clone(), shell_item_identity(it, index)))
         })
-        .enumerate()
-        .map(|(i, (bounds, text))| Target {
-            id: format!("b{i}"),
+        .collect();
+    visible
+        .into_iter()
+        .map(|(bounds, text, identity)| Target {
+            id: format!("b:{identity}"),
             bounds,
             role: Role::Button,
             text,
@@ -647,10 +650,21 @@ fn shell_target_is_stale(
     let Some(origin) = origin else {
         return true;
     };
-    shell_targets(items, origin, monitor)
+    let Some(current) = shell_targets(items, origin, monitor)
         .into_iter()
         .find(|current| current.id == target.id)
-        .is_none_or(|current| current.bounds != target.bounds || current.text != target.text)
+    else {
+        return true;
+    };
+    current.bounds != target.bounds
+}
+
+fn shell_item_identity(item: &ShellItem, index: usize) -> String {
+    if item.identity.is_empty() {
+        format!("legacy-{index}-{}", item.text)
+    } else {
+        item.identity.clone()
+    }
 }
 
 /// The layer-shell namespace of Omarchy's bar.
@@ -1064,6 +1078,7 @@ mod tests {
     fn req_shell_01_bar_items_become_shell_targets() {
         let items = vec![
             ShellItem {
+                identity: "workspace-one".into(),
                 x: 10,
                 y: 2,
                 w: 30,
@@ -1071,6 +1086,7 @@ mod tests {
                 text: "1".into(),
             },
             ShellItem {
+                identity: "workspace-two".into(),
                 x: 40,
                 y: 2,
                 w: 30,
@@ -1078,6 +1094,7 @@ mod tests {
                 text: "2".into(),
             },
             ShellItem {
+                identity: "tray".into(),
                 x: 72,
                 y: 3,
                 w: 40,
@@ -1108,13 +1125,15 @@ mod tests {
             "the tray icon is clipped at the monitor's right edge"
         );
         assert_eq!(
-            got.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
-            ["b0", "b1", "b2"]
+            got.iter()
+                .map(|target| target.id.as_str())
+                .collect::<Vec<_>>(),
+            ["b:workspace-one", "b:workspace-two", "b:tray"]
         );
     }
 
-    // REQ-SRC-07: a shell target is valid only while its current item and
-    // layer origin still match the geometry shown to the user.
+    // REQ-SRC-07: a shell target stays valid while the same bar object still
+    // occupies its shown bounds and the layer origin remains unchanged.
     #[test]
     fn req_src_07_shell_target_is_rechecked_against_latest_bar_items() {
         let monitor = Monitor {
@@ -1125,13 +1144,24 @@ mod tests {
             height: 50,
             scale: 1.0,
         };
-        let original = vec![ShellItem {
-            x: 10,
-            y: 2,
-            w: 20,
-            h: 20,
-            text: "tray item".into(),
-        }];
+        let original = vec![
+            ShellItem {
+                identity: "tray-item".into(),
+                x: 10,
+                y: 2,
+                w: 20,
+                h: 20,
+                text: "tray item".into(),
+            },
+            ShellItem {
+                identity: "tray-neighbor".into(),
+                x: 40,
+                y: 2,
+                w: 20,
+                h: 20,
+                text: "tray neighbor".into(),
+            },
+        ];
         let shell = Shell {
             items: Mutex::new(std::collections::HashMap::from([(
                 monitor.name.clone(),
@@ -1145,18 +1175,46 @@ mod tests {
 
         shell.items.lock().unwrap().insert(
             monitor.name.clone(),
-            vec![ShellItem {
-                x: 10,
-                text: "different tray item".into(),
-                ..original[0].clone()
-            }],
+            vec![
+                ShellItem {
+                    x: 10,
+                    text: "different tray item".into(),
+                    ..original[0].clone()
+                },
+                original[1].clone(),
+            ],
         );
-        assert!(shell.target_is_stale(&target, &monitor));
+        assert!(!shell.target_is_stale(&target, &monitor));
+
+        shell.items.lock().unwrap().insert(
+            monitor.name.clone(),
+            vec![
+                original[0].clone(),
+                ShellItem {
+                    x: 41,
+                    ..original[1].clone()
+                },
+            ],
+        );
+        assert!(!shell.target_is_stale(&target, &monitor));
+
+        let second = shell_targets(&original, (0, 0), &monitor)[1].clone();
+        shell.items.lock().unwrap().insert(
+            monitor.name.clone(),
+            vec![
+                original[0].clone(),
+                ShellItem {
+                    identity: "replacement".into(),
+                    ..original[1].clone()
+                },
+            ],
+        );
+        assert!(shell.target_is_stale(&second, &monitor));
 
         shell.items.lock().unwrap().insert(
             monitor.name.clone(),
             vec![ShellItem {
-                x: 35,
+                x: 11,
                 ..original[0].clone()
             }],
         );
@@ -1166,7 +1224,7 @@ mod tests {
             .items
             .lock()
             .unwrap()
-            .insert(monitor.name.clone(), Vec::new());
+            .insert(monitor.name.clone(), vec![original[1].clone()]);
         assert!(shell.target_is_stale(&target, &monitor));
 
         let moved_bar = Shell {
@@ -1190,6 +1248,63 @@ mod tests {
         assert!(missing_bar.target_is_stale(&target, &monitor));
     }
 
+    // REQ-SRC-07: older shell reports without identities remain readable, and
+    // a text or ordering change invalidates their target before activation.
+    #[test]
+    fn req_src_07_legacy_shell_item_payloads_fail_safe_when_their_identity_changes() {
+        let monitor = Monitor {
+            name: "M".into(),
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 50,
+            scale: 1.0,
+        };
+        let legacy: ShellItem = serde_json::from_value(serde_json::json!({
+            "x": 10,
+            "y": 2,
+            "w": 20,
+            "h": 20,
+            "text": "clock"
+        }))
+        .expect("a prior shell-items v1 payload remains readable");
+        assert!(legacy.identity.is_empty());
+
+        let target = shell_targets(std::slice::from_ref(&legacy), (0, 0), &monitor)[0].clone();
+        assert!(!shell_target_is_stale(
+            &target,
+            std::slice::from_ref(&legacy),
+            Some((0, 0)),
+            &monitor,
+        ));
+
+        let updated_text = ShellItem {
+            text: "clock 12:01".into(),
+            ..legacy.clone()
+        };
+        assert!(shell_target_is_stale(
+            &target,
+            std::slice::from_ref(&updated_text),
+            Some((0, 0)),
+            &monitor,
+        ));
+
+        let inserted_before = ShellItem {
+            identity: "new-item".into(),
+            x: 0,
+            y: 2,
+            w: 8,
+            h: 20,
+            text: "new".into(),
+        };
+        assert!(shell_target_is_stale(
+            &target,
+            &[inserted_before, legacy],
+            Some((0, 0)),
+            &monitor,
+        ));
+    }
+
     // REQ-SHELL-01: bar targets are available by monitor when no app window
     // is focused, including when the app window list is empty.
     #[test]
@@ -1206,6 +1321,7 @@ mod tests {
             items: Mutex::new(std::collections::HashMap::from([(
                 monitor.name.clone(),
                 vec![ShellItem {
+                    identity: "workspace".into(),
                     x: 10,
                     y: 2,
                     w: 20,

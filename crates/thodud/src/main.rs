@@ -747,61 +747,74 @@ impl Daemon {
             return;
         };
         drop(sessions);
-        let mut target_changed =
-            source == Source::Shell && self.shell.target_is_stale(&target, &monitor);
-        if !target.window.is_empty() {
-            let Some(window) = window else {
-                self.remove(id);
-                return;
-            };
-            let now = hypr::window(&window.address).ok().flatten();
-            let owner = if !target.window.is_empty() {
-                hypr::window_at(target.bounds.center().0, target.bounds.center().1)
-            } else {
-                None
-            };
-            let newly_covered = visible_target_owner_changed(&target, owner.as_deref());
-            target_changed |= target_is_stale(&target, &window, now.as_ref()) || newly_covered;
-        }
-        if target_changed {
-            eprintln!("thodud: {id}: the target changed or became covered; collecting again");
+        if !target.window.is_empty() && window.is_none() {
             self.remove(id);
-            let result =
-                start_refreshed_session(options, refetch, |window, scope, mode, overlay, test| {
-                    self.start(window, scope, mode, overlay, test)
-                });
-            if let Err(e) = result {
-                eprintln!("thodud: {id}: {}", e.message.unwrap_or_default());
-            }
             return;
         }
-        let restore = hypr::cursor().ok().and_then(|p| {
-            hypr::monitors()
-                .ok()?
-                .into_iter()
-                .map(|m| m.monitor)
-                .find(|m| m.logical().contains_point(p.0, p.1))
-                .map(|m| (m, p))
-        });
-        // A test session never takes GG's focus, so it always puts the
-        // pointer back.
-        let restore = restore.filter(|(_, p)| {
-            options.test
-                || input::should_restore(
-                    hypr::follows_mouse(),
-                    hypr::window_at(p.0, p.1).as_deref(),
-                    hypr::window_at(act.point.0, act.point.1).as_deref(),
-                )
-        });
-        let workspace_before = (act.linger && source == Source::Shell)
-            .then(|| hypr::active_workspace_id(&monitor.name))
-            .flatten();
-        let now = if act.linger {
-            None
-        } else {
-            restore.as_ref().map(|(m, p)| (m, *p))
+        let test = options.test;
+        let activation = dispatch_activation(
+            &target,
+            &self.shell,
+            &monitor,
+            || {
+                if target.window.is_empty() {
+                    return false;
+                }
+                let Some(window) = window.as_ref() else {
+                    return false;
+                };
+                let now = hypr::window(&window.address).ok().flatten();
+                let owner = hypr::window_at(target.bounds.center().0, target.bounds.center().1);
+                let newly_covered = visible_target_owner_changed(&target, owner.as_deref());
+                target_is_stale(&target, window, now.as_ref()) || newly_covered
+            },
+            || {
+                eprintln!("thodud: {id}: the target changed or became covered; collecting again");
+                self.remove(id);
+                let result = start_refreshed_session(
+                    options,
+                    refetch,
+                    |window, scope, mode, overlay, test| {
+                        self.start(window, scope, mode, overlay, test)
+                    },
+                );
+                if let Err(e) = result {
+                    eprintln!("thodud: {id}: {}", e.message.unwrap_or_default());
+                }
+            },
+            || {
+                let restore = hypr::cursor().ok().and_then(|p| {
+                    hypr::monitors()
+                        .ok()?
+                        .into_iter()
+                        .map(|m| m.monitor)
+                        .find(|m| m.logical().contains_point(p.0, p.1))
+                        .map(|m| (m, p))
+                });
+                // A test session never takes GG's focus, so it always puts the
+                // pointer back.
+                let restore = restore.filter(|(_, p)| {
+                    test || input::should_restore(
+                        hypr::follows_mouse(),
+                        hypr::window_at(p.0, p.1).as_deref(),
+                        hypr::window_at(act.point.0, act.point.1).as_deref(),
+                    )
+                });
+                let workspace_before = (act.linger && source == Source::Shell)
+                    .then(|| hypr::active_workspace_id(&monitor.name))
+                    .flatten();
+                let now = if act.linger {
+                    None
+                } else {
+                    restore.as_ref().map(|(m, p)| (m, *p))
+                };
+                let click_result = self.perform(&monitor, act, now);
+                (restore, workspace_before, click_result)
+            },
+        );
+        let Some((restore, workspace_before, click_result)) = activation else {
+            return;
         };
-        let click_result = self.perform(&monitor, act, now);
         if let Err(e) = &click_result {
             eprintln!("thodud: {id}: the click failed: {e}");
         }
@@ -1622,6 +1635,27 @@ fn visible_target_owner_changed(target: &Target, current_owner: Option<&str>) ->
     !target.window.is_empty() && current_owner != Some(target.window.as_str())
 }
 
+fn dispatch_activation<R>(
+    target: &Target,
+    shell: &sources::Shell,
+    monitor: &Monitor,
+    window_target_stale: impl FnOnce() -> bool,
+    refresh: impl FnOnce(),
+    activate: impl FnOnce() -> R,
+) -> Option<R> {
+    let stale = if target.source == Source::Shell {
+        shell.target_is_stale(target, monitor)
+    } else {
+        window_target_stale()
+    };
+    if stale {
+        refresh();
+        None
+    } else {
+        Some(activate())
+    }
+}
+
 fn scoped_windows(
     active: &Window,
     visible: Vec<Window>,
@@ -1889,11 +1923,12 @@ mod tests {
     use thodu_core::{labels, protocol};
 
     use super::{
-        Daemon, Entry, ScrollFailure, ScrollFocus, WORKSPACE_CHANGE_WAIT, WindowScope, grid_window,
-        image_fallback_exclusions, merge_fallback, no_active_window_scope, parse_key,
-        perform_scroll_event_with, refresh_options, restart_address, scoped_windows,
-        send_wheel_with, start_refreshed_session, status_persistent, visible_target_owner_changed,
-        wait_for_workspace_change, window_for_target, with_grid_note,
+        Daemon, Entry, ScrollFailure, ScrollFocus, WORKSPACE_CHANGE_WAIT, WindowScope,
+        dispatch_activation, grid_window, image_fallback_exclusions, merge_fallback,
+        no_active_window_scope, parse_key, perform_scroll_event_with, refresh_options,
+        restart_address, scoped_windows, send_wheel_with, start_refreshed_session,
+        status_persistent, visible_target_owner_changed, wait_for_workspace_change,
+        window_for_target, with_grid_note,
     };
     use crate::sources::{self, Found, Source};
 
@@ -2623,6 +2658,7 @@ mod tests {
             items: Mutex::new(HashMap::from([(
                 monitor.name.clone(),
                 vec![thodu_core::protocol::ShellItem {
+                    identity: "workspace".into(),
                     x: 5,
                     y: 2,
                     w: 20,
@@ -3203,6 +3239,84 @@ mod tests {
         assert!(visible_target_owner_changed(&target, Some("0x2")));
         assert!(visible_target_owner_changed(&target, None));
         assert!(visible_target_owner_changed(&target, Some("0x2")));
+    }
+
+    // REQ-SRC-07: a stale shell target refreshes before the activation callback,
+    // using the same dispatch function called by Daemon::act.
+    #[test]
+    fn req_src_07_shell_staleness_triggers_activation_refresh() {
+        let monitor = Monitor {
+            name: "M".into(),
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 50,
+            scale: 1.0,
+        };
+        let item = thodu_core::protocol::ShellItem {
+            identity: "tray-item".into(),
+            x: 10,
+            y: 2,
+            w: 20,
+            h: 20,
+            text: "workspace".into(),
+        };
+        let shell_target = Target {
+            id: "b:tray-item".into(),
+            bounds: Rect::new(20, 2, 20, 20),
+            role: Role::Button,
+            text: "workspace".into(),
+            source: TargetSource::Shell,
+            actions: vec![ActionKind::Click],
+            window: String::new(),
+        };
+        let shell = sources::Shell {
+            items: Mutex::new(HashMap::from([(
+                monitor.name.clone(),
+                vec![thodu_core::protocol::ShellItem {
+                    identity: "replacement".into(),
+                    ..item.clone()
+                }],
+            )])),
+            budget: Duration::ZERO,
+            layer_origin: |_, _| Some((10, 0)),
+        };
+        let mut refreshed = 0;
+        let mut activated = 0;
+        let result = dispatch_activation(
+            &shell_target,
+            &shell,
+            &monitor,
+            || panic!("shell targets do not use window validation"),
+            || refreshed += 1,
+            || activated += 1,
+        );
+        assert_eq!(result, None);
+        assert_eq!(refreshed, 1);
+        assert_eq!(
+            activated, 0,
+            "a stale target must not reach pointer activation"
+        );
+
+        shell
+            .items
+            .lock()
+            .unwrap()
+            .insert(monitor.name.clone(), vec![item]);
+        let result = dispatch_activation(
+            &shell_target,
+            &shell,
+            &monitor,
+            || panic!("shell targets do not use window validation"),
+            || refreshed += 1,
+            || activated += 1,
+        );
+        assert_eq!(result, Some(()));
+        assert_eq!(refreshed, 1);
+        assert_eq!(
+            activated, 1,
+            "a current target may reach pointer activation"
+        );
     }
 
     // REQ-SRC-07: defaults include every visible window; focused and named
