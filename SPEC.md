@@ -234,10 +234,12 @@ Acceptance:
 ### The Omarchy shell
 
 ### REQ-SHELL-01: The bar is a source
-When a session starts, the overlay shall report the bar's clickable items on the focused window's monitor, or on Hyprland's focused monitor when no app window is focused, with their bounds in logical coordinates, as `shell` targets.
+When a session starts, the overlay shall report the bar's clickable items on the focused window's monitor, or on Hyprland's focused monitor when no app window is focused, with their bounds in logical coordinates and a stable, opaque identity, as `shell` targets. Each identity shall be unique among the reported items and stable for the lifetime of its QML object, independent of its text and bounds; a replacement object shall receive a different identity. The daemon shall accept earlier v1 reports without identity and invalidate a legacy target before activation if its item index or text changes.
 Acceptance:
 - scenario: a QML test with a fake bar of three items reports three targets with their bounds.
+- scenario: QML tests verify an item's identity stays stable when its text changes and across repeated scans, and a replacement object receives a different identity.
 - scenario: with no active app window, the source collects cached bar items by monitor even when the app window list is empty.
+- scenario: an earlier v1 bar report without identity is accepted; a legacy target remains valid while its item index, text, bounds, and bar origin match, and refreshes before activation if any changes.
 
 ### REQ-SHELL-02: The bar widget shows Thodu status and controls
 When the Thodu bar widget is configured, it shall show a visible, themed control with a tooltip. The control shall indicate whether the `thodud` user service is ready. Activating it shall open a themed, keyboard-navigable menu with actions to start hints, grid, and scroll sessions; controls to change `labels_only`, `status_display`, `scroll_step`, and `scroll_shift_step`; and an action to open the Thodu configuration file in an Omarchy terminal editor. Configuration changes shall persist to `~/.config/thodu/config.toml`, preserve comments and all supported settings, use the existing value constraints, and apply to newly started sessions. If the file contains invalid or unsupported settings, the menu shall explain that it needs editing and disable direct setting changes while keeping the editor action available. Escape or an outside click shall close the menu. The bar widget shall continue to report other clickable bar items for hint sessions.
@@ -283,7 +285,7 @@ A `window` is a Hyprland address, or `class:NAME` for the first window of that c
 
 `start` with mode grid needs no focused window and covers the focused monitor; `thodu grid [--window W] [--test] [--no-overlay]` starts one. The view carries `generation`, bumped when the targets change, and `linger`, true while the overlay keeps the keyboard after a click (REQ-ACT-02); a `key` reply carries the new targets when the key changed them. Below the monitor's level the overlay draws the grid's cells again, magnified, beside the outlined area.
 
-`{"v":1,"op":"shell-items","screen":NAME,"items":[{"x","y","w","h","text"}]}` carries the bar's items on the monitor NAME, relative to the bar's window; the shell source places them at the bar's layer (namespace `omarchy-bar`) as Hyprland reports it. Labels go to the window's targets before the bar's, so the window keeps the shortest ones.
+`{"v":1,"op":"shell-items","screen":NAME,"items":[{"identity":ID,"x","y","w","h","text"}]}` carries the bar's items on the monitor NAME, relative to the bar's window; the shell source places them at the bar's layer (namespace `omarchy-bar`) as Hyprland reports it. New bar probes send an identity unique and stable for each QML object. Earlier v1 reports without identity are accepted with an index-and-text fallback, and a changed index or text makes that target stale before activation. Labels go to the window's targets before the bar's, so the window keeps the shortest ones.
 
 `{"v":1,"op":"record","window":W}` returns every frame of the window's process, walked in full and woken if dormant, as `snapshot` in the shape of `spec/cases/atspi/*.json`; `thodu record-tree --out FILE [--window W]` writes it. A recorded node carries `action`, the name of its first action; an element whose first action is "click" is a target, with the role button when its own role is not a clickable one.
 
@@ -375,6 +377,7 @@ Unit tests and properties cover labels, search, the grid, coordinates and the st
 - 2026-10-24: change 0017, accessible scroll areas, keyboard scroll mode, uinput wheel events and an F12-family scroll binding.
 - 2026-10-24: change 0018, configurable status detail and scroll distance, plus held H/J/K/L scrolling with retained keyboard capture.
 - 2026-10-25: change 0020, a visible Thodu bar control with service status, mode launchers, settings and configuration editing.
+- 2026-10-25: change 0021, stable per-object bar item identities, updated `shell-items` shape, and legacy report compatibility.
 
 ### Retired
 

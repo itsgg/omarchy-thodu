@@ -15,5 +15,6 @@ Acceptance:
 - 2026-10-25: added a REQ-SRC-07 test for unchanged, moved, removed and renamed bar items and for changed or missing bar origins. The daemon now rechecks shell targets against the latest cache and current layer origin before activation; stale targets refresh instead of clicking their previous point.
 - 2026-10-25: `tests/acceptance/reqs.sh REQ-SHELL-01 REQ-SRC-07` passed with 55 requirement tests, 93 core unit tests, and 83 QML tests.
 - 2026-10-25: An initial bar-wide geometry fingerprint was replaced by stable per-object identities and per-target bounds checks. This keeps unrelated targets valid when neighboring items move and rejects replacements at identical bounds. The daemon routes stale targets to refresh before the production activation callback. The task acceptance passed with 55 requirement tests, 94 core unit tests, and 84 QML tests.
-- 2026-10-25: Older `shell-items` reports without an identity remain readable and fail safe when text or ordering changes. Added a proposed REQ-SHELL-03 to document stable bar item identities and the protocol field.
+- 2026-10-25: Older `shell-items` reports without identity remain readable; text or ordering changes invalidate their targets before activation.
 - 2026-10-25: `tests/acceptance/reqs.sh REQ-SHELL-01 REQ-SRC-07` passed with 55 requirement tests, 95 core unit tests, and 84 QML tests.
+- 2026-10-25: Merged the stable-identity contract into REQ-SHELL-01 and documented the `shell-items` field and compatibility behavior in SPEC section 7.

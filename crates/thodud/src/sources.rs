@@ -1248,8 +1248,8 @@ mod tests {
         assert!(missing_bar.target_is_stale(&target, &monitor));
     }
 
-    // REQ-SRC-07: older shell reports without identities remain readable, and
-    // a text or ordering change invalidates their target before activation.
+    // REQ-SHELL-01 and REQ-SRC-07: older shell reports without identities
+    // remain readable, and text or ordering changes invalidate their target.
     #[test]
     fn req_src_07_legacy_shell_item_payloads_fail_safe_when_their_identity_changes() {
         let monitor = Monitor {
