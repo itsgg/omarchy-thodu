@@ -1030,6 +1030,14 @@ fn req_act_01_single_letter_d_clicks_and_uppercase_d_selects() {
     assert_eq!(action.target, 2);
     assert!(!action.linger, "d does not start a double-click wait");
 
+    let mut cancelled = Session::new(targets.clone(), true);
+    assert!(cancelled.key(Key::Upper { c: 'D' }).is_none());
+    assert!(
+        cancelled.key(Key::Escape).is_none(),
+        "Escape after a Shift selection clicks nothing"
+    );
+    assert_eq!(cancelled.state, State::Closed);
+
     let mut selected = Session::new(targets, true);
     assert!(selected.key(Key::Upper { c: 'D' }).is_none());
     assert_eq!(selected.focused, Some(2));
