@@ -581,6 +581,61 @@ fn req_src_04_covered_elements_are_dropped() {
     assert!(texts.contains(&"OK".to_string()));
 }
 
+// REQ-SRC-04: a later popup owning the click point makes a partly covered target unsafe.
+#[test]
+fn req_src_04_target_center_covered_by_popup_is_dropped() {
+    let shown = || vec!["showing".into(), "visible".into()];
+    let frame = Node {
+        role: "frame".into(),
+        states: shown(),
+        extents: Some([0, 0, 400, 300]),
+        children: vec![
+            Node {
+                role: "button".into(),
+                states: shown(),
+                name: "Behind".into(),
+                extents: Some([20, 20, 100, 30]),
+                ..Node::default()
+            },
+            Node {
+                role: "button".into(),
+                states: shown(),
+                name: "Uncovered".into(),
+                extents: Some([200, 20, 100, 30]),
+                ..Node::default()
+            },
+            Node {
+                role: "button".into(),
+                states: shown(),
+                name: "Edge".into(),
+                extents: Some([20, 50, 100, 30]),
+                ..Node::default()
+            },
+            Node {
+                role: "popup menu".into(),
+                states: shown(),
+                extents: Some([60, 10, 80, 50]),
+                children: vec![Node {
+                    role: "menu item".into(),
+                    states: shown(),
+                    name: "Delete".into(),
+                    extents: Some([70, 20, 40, 30]),
+                    ..Node::default()
+                }],
+                ..Node::default()
+            },
+        ],
+        ..Node::default()
+    };
+
+    let targets = tree::targets(&frame, &window(), &monitor());
+    let texts: Vec<_> = targets.iter().map(|target| target.text.as_str()).collect();
+    assert!(!texts.contains(&"Behind"));
+    assert!(texts.contains(&"Uncovered"));
+    assert!(texts.contains(&"Edge"));
+    assert!(texts.contains(&"Delete"));
+}
+
 // REQ-LABEL-01: the golden cases of the assignment rule.
 #[test]
 fn req_label_01_assignment_cases() {

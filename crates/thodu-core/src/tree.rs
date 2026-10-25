@@ -183,8 +183,9 @@ struct Found {
 
 /// REQ-SRC-04: the clickable elements under `frame`, in logical coordinates.
 /// Elements that are not SHOWING and VISIBLE, and everything under them, are
-/// dropped, as are elements outside the window, with no area, or covered by a
-/// later layer (a menu, popup or dialog) of the same window. An element with
+/// dropped, as are elements outside the window, with no area, or whose click
+/// point is covered by a later layer (a menu, popup or dialog) of the same
+/// window. An element with
 /// exactly the bounds of an earlier one, as GTK4's combo box and the button
 /// inside it have, is the same control and is dropped too.
 ///
@@ -213,9 +214,10 @@ pub fn targets(frame: &Node, window: &Window, monitor: &Monitor) -> Vec<Target> 
     found
         .into_iter()
         .filter(|f| {
-            !layers.iter().any(|(layer, at): &(Rect, usize)| {
-                *at > f.order && layer.contains(&f.target.bounds)
-            })
+            let (x, y) = f.target.bounds.center();
+            !layers
+                .iter()
+                .any(|(layer, at): &(Rect, usize)| *at > f.order && layer.contains_point(x, y))
         })
         .filter(|f| {
             let new = !seen.contains(&f.target.bounds);
