@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use futures_util::future::join_all;
-use thodu_core::model::{Monitor, Window};
+use thodu_core::model::{ElementCheck, ElementRef, Monitor, Window};
 use thodu_core::tree::{self, App, Node, Snapshot};
 use zbus::Connection;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue};
@@ -46,6 +46,27 @@ const STATES: [(u32, &str); 11] = [
 ];
 
 pub type Ref = (String, OwnedObjectPath);
+
+/// The address a target keeps of its element, to read it again before a click.
+fn element_ref(at: &Ref) -> ElementRef {
+    ElementRef {
+        bus: at.0.clone(),
+        path: at.1.to_string(),
+    }
+}
+
+/// Whether an element has moved, gone or stopped showing since it was
+/// collected, read again through `tree` just before a click (REQ-ACT-03).
+/// An element the bus no longer answers for reads as moved.
+pub fn element_moved(tree: &dyn Tree, check: &ElementCheck) -> bool {
+    let Ok(path) = OwnedObjectPath::try_from(check.at.path.as_str()) else {
+        return true;
+    };
+    let at: Ref = (check.at.bus.clone(), path);
+    tree.read(std::slice::from_ref(&at))
+        .first()
+        .is_none_or(|(now, _)| !tree::element_unchanged(check, now))
+}
 type CacheRecord = (
     Ref,
     Ref,
@@ -239,6 +260,7 @@ impl Bus {
             extents: extents.map(|(x, y, w, h)| [x, y, w, h]),
             action: action.unwrap_or_default(),
             children: Vec::new(),
+            element: Some(element_ref(at)),
         };
         (node, children.unwrap_or_default())
     }
@@ -318,6 +340,7 @@ impl Tree for Bus {
                 state_words,
             ) in records
             {
+                let element = Some(element_ref(&reference));
                 nodes.push(CachedNode {
                     reference,
                     parent,
@@ -332,6 +355,7 @@ impl Tree for Bus {
                         extents: None,
                         action: String::new(),
                         children: Vec::new(),
+                        element,
                     },
                 });
             }
@@ -806,6 +830,69 @@ mod tests {
             self.attribute_calls.set(self.attribute_calls.get() + 1);
             self.woken.set(true);
         }
+    }
+
+    /// A bus that answers one element read with `node`, or with nothing.
+    struct Rechecked(Option<Node>);
+
+    impl Tree for Rechecked {
+        fn apps(&self) -> Vec<Ref> {
+            Vec::new()
+        }
+
+        fn pid(&self, _: &Ref) -> Option<u32> {
+            None
+        }
+
+        fn name(&self, _: &Ref) -> String {
+            String::new()
+        }
+
+        fn read(&self, at: &[Ref]) -> Vec<(Node, Vec<Ref>)> {
+            at.iter()
+                .map(|_| (self.0.clone().unwrap_or_default(), Vec::new()))
+                .collect()
+        }
+
+        fn children(&self, _: &Ref) -> Vec<Ref> {
+            Vec::new()
+        }
+
+        fn attributes(&self, _: &Ref) {}
+    }
+
+    // REQ-ACT-03: before a click the element is read again; the same extents
+    // pass, while moved extents, an element the bus no longer answers for and
+    // an address that is not a path count as moved.
+    #[test]
+    fn req_act_03_element_is_read_again_before_a_click() {
+        let check = ElementCheck {
+            at: ElementRef {
+                bus: ":1.5".into(),
+                path: "/button".into(),
+            },
+            extents: [10, 10, 80, 30],
+        };
+        let same = Node {
+            states: vec!["showing".into(), "visible".into()],
+            extents: Some([10, 10, 80, 30]),
+            ..Node::default()
+        };
+        assert!(!element_moved(&Rechecked(Some(same.clone())), &check));
+        let moved = Node {
+            extents: Some([10, 50, 80, 30]),
+            ..same.clone()
+        };
+        assert!(element_moved(&Rechecked(Some(moved)), &check));
+        assert!(element_moved(&Rechecked(None), &check));
+        let not_a_path = ElementCheck {
+            at: ElementRef {
+                bus: ":1.5".into(),
+                path: "not a path".into(),
+            },
+            ..check
+        };
+        assert!(element_moved(&Rechecked(Some(same)), &not_a_path));
     }
 
     struct MultiProcess;

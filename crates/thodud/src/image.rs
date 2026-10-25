@@ -243,6 +243,7 @@ fn targets_from_monitor_detections(
             source: From::Image,
             actions: vec![ActionKind::Click],
             window,
+            check: None,
         })
         .collect()
 }
@@ -387,6 +388,7 @@ mod tests {
             source: Source::Atspi,
             actions: vec![ActionKind::Click],
             window: "0x1".into(),
+            check: None,
         };
         let detections = [
             DetectionBox {
@@ -432,6 +434,7 @@ mod tests {
                 source: Source::Atspi,
                 actions: vec![ActionKind::Click],
                 window: "0x1".into(),
+                check: None,
             })
             .collect();
 
@@ -453,6 +456,7 @@ mod tests {
             source: Source::Shell,
             actions: Vec::new(),
             window: String::new(),
+            check: None,
         };
         let exclusions = [
             overlay("overlay:label", Rect::new(108, 58, 24, 18)),
@@ -611,6 +615,7 @@ mod tests {
             source: thodu_core::model::Source::Atspi,
             actions: vec![ActionKind::Click],
             window: "0xback".into(),
+            check: None,
         };
         let visible_windows = [front, back];
         let targets = targets_from_monitor_detections(

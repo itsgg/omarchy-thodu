@@ -9,7 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use thodu_core::model::{
-    self, ActionKind, Monitor, Owner, Rect, Role, Source as From, Target, Window,
+    self, ActionKind, ElementCheck, Monitor, Owner, Rect, Role, Source as From, Target, Window,
 };
 use thodu_core::protocol::ShellItem;
 use thodu_core::{tree, unregistered};
@@ -371,6 +371,26 @@ impl Source for Atspi {
 }
 
 impl Atspi {
+    /// Whether an accessible target's element moved, went or stopped showing
+    /// since collection (REQ-ACT-03). A bus that stays busy past a short wait
+    /// counts as moved, so the session refreshes instead of clicking unchecked.
+    pub fn element_moved(&self, check: &ElementCheck) -> bool {
+        let deadline = Instant::now() + Duration::from_millis(150);
+        loop {
+            match self.bus.try_lock() {
+                Ok(bus) => {
+                    return bus
+                        .as_ref()
+                        .is_none_or(|bus| atspi::element_moved(bus, check));
+                }
+                Err(std::sync::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(_) => return true,
+            }
+        }
+    }
+
     /// Collect semantic scroll regions, with one window fallback where the
     /// app tree has no usable scroll role (REQ-SRC-08).
     pub fn collect_scroll_areas(
@@ -535,6 +555,7 @@ pub fn scroll_areas_for_window(
             source: From::Window,
             actions: vec![ActionKind::Scroll],
             window: window.address.clone(),
+            check: None,
         });
     }
     for (index, target) in targets.iter_mut().enumerate() {
@@ -580,6 +601,7 @@ pub fn shell_targets(items: &[ShellItem], origin: (i32, i32), monitor: &Monitor)
             source: From::Shell,
             actions: vec![ActionKind::Click, ActionKind::Right],
             window: String::new(),
+            check: None,
         })
         .collect()
 }
@@ -708,6 +730,7 @@ mod tests {
                 source: From::Atspi,
                 actions: Vec::new(),
                 window: String::new(),
+                check: None,
             };
             Ok(SourceTargets::new(
                 vec![target; self.found],
@@ -803,6 +826,7 @@ mod tests {
                 source: self.source,
                 actions: vec![ActionKind::Click],
                 window: "0x1".into(),
+                check: None,
             };
             let mut result = SourceTargets::new(vec![target], self.name);
             result.request_fallback = self.request_fallback;
@@ -903,6 +927,7 @@ mod tests {
             source,
             actions: vec![ActionKind::Click],
             window: window.into(),
+            check: None,
         };
         let all = vec![
             target("under-toast", 1490, 100, From::Atspi, "0x1"),
@@ -926,6 +951,48 @@ mod tests {
         );
     }
 
+    // REQ-ACT-03: an element that cannot be read again in time counts as
+    // moved, so the session refreshes instead of clicking unchecked.
+    #[test]
+    fn req_act_03_an_unreadable_element_counts_as_moved() {
+        let check = ElementCheck {
+            at: thodu_core::model::ElementRef {
+                bus: ":1.5".into(),
+                path: "/button".into(),
+            },
+            extents: [10, 10, 80, 30],
+        };
+        let atspi = Arc::new(Atspi {
+            bus: Mutex::new(None),
+            woken: Mutex::new(HashSet::new()),
+            budget: Duration::from_millis(80),
+        });
+        assert!(atspi.element_moved(&check), "no bus to read it on");
+
+        let (held, release) = (
+            Arc::new(std::sync::Barrier::new(2)),
+            Arc::new(std::sync::Barrier::new(2)),
+        );
+        let busy = {
+            let (atspi, held, release) =
+                (Arc::clone(&atspi), Arc::clone(&held), Arc::clone(&release));
+            thread::spawn(move || {
+                let _bus = atspi.bus.lock().unwrap();
+                held.wait();
+                release.wait();
+            })
+        };
+        held.wait();
+        let started = Instant::now();
+        assert!(atspi.element_moved(&check), "a bus busy with a collection");
+        assert!(
+            started.elapsed() < Duration::from_millis(400),
+            "the wait is short"
+        );
+        release.wait();
+        busy.join().unwrap();
+    }
+
     // REQ-SRC-07: a floating window stays actionable over a tiled window,
     // even when the tiled window has the newer focus history.
     #[test]
@@ -945,6 +1012,7 @@ mod tests {
             source: From::Atspi,
             actions: vec![ActionKind::Click],
             window: window.into(),
+            check: None,
         };
         let mut targets = vec![
             target("covered", 60, "0x1"),
@@ -984,6 +1052,7 @@ mod tests {
                     source: From::Atspi,
                     actions: vec![ActionKind::Click],
                     window: window.address.clone(),
+                    check: None,
                 }],
                 "targets from every window",
             ))
@@ -1001,6 +1070,7 @@ mod tests {
                         source: From::Atspi,
                         actions: vec![ActionKind::Click],
                         window: window.address.clone(),
+                        check: None,
                     })
                     .collect(),
                 "targets from every window",
@@ -1441,6 +1511,7 @@ mod tests {
             source,
             actions: vec![ActionKind::Click],
             window: "0x1".into(),
+            check: None,
         };
         let mut targets = vec![
             target("a0", 10, From::Atspi),
@@ -1584,6 +1655,7 @@ mod tests {
             source: From::Atspi,
             actions: vec![ActionKind::Click],
             window: "0x1".into(),
+            check: None,
         };
         let found = atspi_targets_with_visual_supplement(vec![accessible], "20 targets from atspi");
         assert_eq!(found.targets.len(), 1);
@@ -1604,6 +1676,7 @@ mod tests {
             source: From::Shell,
             actions: Vec::new(),
             window: String::new(),
+            check: None,
         }];
 
         let got = collect_fallback_visible(&sources, &[window()], &monitor(), &excluded);

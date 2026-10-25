@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
 
-use crate::model::{ActionKind, Monitor, Rect, Role, Source, Target, Window};
+use crate::model::{
+    ActionKind, ElementCheck, ElementRef, Monitor, Rect, Role, Source, Target, Window,
+};
 
 /// One accessible element, with its extents relative to its window.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,6 +32,10 @@ pub struct Node {
     pub action: String,
     #[serde(default)]
     pub children: Vec<Node>,
+    /// Where the element lives on the accessibility bus, when read live;
+    /// recorded trees have none.
+    #[serde(skip)]
+    pub element: Option<ElementRef>,
 }
 
 impl Node {
@@ -40,6 +46,27 @@ impl Node {
     fn shown(&self) -> bool {
         self.has("showing") && self.has("visible")
     }
+
+    /// The check to read this element again before a click, when it was read
+    /// live and has extents.
+    pub fn check(&self) -> Option<ElementCheck> {
+        Some(ElementCheck {
+            at: self.element.clone()?,
+            extents: self.extents?,
+        })
+    }
+}
+
+/// Whether an element read again just before a click is where it was: still
+/// shown, with window-relative extents within one unit of those collected.
+pub fn element_unchanged(check: &ElementCheck, now: &Node) -> bool {
+    now.shown()
+        && now.extents.is_some_and(|extents| {
+            extents
+                .iter()
+                .zip(check.extents)
+                .all(|(now, then)| (now - then).abs() <= 1)
+        })
 }
 
 /// An application on the accessibility bus and its top-level frames.
@@ -300,6 +327,7 @@ pub fn scroll_targets(frame: &Node, window: &Window, monitor: &Monitor) -> Vec<T
                             source: Source::Atspi,
                             actions: vec![ActionKind::Scroll],
                             window: self.window.address.clone(),
+                            check: node.check(),
                         },
                     ));
                 }
@@ -411,6 +439,7 @@ fn walk(node: &Node, at: &mut Walk<'_>, div: f64, parent: Option<[i32; 4]>, insi
                     source: Source::Atspi,
                     actions: actions_for(role).to_vec(),
                     window: at.window.address.clone(),
+                    check: node.check(),
                 },
                 order: *at.order,
             });

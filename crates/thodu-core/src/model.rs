@@ -108,6 +108,25 @@ pub struct Target {
     pub actions: Vec<ActionKind>,
     /// The Hyprland window address, empty for shell targets.
     pub window: String,
+    /// How to tell before a click that the element is still where it was;
+    /// left out of the IPC and recorded cases.
+    #[serde(skip)]
+    pub check: Option<ElementCheck>,
+}
+
+/// An accessible element's address on the accessibility bus.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ElementRef {
+    pub bus: String,
+    pub path: String,
+}
+
+/// An accessible element and its window-relative extents when collected,
+/// to read again before a click (REQ-ACT-03).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ElementCheck {
+    pub at: ElementRef,
+    pub extents: [i32; 4],
 }
 
 /// A monitor as Hyprland reports it: origin in logical coordinates, size in

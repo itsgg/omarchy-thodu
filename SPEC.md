@@ -202,9 +202,11 @@ Acceptance:
 - scenario: two distinct Return presses within 300 ms make one double click; a later Return does not.
 
 ### REQ-ACT-03: Never act on a stale target
-If the target's window has moved, resized, closed or left the active workspace since collection, then the system shall not act; it shall collect again and redraw the labels.
+If the target's window has moved, resized, closed or left the active workspace since collection, then the system shall not act; it shall collect again and redraw the labels. An accessible target's element shall be read again just before the click, and if it is gone, no longer showing, or its window-relative extents moved by more than one unit, the system shall not act and shall collect again. Each click shall run its checks immediately before its press, with clicks and scroll actions taking turns with the one pointer, and the second click of a double click shall be checked the same way and skipped when the first click did not happen.
 Acceptance:
 - scenario: WHEN Hyprland reports the window 10 units to the right after collection THEN no pointer event is sent and a new collection runs.
+- scenario: an accessible target whose element moved, hid or no longer answers is refused while its window and click point are unchanged, and an element that cannot be read in time counts as moved.
+- scenario: a click prepares, then checks and presses while holding the pointer, two clicks never hold it together, and a second click is skipped when the first never happened or its target moved.
 
 ### REQ-ACT-04: Scroll the selected area
 In scroll mode, `j` and `k` shall send vertical wheel detents down and up, and `l` and `h` shall send horizontal wheel detents right and left, at the selected area's center. The number of detents is configured by REQ-ACT-05. Scrolling shall not click, shall keep the selected area and mode, and shall return the overlay to its normal input region after the wheel event. The input path shall support GTK, Qt, Chromium and Electron through the installed uinput device. If the owning window moved, closed or is no longer topmost before the wheel event, the system shall send no wheel event and shall report that the session must be restarted.
@@ -388,6 +390,7 @@ Unit tests and properties cover labels, search, the grid, coordinates and the st
 - 2026-10-25: change 0023, a Shift-completed label activates once Shift is physically released, recognised whatever symbol the layout gives the release.
 - 2026-10-25: change 0024, a lowercase final label character clicks and an uppercase one selects; labels-only is the default, O3 is resolved, and change 0023's wait for Shift release is retired.
 - 2026-10-25: change 0025, the owner of a point follows Hyprland's whole stack, layers and fullscreen windows included, for collection, image targets, scroll areas, bar targets and the recheck before a click.
+- 2026-10-25: change 0026, accessible elements are read again before a click, each click checks right before its press under one pointer lock, and the second click of a double click is checked too.
 
 ### Retired
 

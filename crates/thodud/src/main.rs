@@ -26,7 +26,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thodu_core::config::{self, Config};
 use thodu_core::input;
 use thodu_core::labels;
-use thodu_core::model::{Monitor, Owner, Rect, Source, Target, Window};
+use thodu_core::model::{ElementCheck, Monitor, Owner, Rect, Source, Target, Window};
 use thodu_core::protocol::{
     self, Envelope, ErrorKind, LabeledTarget, MonitorInfo, OpenEvent, Reply, Request, Timing, View,
 };
@@ -796,7 +796,9 @@ impl Daemon {
             &self.pointer_action,
             || {
                 target_is_current(&target, &self.shell, &monitor, || {
-                    target_moved_or_covered(&target, window.as_ref())
+                    target_moved_or_covered(&target, window.as_ref(), |check| {
+                        self.atspi.element_moved(check)
+                    })
                 })
             },
             || {
@@ -866,9 +868,14 @@ impl Daemon {
     /// has happened and only while its target still owns the point; then the
     /// pointer goes back.
     fn act_again(&self, id: &str, act: &Act) {
-        self.act_again_with(id, act, target_moved_or_covered, |monitor| {
-            self.perform(monitor, act, None)
-        });
+        self.act_again_with(
+            id,
+            act,
+            |target, window| {
+                target_moved_or_covered(target, window, |check| self.atspi.element_moved(check))
+            },
+            |monitor| self.perform(monitor, act, None),
+        );
     }
 
     fn act_again_with(
@@ -1585,6 +1592,7 @@ fn overlay_exclusion(id: String, bounds: Rect) -> Target {
         source: Source::Shell,
         actions: Vec::new(),
         window: String::new(),
+        check: None,
     }
 }
 
@@ -1722,20 +1730,38 @@ fn record_first_click(entry: &mut Entry, happened: bool, workspace_changed: bool
 /// Whether a target's click point may no longer reach it: a bar target's
 /// point must still belong to the bar, and a window target's window must
 /// not have moved, resized, closed or left its workspace and must still
-/// own the point.
-fn target_moved_or_covered(target: &Target, window: Option<&Window>) -> bool {
+/// own the point, and an accessible element must still be where it was.
+fn target_moved_or_covered(
+    target: &Target,
+    window: Option<&Window>,
+    element_moved: impl FnOnce(&ElementCheck) -> bool,
+) -> bool {
     let (x, y) = target.bounds.center();
+    let owner = hypr::owner_at(x, y);
+    let now = window.and_then(|window| hypr::window(&window.address).ok().flatten());
+    moved_or_covered_given(target, window, now.as_ref(), &owner, element_moved)
+}
+
+/// `target_moved_or_covered` once Hyprland has answered: `now` is the
+/// target's window as Hyprland reports it now and `owner` what owns the
+/// click point now. The element is read last, only when the rest holds.
+fn moved_or_covered_given(
+    target: &Target,
+    window: Option<&Window>,
+    now: Option<&Window>,
+    owner: &Owner,
+    element_moved: impl FnOnce(&ElementCheck) -> bool,
+) -> bool {
     if target.window.is_empty() {
         return target.source == Source::Shell
-            && hypr::owner_at(x, y) != Owner::Layer(sources::BAR_NAMESPACE.to_string());
+            && *owner != Owner::Layer(sources::BAR_NAMESPACE.to_string());
     }
     let Some(window) = window else {
         return false;
     };
-    let now = hypr::window(&window.address).ok().flatten();
-    let owner = hypr::window_at(x, y);
-    target_is_stale(target, window, now.as_ref())
-        || visible_target_owner_changed(target, owner.as_deref())
+    target_is_stale(target, window, now)
+        || visible_target_owner_changed(target, owner.window())
+        || target.check.as_ref().is_some_and(element_moved)
 }
 
 /// Whether a target may be clicked now: a shell target must match the
@@ -2020,10 +2046,10 @@ mod tests {
     use super::{
         Daemon, Entry, ScrollFailure, ScrollFocus, WORKSPACE_CHANGE_WAIT, WindowScope,
         checked_click, grid_window, image_fallback_exclusions, merge_fallback,
-        no_active_window_scope, parse_key, perform_scroll_event_with, record_first_click,
-        refresh_options, restart_address, scoped_windows, send_wheel_with, start_refreshed_session,
-        status_persistent, target_is_current, visible_target_owner_changed,
-        wait_for_workspace_change, window_for_target, with_grid_note,
+        moved_or_covered_given, no_active_window_scope, parse_key, perform_scroll_event_with,
+        record_first_click, refresh_options, restart_address, scoped_windows, send_wheel_with,
+        start_refreshed_session, status_persistent, target_is_current,
+        visible_target_owner_changed, wait_for_workspace_change, window_for_target, with_grid_note,
     };
     use crate::sources::{self, Found, Source};
 
@@ -2097,6 +2123,7 @@ mod tests {
             source: TargetSource::Atspi,
             actions: vec![ActionKind::Scroll],
             window: window.address.clone(),
+            check: None,
         };
         let focused = RefCell::new(false);
         let points = RefCell::new(Vec::new());
@@ -2279,6 +2306,7 @@ mod tests {
             source: TargetSource::Shell,
             actions: vec![ActionKind::Scroll],
             window: String::new(),
+            check: None,
         };
         let mut get =
             |_: &str| -> Result<bool, String> { panic!("shell target has no window property") };
@@ -2317,6 +2345,7 @@ mod tests {
             source: TargetSource::Atspi,
             actions: vec![ActionKind::Scroll],
             window: window.address.clone(),
+            check: None,
         };
         let mut get = |_: &str| Err("window not found".into());
         let mut set = |_: &str, _: Option<bool>| Ok(());
@@ -2346,6 +2375,7 @@ mod tests {
             source: TargetSource::Atspi,
             actions: vec![ActionKind::Scroll],
             window: "0x1".into(),
+            check: None,
         };
         let mut get = |_: &str| -> Result<bool, String> { panic!("no window to query") };
         let mut set =
@@ -2378,6 +2408,7 @@ mod tests {
             source: TargetSource::Atspi,
             actions: vec![ActionKind::Scroll],
             window: window.address.clone(),
+            check: None,
         };
         let mut get = |_: &str| -> Result<bool, String> { panic!("storage check comes first") };
         let mut set = |_: &str, _: Option<bool>| -> Result<(), String> {
@@ -2447,6 +2478,7 @@ mod tests {
             source: TargetSource::Atspi,
             actions: vec![ActionKind::Scroll],
             window: window.address.clone(),
+            check: None,
         };
         let mut session = Session::new_scroll(vec![target.clone()]);
         session.key(Key::Char {
@@ -2527,6 +2559,7 @@ mod tests {
             source: TargetSource::Atspi,
             actions: vec![ActionKind::Scroll],
             window: String::new(),
+            check: None,
         };
         let pending_entry = |action_started: bool| {
             let mut session = Session::new_scroll(vec![target.clone()]);
@@ -2612,6 +2645,7 @@ mod tests {
                 source: TargetSource::Atspi,
                 actions: vec![ActionKind::Scroll],
                 window: String::new(),
+                check: None,
             }]),
             window: None,
             monitor: monitor.clone(),
@@ -2819,6 +2853,7 @@ mod tests {
             source: TargetSource::Atspi,
             actions: vec![ActionKind::Click],
             window: first.address.clone(),
+            check: None,
         };
         let image = Target {
             id: "0x2:i0".into(),
@@ -2828,6 +2863,7 @@ mod tests {
             source: TargetSource::Image,
             actions: vec![ActionKind::Click],
             window: second.address.clone(),
+            check: None,
         };
         let mut entry = Entry {
             session: Session::new(vec![primary], false)
@@ -2909,6 +2945,7 @@ mod tests {
             source: TargetSource::Atspi,
             actions: vec![ActionKind::Click],
             window: "0x1".into(),
+            check: None,
         };
         let mut session = Session::new(vec![target.clone()], false).with_area(monitor.logical());
         session.focused = Some(0);
@@ -2979,6 +3016,7 @@ mod tests {
             source: TargetSource::Atspi,
             actions: vec![ActionKind::Click],
             window: "0x1".into(),
+            check: None,
         };
         let daemon = daemon_with_entry(Entry {
             session: Session::new(vec![target], false).with_area(monitor.logical()),
@@ -3044,6 +3082,7 @@ mod tests {
             source: TargetSource::Atspi,
             actions: vec![ActionKind::Click],
             window: "0x1".into(),
+            check: None,
         };
         let entry = || Entry {
             session: Session::new(vec![target.clone()], false).with_area(monitor.logical()),
@@ -3109,6 +3148,7 @@ mod tests {
             source: TargetSource::Atspi,
             actions: vec![ActionKind::Click],
             window: "0x1".into(),
+            check: None,
         };
         let daemon = daemon_with_entry(Entry {
             session: Session::new(vec![target], false).with_area(monitor.logical()),
@@ -3161,6 +3201,7 @@ mod tests {
             source: TargetSource::Atspi,
             actions: vec![ActionKind::Click],
             window: "0x1".into(),
+            check: None,
         };
         let mut session = Session::new(vec![target], false).with_area(monitor.logical());
         session.generation = 1;
@@ -3229,6 +3270,7 @@ mod tests {
             source: TargetSource::Shell,
             actions: vec![ActionKind::Click],
             window: String::new(),
+            check: None,
         }
     }
 
@@ -3475,6 +3517,73 @@ mod tests {
         assert!(daemon.sessions.lock().unwrap().get("s1").is_none());
     }
 
+    // REQ-ACT-03: a window target whose window and click point are unchanged
+    // is still refused when its element moved, and the element is read only
+    // once the window checks pass.
+    #[test]
+    fn req_act_03_a_moved_element_refuses_the_click() {
+        let window = Window {
+            address: "0x1".into(),
+            at: (0, 0),
+            size: (200, 200),
+            workspace: 1,
+            ..Window::default()
+        };
+        let target = Target {
+            id: "0x1:a0".into(),
+            bounds: Rect::new(10, 10, 20, 20),
+            role: Role::Button,
+            text: "Send".into(),
+            source: TargetSource::Atspi,
+            actions: vec![ActionKind::Click],
+            window: "0x1".into(),
+            check: Some(thodu_core::model::ElementCheck {
+                at: thodu_core::model::ElementRef {
+                    bus: ":1.5".into(),
+                    path: "/send".into(),
+                },
+                extents: [10, 10, 20, 20],
+            }),
+        };
+        let owner = thodu_core::model::Owner::Window("0x1".into());
+        let read = Cell::new(0);
+        let element = |moved: bool| {
+            let read = &read;
+            move |_: &thodu_core::model::ElementCheck| {
+                read.set(read.get() + 1);
+                moved
+            }
+        };
+        assert!(!moved_or_covered_given(
+            &target,
+            Some(&window),
+            Some(&window),
+            &owner,
+            element(false)
+        ));
+        assert!(moved_or_covered_given(
+            &target,
+            Some(&window),
+            Some(&window),
+            &owner,
+            element(true)
+        ));
+        assert_eq!(read.get(), 2);
+        let covered = thodu_core::model::Owner::Layer("omarchy-notifications".into());
+        assert!(moved_or_covered_given(
+            &target,
+            Some(&window),
+            Some(&window),
+            &covered,
+            element(false)
+        ));
+        assert_eq!(
+            read.get(),
+            2,
+            "a covered point refuses before reading the element"
+        );
+    }
+
     // REQ-SEARCH-01: a letter typed with Control is a shortcut meant for an
     // app, so it neither types the label nor acts, and the session stays.
     #[test]
@@ -3496,6 +3605,7 @@ mod tests {
             source: TargetSource::Atspi,
             actions: vec![ActionKind::Click],
             window: "0x1".into(),
+            check: None,
         };
         let session = Session::new(vec![target], false).with_area(monitor.logical());
         let daemon = daemon_with_entry(Entry {
@@ -3587,6 +3697,7 @@ mod tests {
             source: TargetSource::Atspi,
             actions: vec![ActionKind::Click],
             window: "0x2".into(),
+            check: None,
         };
 
         assert_eq!(
@@ -3679,6 +3790,7 @@ mod tests {
             source: TargetSource::Atspi,
             actions: vec![ActionKind::Click],
             window: "0x1".into(),
+            check: None,
         };
 
         assert!(!visible_target_owner_changed(&target, Some("0x1")));
@@ -3716,6 +3828,7 @@ mod tests {
             source: TargetSource::Shell,
             actions: vec![ActionKind::Click],
             window: String::new(),
+            check: None,
         };
         let shell = sources::Shell {
             items: Mutex::new(HashMap::from([(
@@ -3798,6 +3911,7 @@ mod tests {
             source: TargetSource::Shell,
             actions: vec![ActionKind::Click],
             window: String::new(),
+            check: None,
         };
         let mut session = Session::new(vec![target], true);
         session.focused = Some(0);

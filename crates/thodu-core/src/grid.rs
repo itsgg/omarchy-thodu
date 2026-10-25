@@ -49,6 +49,7 @@ pub fn targets(area: &Rect) -> Vec<Target> {
             source: Source::Grid,
             actions: vec![ActionKind::Click, ActionKind::Right, ActionKind::Double],
             window: String::new(),
+            check: None,
         })
         .collect()
 }

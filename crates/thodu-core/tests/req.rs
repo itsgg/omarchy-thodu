@@ -80,6 +80,7 @@ fn target(text: &str, bounds: Rect) -> Target {
         source: Source::Atspi,
         actions: Vec::new(),
         window: "0x1".into(),
+        check: None,
     }
 }
 
@@ -1937,4 +1938,76 @@ fn req_src_07_window_without_input_owns_nothing() {
         Owner::Window("0xbelow".into())
     );
     assert_eq!(owner_at(&[glass], &screen, 100, 100), Owner::Nothing);
+}
+
+fn live_button() -> thodu_core::tree::Node {
+    thodu_core::tree::Node {
+        role: "push button".into(),
+        states: vec!["showing".into(), "visible".into()],
+        name: "Send".into(),
+        extents: Some([10, 20, 80, 30]),
+        element: Some(thodu_core::model::ElementRef {
+            bus: ":1.9".into(),
+            path: "/a/1".into(),
+        }),
+        ..thodu_core::tree::Node::default()
+    }
+}
+
+// REQ-ACT-03: an element read live carries the check to read it again
+// before a click; the check holds for the same extents, within a unit, and
+// fails when the element moved, hid or is gone.
+#[test]
+fn req_act_03_element_check_compares_extents_and_showing() {
+    use thodu_core::tree::{Node, element_unchanged};
+    let node = live_button();
+    let check = node
+        .check()
+        .expect("a live element with extents has a check");
+    assert_eq!(check.extents, [10, 20, 80, 30]);
+    assert!(element_unchanged(&check, &node));
+    let nudged = Node {
+        extents: Some([11, 20, 80, 30]),
+        ..node.clone()
+    };
+    assert!(element_unchanged(&check, &nudged), "within one unit");
+    let moved = Node {
+        extents: Some([10, 60, 80, 30]),
+        ..node.clone()
+    };
+    assert!(!element_unchanged(&check, &moved));
+    let hidden = Node {
+        states: Vec::new(),
+        ..node.clone()
+    };
+    assert!(!element_unchanged(&check, &hidden));
+    assert!(
+        !element_unchanged(&check, &Node::default()),
+        "an element the bus no longer answers for"
+    );
+    let recorded = Node {
+        element: None,
+        ..node
+    };
+    assert!(
+        recorded.check().is_none(),
+        "recorded trees carry no element"
+    );
+}
+
+// REQ-ACT-03: the targets of a tree read live carry their elements' checks.
+#[test]
+fn req_act_03_live_targets_carry_element_checks() {
+    use thodu_core::tree::Node;
+    let window = window();
+    let frame = Node {
+        role: "frame".into(),
+        states: vec!["showing".into(), "visible".into(), "active".into()],
+        extents: Some([0, 0, window.size.0, window.size.1]),
+        children: vec![live_button()],
+        ..Node::default()
+    };
+    let targets = tree::targets(&frame, &window, &monitor());
+    assert_eq!(targets.len(), 1);
+    assert_eq!(targets[0].check, live_button().check());
 }
