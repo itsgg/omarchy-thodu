@@ -50,7 +50,7 @@ qml_turn() {
         return
     fi
     step qmllint qml_lint
-    step qml-tests qml_tests
+    step qml-tests in_dir . qml_tests
 }
 
 qml_full() {

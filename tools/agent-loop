@@ -101,11 +101,17 @@ for tool in "${tools[@]}"; do
     found=$(command -v "$tool") || { echo "ERROR $tool not found on PATH" >&2; exit 2; }
     # A mise shim needs mise and its shims directory, which the sandbox lacks.
     case $found in */mise/shims/*) found=$(mise which "$tool") || { echo "ERROR mise has no version of $tool set" >&2; exit 2; } ;; esac
-    path="$path$(dirname "$found"):"
+    # PATH names where the tool resolves when its directory is a link, since the
+    # link itself is not bound into the sandbox (below).
+    dir=$(dirname "$found")
+    [ -L "$dir" ] && dir=$(dirname "$(readlink -f "$found")")
+    path="$path$dir:"
     # A tool under the home directory is hidden by the private home unless its
     # directory, and the directory its link resolves to, are bound back read-only.
+    # A directory that is itself a link (mise's installs/TOOL/latest) cannot be a
+    # mount point; the directory it resolves to is bound instead.
     for dir in "$(dirname "$found")" "$(dirname "$(readlink -f "$found")")"; do
-        case $dir in "$HOME"/*) tool_dirs+=("$dir") ;; esac
+        case $dir in "$HOME"/*) [ -L "$dir" ] || tool_dirs+=("$dir") ;; esac
     done
 done
 path="$path/usr/local/bin:/usr/bin"
@@ -136,6 +142,11 @@ if [ "$login" = 0 ] && [ "$harness" != shell ] && [ "$harness" != agy ]; then
         echo "ERROR $name is not signed in to $harness; run: tools/agent-loop $name $harness login" >&2
         exit 2
     fi
+fi
+if [ "$harness" = codex ]; then
+    # The managed Codex profile can protect Claude settings paths. Keep their
+    # mount point present in this private home without copying host settings.
+    mkdir -p "$private/home/.claude"
 fi
 if [ "$harness" != shell ] && [ -f "$auth" ]; then
     [ "$(stat -c %a "$auth")" = 600 ] || { echo "ERROR $auth must be mode 600" >&2; exit 2; }

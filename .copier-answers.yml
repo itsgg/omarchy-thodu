@@ -1,9 +1,10 @@
 # Changes here will be overwritten by Copier; NEVER EDIT MANUALLY
-_commit: v0.1.4
+_commit: v0.1.13
 _src_path: git@github.com:itsgg/vithai.git
 description: 'Keyboard hints for everything on an Omarchy screen: Homerow for Omarchy'
 display_name: Thodu
 kind: omarchy-plugin
+landing: ff
 plugin_id: io.github.itsgg.thodu
 plugin_kind: overlay
 project_name: thodu

@@ -4,8 +4,14 @@
 # slow steps with `--nightly`. One line per step with its seconds; the detail
 # goes to .gate/<step>.log, and an ERROR line says what failed and where to
 # look. Step budgets and the stacks are in tools/gate.conf.
+#
+# GATE_ROOT runs this copy of the gate, its settings and its checks over
+# another tree: tools/land runs main's gate over a branch, so a branch cannot
+# weaken the gate that judges it.
 set -euo pipefail
-root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+root=$(cd "${GATE_ROOT:-$here/..}" && pwd)
+unset GATE_ROOT
 cd "$root"
 
 tier=full
@@ -16,19 +22,19 @@ case ${1:-} in
     *) echo "ERROR usage: tools/gate [--turn|--full|--nightly]"; exit 2 ;;
 esac
 
-if grep -qE '^(<{7}|>{7})( |$)' tools/gate.conf tools/gate.local.conf 2>/dev/null; then
+if grep -qE '^(<{7}|>{7})( |$)' "$here/gate.conf" "$here/gate.local.conf" 2>/dev/null; then
     echo "ERROR tools/gate.conf or tools/gate.local.conf has merge conflict markers; resolve them first"
     exit 1
 fi
 # shellcheck source=tools/gate.conf
-. tools/gate.conf
+. "$here/gate.conf"
 # shellcheck disable=SC1091
-[ ! -f tools/gate.local.conf ] || . tools/gate.local.conf
+[ ! -f "$here/gate.local.conf" ] || . "$here/gate.local.conf"
 logs=${GATE_LOGS:-$root/.gate}
 mkdir -p "$logs"
 : >"$logs/summary"
 py=$(command -v python3)
-checks() { "$py" -I "$root/tools/checks.py" "$@"; }
+checks() { CHECKS_ROOT=$root "$py" -I "$here/checks.py" "$@"; }
 
 ms() { echo $(( $(date +%s%N) / 1000000 )); }
 secs() { printf '%d.%d' $(( $1 / 1000 )) $(( $1 % 1000 / 100 )); }
@@ -53,7 +59,15 @@ step() {
 say() { echo "$1" | tee -a "$logs/summary"; }
 skip() { say "$(printf 'skip  %-24s %s' "$1" "$2")"; }
 
-in_dir() { local dir=$1; shift; (cd "$dir" && "$@"); }
+# A stack's steps run the project's own tools and tests, which may run git in
+# repositories of their own; inside a git hook these variables name this one,
+# so those steps run without them. The checks keep them: they read the commit.
+git_vars=$(git rev-parse --local-env-vars 2>/dev/null || true)
+in_dir() {
+    local dir=$1 var
+    shift
+    (cd "$dir" && for var in $git_vars; do unset "$var"; done && "$@")
+}
 
 # each_root MANIFEST STEP CMD...: run STEP in every directory holding MANIFEST
 # (outside dependency and build trees). A Cargo workspace runs once, at its
@@ -78,10 +92,10 @@ each_root() {
 
 start=$(ms)
 # shellcheck source=tools/gate.d/core.sh
-. tools/gate.d/core.sh
+. "$here/gate.d/core.sh"
 for stack in $STACKS; do
     # shellcheck disable=SC1090
-    . "tools/gate.d/$stack.sh"
+    . "$here/gate.d/$stack.sh"
 done
 
 core_turn

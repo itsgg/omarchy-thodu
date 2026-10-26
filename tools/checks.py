@@ -24,6 +24,9 @@ from pathlib import Path
 
 # CHECKS_ROOT lets the template repository run a check over its own files.
 ROOT = Path(os.environ.get("CHECKS_ROOT") or Path(__file__).resolve().parent.parent)
+# The tools this copy came with: its settings judge the tree at ROOT, which
+# tools/gate points at a branch when main's gate judges it.
+HARNESS = Path(__file__).resolve().parent
 MAIN = "main"
 
 # Commit messages (rules.md, Git and Writing style).
@@ -87,10 +90,12 @@ def git(*args: str, check: bool = True, cwd: Path | None = None) -> str:
 
 
 def gate_conf() -> dict[str, str]:
-    """Read tools/gate.conf, then tools/gate.local.conf over it: shell files of NAME=value lines."""
+    """Read tools/gate.conf, then tools/gate.local.conf over it: shell files of NAME=value lines.
+
+    They are this copy's, next to it, so main's settings judge a branch."""
     conf: dict[str, str] = {}
     for name in ("gate.conf", "gate.local.conf"):
-        path = ROOT / "tools" / name
+        path = HARNESS / name
         if path.exists():
             for line in path.read_text(encoding="utf-8").splitlines():
                 m = re.match(r"^([A-Z_][A-Z0-9_]*)=(.*)$", line.strip())
@@ -134,6 +139,29 @@ def show(rev: str, path: str) -> str | None:
 
 def branch() -> str:
     return git("rev-parse", "--abbrev-ref", "HEAD").strip()
+
+
+def branch_name() -> str:
+    """The branch whose work is checked: the one tools/land names in
+    GATE_BRANCH, a pull request's head on CI, else HEAD's ("HEAD" when detached)."""
+    named = os.environ.get("GATE_BRANCH", "").strip()
+    if named:
+        return named
+    if os.environ.get("GATE_CI"):
+        ci = os.environ.get("GITHUB_HEAD_REF") or os.environ.get("GITHUB_REF_NAME")
+        if ci:
+            return ci
+    return branch() if ref_exists("HEAD") else "HEAD"
+
+
+def test_edits_declared() -> bool:
+    """Whether an edit to an existing test needs a 'Modifies test:' line here:
+    always, unless tools/gate.local.conf sets TEST_EDITS=agents, and then on
+    agent/* branches and on any branch the checks cannot name."""
+    if gate_conf().get("TEST_EDITS", "all") != "agents":
+        return True
+    name = branch_name()
+    return name == "HEAD" or name.startswith("agent/")
 
 
 def ref_exists(ref: str) -> bool:
@@ -311,6 +339,7 @@ def committed_problems(since: str | None, head: str = "HEAD") -> list[str]:
     union of the working tree's, HEAD's, head's and since's lists, so a branch
     can add to the list but never shorten it."""
     patterns = protected_patterns("HEAD", head, since)
+    edits = test_edits_declared()
     problems = []
     for c in commits(since, head):
         if c.parent is None:
@@ -323,7 +352,7 @@ def committed_problems(since: str | None, head: str = "HEAD") -> list[str]:
             problems.append(f"{c.sha[:7]} changes {path} without a 'Protected: {path}: <why>' line in its message")
         for name in undeclared(removed_tests(c.files, at_parent, at_commit), DECLARED_REMOVED.findall(c.message)):
             problems.append(f"{c.sha[:7]} removes test {name} without a 'Removes test: {name}: <why>' line in its message")
-        for name in undeclared(modified_tests(c.files, at_parent, at_commit), DECLARED_MODIFIED.findall(c.message)):
+        for name in undeclared(modified_tests(c.files, at_parent, at_commit) if edits else [], DECLARED_MODIFIED.findall(c.message)):
             problems.append(f"{c.sha[:7]} modifies test {name} without a 'Modifies test: {name}: <why>' line in its message")
     return problems
 
@@ -523,7 +552,7 @@ def check_tests_removed() -> None:
         changes = uncommitted_changes()
         for name in removed_tests(changes, head_text, worktree_text):
             problems.append(f"test {name} removed in uncommitted work; restore it, or commit with a 'Removes test: {name}: <why>' line")
-        for name in modified_tests(changes, head_text, worktree_text):
+        for name in modified_tests(changes, head_text, worktree_text) if test_edits_declared() else []:
             problems.append(f"test {name} changed in uncommitted work; restore it, or commit with a 'Modifies test: {name}: <why>' line")
     if problems:
         raise Fail("tests disappeared or changed. Deleting, renaming or editing a test to pass is never the fix.\n  " + "\n  ".join(problems))
@@ -591,7 +620,8 @@ def check_commit_msg(argv: list[str]) -> None:
         gone = removed_tests(staged, head_text, index_text)
         for name in undeclared(gone, DECLARED_REMOVED.findall(message)):
             found.append(f"a removed test {name} without a 'Removes test: {name}: <why>' line")
-        for name in undeclared(modified_tests(staged, head_text, index_text), DECLARED_MODIFIED.findall(message)):
+        edited_tests = modified_tests(staged, head_text, index_text) if test_edits_declared() else []
+        for name in undeclared(edited_tests, DECLARED_MODIFIED.findall(message)):
             found.append(f"an edited test {name} without a 'Modifies test: {name}: <why>' line")
     if found:
         raise Fail("commit message: " + "\n  commit message: ".join(found))
@@ -749,9 +779,19 @@ def check_secrets(argv: list[str]) -> None:
     if not every and shutil.which("betterleaks"):
         found.extend(scanner_findings(paths))
     if every and since is not None and shutil.which("betterleaks"):
-        diff = git("diff", since)
+        # The lines the branch adds, read inside hunks only so a line whose
+        # text starts with "++" is kept: a removed secret is the fix, not a finding.
+        added: list[str] = []
+        in_hunk = False
+        for row in git("diff", since).splitlines():
+            if row.startswith("diff --git "):
+                in_hunk = False
+            elif row.startswith("@@"):
+                in_hunk = True
+            elif in_hunk and row.startswith("+"):
+                added.append(row[1:])
         result = subprocess.run(
-            ["betterleaks", "stdin", "--no-banner", "--redact"], input=diff,
+            ["betterleaks", "stdin", "--no-banner", "--redact"], input="\n".join(added),
             capture_output=True, text=True, check=False,
         )
         if result.returncode != 0:
@@ -915,6 +955,40 @@ def check_spec() -> None:
     print(f"spec: {len(live)} requirement(s), {covered} with tests, {len(retired)} retired")
 
 
+# Characters that make a run line more than one program and its plain words.
+SHELL_SYNTAX = re.compile(r"[;&|<>()$`\\*?!{}\[\]~'\"#\n]")
+
+
+def batch_args(command: str, program: str) -> list[str] | None:
+    """command's words after program, when it runs program with plain words only, else None.
+
+    program may carry leading words (python3 -m unittest); its first word is a
+    path, compared from the project root, so ./tests/x.sh and tests/x.sh match.
+    """
+    head = program.split()
+    if not head or SHELL_SYNTAX.search(command):
+        return None
+    words = command.split()
+    if len(words) < len(head) or words[1:len(head)] != head[1:]:
+        return None
+    if (ROOT / words[0]).resolve() != (ROOT / head[0]).resolve():
+        return None
+    return words[len(head):]
+
+
+def run_acceptance(command: str) -> subprocess.CompletedProcess[str]:
+    """One acceptance command in the project root; a timeout is a failure, not a crash.
+
+    ACCEPTANCE_TIMEOUT in tools/gate.local.conf sets the seconds, 1800 by default.
+    """
+    limit = int(gate_conf().get("ACCEPTANCE_TIMEOUT", "1800") or 1800)
+    try:
+        return subprocess.run(["bash", "-c", command], cwd=ROOT, capture_output=True, text=True,
+                              check=False, timeout=limit)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(command, 124, "", f"timed out after {limit} s")
+
+
 def check_tasks(argv: list[str]) -> None:
     run = "--run" in argv
     found = tasks()
@@ -928,18 +1002,30 @@ def check_tasks(argv: list[str]) -> None:
         if task.status in {"review", "done"} and not task.runs:
             problems.append(f"{rel}: {task.status} with no '- run: `command`' line under Acceptance")
     if run:
-        for number, (rel, task) in sorted(found.items()):
-            if task.status not in {"review", "done"}:
-                continue
-            for command in task.runs:
-                result = subprocess.run(
-                    ["bash", "-c", command], cwd=ROOT, capture_output=True, text=True, check=False, timeout=1800
-                )
-                if result.returncode != 0:
-                    tail = (result.stdout + result.stderr).strip().splitlines()[-10:]
-                    problems.append(f"{rel} is {task.status} but `{command}` fails:\n    " + "\n    ".join(tail))
-                else:
-                    print(f"tasks: {number} `{command}` passes")
+        jobs = [(number, rel, task.status, command) for number, (rel, task) in sorted(found.items())
+                if task.status in {"review", "done"} for command in task.runs]
+        # ACCEPTANCE_BATCH names a program whose run lines may be one run with all
+        # their words (a suite that checks each named requirement, then runs every
+        # test): one run instead of one per task. If it fails, each line runs
+        # alone, so the failure is still the task's.
+        program = gate_conf().get("ACCEPTANCE_BATCH", "")
+        batch = [(job, words) for job in jobs if (words := batch_args(job[3], program)) is not None]
+        if len(batch) > 1:
+            union = list(dict.fromkeys(word for _, words in batch for word in words))
+            if run_acceptance(" ".join([program, *union])).returncode == 0:
+                for (number, _, _, command), _ in batch:
+                    print(f"tasks: {number} `{command}` passes (one run of {program} for {len(batch)})")
+                done = {job[3] for job, _ in batch}
+                jobs = [job for job in jobs if job[3] not in done]
+            else:
+                print(f"tasks: the one run of {program} failed; each task's line runs alone")
+        for number, rel, status, command in jobs:
+            result = run_acceptance(command)
+            if result.returncode != 0:
+                tail = (result.stdout + result.stderr).strip().splitlines()[-10:]
+                problems.append(f"{rel} is {status} but `{command}` fails:\n    " + "\n    ".join(tail))
+            else:
+                print(f"tasks: {number} `{command}` passes")
     if problems:
         raise Fail("tasks:\n  " + "\n  ".join(problems))
     print(f"tasks: {len(found)} task file(s) well formed")
@@ -975,7 +1061,7 @@ def check_manifest() -> None:
 # Reviewer output.
 
 def stream_text(raw: str) -> str:
-    """Join a reviewer's answer from stream-json output (Cursor, Claude Code or agy).
+    """Join a reviewer's answer from stream-json output (Cursor, Claude Code, agy or Codex).
 
     Plain lines (reconnect notices) are skipped; when the joined assistant
     text is longer than the final result, it wins."""
@@ -1004,6 +1090,11 @@ def stream_text(raw: str) -> str:
             response = (event.get("result") or {}).get("response")
             if isinstance(response, str):
                 result = response
+        elif event.get("type") == "item.completed":
+            # Codex: its last message is the answer; earlier ones say what it will read.
+            item = event.get("item") or {}
+            if item.get("type") == "agent_message" and isinstance(item.get("text"), str):
+                result = item["text"]
     joined = "\n".join(t for t in texts if t.strip()) or "".join(deltas)
     return joined if len(joined.strip()) > len(result.strip()) else result
 
@@ -1036,11 +1127,14 @@ def hook_stop() -> int:
 
     A block decision sends Claude back to work with the failure; after three
     tries in a row on one session it lets the turn end, and the commit hook
-    still holds."""
+    still holds. With STOP_HOOK=agents in tools/gate.local.conf it runs only
+    on agent/* branches."""
     try:
         payload = json.loads(sys.stdin.read() or "{}")
     except json.JSONDecodeError:
         payload = {}
+    if gate_conf().get("STOP_HOOK", "always") == "agents" and not branch_name().startswith("agent/"):
+        return 0
     state = ROOT / ".gate"
     state.mkdir(exist_ok=True)
     print_now = fingerprint()

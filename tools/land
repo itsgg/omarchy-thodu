@@ -2,14 +2,17 @@
 # Land a branch on main, for the coordinator (AGENTS.md, Landing):
 #
 #   tools/land check BRANCH [--author-family F[,F...]] [--no-review]
-#       Runs the full gate on BRANCH (for agent/NAME in a fresh clone made
+#       Runs main's full gate on BRANCH (for agent/NAME in a fresh clone made
 #       inside the agent's sandbox, so nothing in the agent's worktree or
 #       index counts; in a scratch worktree otherwise), checks the gate
 #       left the tree as it found it, checks with main's own tools that every
 #       protected change and test edit on BRANCH is declared, then has one model family outside
 #       every author's review an exact export of BRANCH's tree. Verify each finding; fix the real
 #       ones with tests on BRANCH; then check again with --no-review, which
-#       needs a reviewed ancestor and lists what the review did not see.
+#       needs a reviewed ancestor and lists what the review did not see. A
+#       branch that only adds or edits task files needs no review, and nor
+#       does one that is exactly the template at the tag its answers name,
+#       which the template's own gate and review covered.
 #   tools/land merge BRANCH [--accept-protected]
 #       Fast-forwards main to BRANCH once its last check passed. Declared
 #       protected changes and removed or edited tests need --accept-protected; one that
@@ -17,13 +20,23 @@
 #   tools/land push
 #       Pushes main, as its own command.
 #
+# With LANDING=pr in tools/gate.conf, main moves only on GitHub: check and
+# merge first bring the local main up to origin's, and merge pushes BRANCH,
+# opens (or reuses) its pull request, waits for the required checks, squash-
+# merges it with the branch's commit messages and brings main up to the
+# result, whose tree must be BRANCH's; push then has nothing to do.
+#
 # The authors of agent/NAME are every harness tools/agent-loop has started
 # for it (its session log), never an argument. Its commits are written to the agent's own object
 # store and copied into the repository's by tools/agent-loop as it runs; merge copies any still missing.
 set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$root"
-project=$(sed -n 's/^PROJECT=//p' tools/gate.conf)
+conf() { sed -n "s/^$1=//p" tools/gate.conf tools/gate.local.conf 2>/dev/null | tail -n 1 | tr -d "\"'"; }
+project=$(conf PROJECT)
+landing=$(conf LANDING)
+landing=${landing:-ff}
+poll=${LAND_POLL_SECONDS:-10}
 state=${AGENT_STATE:-$HOME/.local/share/$project}
 mkdir -p "$state/land"
 
@@ -33,6 +46,103 @@ on_main_clean() {
     [ -z "$(git status --porcelain)" ] || die "main has uncommitted changes"
 }
 record() { echo "$state/land/$(echo "$1" | tr '/' '-')"; }
+case $landing in ff|pr) ;; *) die "LANDING in tools/gate.conf is $landing; it is ff or pr" ;; esac
+# With LANDING=pr, bring main up to origin's before a branch is judged against it.
+sync_main() {
+    [ "$landing" = pr ] || return 0
+    git fetch -q origin main || die "could not fetch main from origin"
+    git merge -q --ff-only origin/main || die "main has commits origin does not; with LANDING=pr main moves only through pull requests"
+}
+# tasks_only TIP: main..TIP, merges included, only adds or edits task files.
+# An edit to a task's Acceptance is refused earlier, by main's declarations check.
+tasks_only() {
+    local changes status path
+    changes=$(git diff --name-status --no-renames main "$1") || return 1
+    [ -n "$changes" ] || return 1
+    while IFS=$'\t' read -r status path; do
+        case $status in A|M) ;; *) return 1 ;; esac
+        [[ $path =~ ^tasks/[0-9]{4}-[a-z0-9-]+\.md$ ]] || return 1
+    done <<<"$changes"
+}
+# template_only TIP: main..TIP is exactly what Copier renders onto main for the
+# template tag TIP's .copier-answers.yml names, so the template's own gate and
+# review covered it. Anything else on the branch, an edit by hand or a conflict
+# left in, makes the trees differ; so does a render that cannot run.
+# The work runs in a subshell, so its scratch worktree goes however it ends, a
+# kill included, and the worktree is made with the project's hooks off.
+template_only() (
+    tip=$1
+    ! git diff --quiet main "$tip" -- .copier-answers.yml || exit 1
+    tag=$(git show "$tip:.copier-answers.yml" | sed -n 's/^_commit: //p')
+    [[ $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+    repo=$PWD
+    scratch=$(mktemp -d -p "$state/land" .template.XXXXXX)
+    # The cleanup steps out of the tree first and cannot fail the check itself.
+    trap 'cd "$repo" && { git worktree remove --force "$scratch/tree" >/dev/null 2>&1; git worktree prune; rm -rf -- "$scratch"; } || true' EXIT
+    git -c core.hooksPath=/dev/null worktree add -q --detach "$scratch/tree" main 2>/dev/null || exit 1
+    cd "$scratch/tree" || exit 1
+    uvx --quiet copier==9.19.1 update --quiet --trust --defaults --skip-answered --skip-tasks \
+        --conflict inline --vcs-ref "$tag" >/dev/null 2>&1 || exit 1
+    git add -A && git diff --cached --quiet "$tip"
+)
+# land_pr BRANCH TIP: put TIP on main through a squash-merged pull request.
+land_pr() {
+    local branch=$1 tip=$2 remote n url subject body pr_body out status tries=0
+    command -v gh >/dev/null || die "LANDING=pr needs gh, signed in"
+    remote=$(git ls-remote origin "refs/heads/$branch" | cut -f1)
+    if [ -z "$remote" ] || git merge-base --is-ancestor "$remote" "$tip" 2>/dev/null; then
+        git push -q origin "$tip:refs/heads/$branch" || die "could not push $branch to origin"
+    else
+        # An earlier landing left an older $branch there (a rebase since); replace exactly that one.
+        git push -q --force-with-lease="refs/heads/$branch:$remote" origin "$tip:refs/heads/$branch" \
+            || die "could not replace the older $branch on origin"
+    fi
+    subject=$(git log --reverse --format=%s "main..$tip" | sed -n 1p)
+    if [ "$(git rev-list --count "main..$tip")" = 1 ]; then
+        body=$(git log -1 --format=%b "$tip")
+    else
+        body=$(git log --reverse --format='* %s%n%n%b' "main..$tip")
+    fi
+    n=$(gh pr list --head "$branch" --base main --state open --json number --jq '.[0].number // empty') \
+        || die "gh could not list the pull requests of $branch"
+    if [ -z "$n" ]; then
+        # GitHub refuses a pull request body past 65536 characters; the squash
+        # commit below still carries every message, declarations included.
+        pr_body=$body
+        [ "${#pr_body}" -le 60000 ] || pr_body="${body:0:60000}
+
+(cut at 60000 characters; the squash commit keeps every message)"
+        url=$(printf '%s\n' "$pr_body" | gh pr create --base main --head "$branch" --title "$subject" --body-file -) \
+            || die "gh could not open a pull request for $branch"
+        n=${url##*/}
+    fi
+    echo "waiting for the required checks of #$n"
+    while :; do
+        status=0
+        out=$(gh pr checks "$n" --required --watch --fail-fast --interval "$poll" 2>&1) || status=$?
+        [ "$status" = 0 ] && break
+        case $out in
+            *"no required checks reported"*|*"no checks reported"*)
+                tries=$((tries + 1))
+                [ "$tries" -lt 30 ] || die "no required check reported on #$n after $((30 * poll))s"
+                sleep "$poll"
+                ;;
+            *)
+                printf '%s\n' "$out" | tail -n 20 >&2
+                die "a required check did not pass on #$n; fix it on $branch, check it again and land"
+                ;;
+        esac
+    done
+    printf '%s\n' "$body" | gh pr merge "$n" --squash --subject "$subject (#$n)" --body-file - --match-head-commit "$tip" \
+        || die "gh could not merge #$n"
+    # GitHub may delete a merged branch itself; one left behind is replaced at its next landing.
+    git push -q origin --delete "$branch" >/dev/null 2>&1 || true
+    git fetch -q origin main || die "#$n merged, but main could not be fetched; run: git pull --ff-only"
+    git merge -q --ff-only origin/main || die "#$n merged, but the local main could not follow origin's"
+    [ "$(git rev-parse "HEAD^{tree}")" = "$(git rev-parse "$tip^{tree}")" ] \
+        || die "main's tree after #$n is not $branch's; look at what else reached main"
+    echo "merged $branch as #$n; main is at $(git rev-parse --short HEAD), on origin already"
+}
 family_of() {
     case $1 in claude) echo anthropic ;; codex) echo openai ;; agy) echo google ;; *) return 1 ;; esac
 }
@@ -62,7 +172,9 @@ check)
         esac
     done
     on_main_clean
+    sync_main
     tip=$(git rev-parse --verify "$branch^{commit}")
+    main_tip=$(git rev-parse --verify main)
     git merge-base --is-ancestor main "$tip" || die "$branch does not contain main; rebase it onto main first"
     verify='[ "$(git rev-parse HEAD)" = "'"$tip"'" ] && [ -z "$(git status --porcelain)" ]'
     if [ -n "$agent" ]; then
@@ -80,38 +192,50 @@ check)
         # The agent's branch is built only inside its sandbox, in a fresh clone
         # at the tip, so the agent's index and worktree settings play no part;
         # the gate must leave that clone's HEAD and tree as they were.
+        # Main's own gate, settings and checks judge the branch's tree.
         gate_cmd="set -e; t=\$(mktemp -d); unset GIT_OBJECT_DIRECTORY; export GIT_ALTERNATE_OBJECT_DIRECTORIES='$objects'
 git clone -q --shared --no-checkout '$common' \"\$t/repo\"; cd \"\$t/repo\"; git checkout -q --detach '$tip'
-tools/install-hooks >/dev/null; status=0; tools/gate || status=\$?
+mkdir \"\$t/main\"; git archive '$main_tip' tools | tar -x -C \"\$t/main\"
+tools/install-hooks >/dev/null; status=0; GATE_BRANCH='$branch' GATE_ROOT=\"\$t/repo\" \"\$t/main/tools/gate\" || status=\$?
 $verify || { echo 'ERROR the gate moved HEAD or changed the tree'; exit 1; }; exit \$status"
         logs="$state/agents/$agent/logs"
         before_logs=$(ls "$logs" 2>/dev/null | wc -l)
         AGENT_SHELL_CMD="$gate_cmd" tools/agent-loop "$agent" shell 1 || {
-            tail -n 30 "$(ls -t "$logs"/*.jsonl | head -1)" >&2
+            tail -n 30 "$(ls -t "$logs"/*.jsonl | sed -n 1p)" >&2
             die "the full gate failed on $branch"
         }
         [ "$(ls "$logs" | wc -l)" -gt "$before_logs" ] || die "the gate session left no log"
-        summary=$(ls -t "$logs"/*.jsonl | head -1)
+        summary=$(ls -t "$logs"/*.jsonl | sed -n 1p)
     else
         workdir=$(mktemp -d -p "$state/land" wt.XXXXXX)
         trap 'git worktree remove --force "$workdir" >/dev/null 2>&1 || true' EXIT
         git worktree add -q --detach "$workdir" "$tip"
-        (cd "$workdir" && tools/install-hooks >/dev/null && tools/gate) || die "the full gate failed on $branch"
+        # Main's own gate, settings and checks judge the branch's tree.
+        (cd "$workdir" && tools/install-hooks >/dev/null && GATE_BRANCH=$branch GATE_ROOT=$workdir "$root/tools/gate") \
+            || die "the full gate failed on $branch"
         (cd "$workdir" && eval "$verify") || die "the gate moved HEAD or changed the tree in $workdir"
         summary="$workdir/.gate/summary"
     fi
     # The branch's gate ran the branch's own checks; main's checks and
     # protected list judge the declarations, so a branch cannot edit them away.
-    python3 -I tools/checks.py declarations main "$tip" || die "undeclared protected changes or test edits on $branch"
+    GATE_BRANCH=$branch python3 -I tools/checks.py declarations main "$tip" || die "undeclared protected changes or test edits on $branch"
     rec=$(record "$branch")
     if [ "$review" = 1 ]; then
         [ -n "$authors" ] || die "say who wrote $branch: --author-family openai|google|anthropic[,...]"
         tools/review --author-family "$authors" --base main --head "$tip" --gate-summary "$summary" || die "no review"
         reviewed=$tip
+    elif tasks_only "$tip"; then
+        # The coordinator writing tasks is documentation; GG reads a task's
+        # acceptance before a worker takes it.
+        echo "$branch only adds or edits task files, which need no review"
+        reviewed=""
+    elif template_only "$tip"; then
+        echo "$branch is the template at its tag, which the template's own gate and review covered"
+        reviewed=""
     else
         reviewed=$(sed -n 's/^reviewed=//p' "$rec" 2>/dev/null || true)
         if [ -z "$reviewed" ] || ! git merge-base --is-ancestor "$reviewed" "$tip"; then
-            die "--no-review needs an earlier reviewed check of $branch; this branch has none"
+            die "--no-review needs an earlier reviewed check of $branch, a branch that only adds or edits task files, or the template at its tag; this one is none"
         fi
         if [ "$reviewed" != "$tip" ]; then
             echo "Not seen by the review, which covered up to $(git rev-parse --short "$reviewed"):"
@@ -127,10 +251,12 @@ merge)
     accept=0
     [ "${3:-}" = --accept-protected ] && accept=1
     on_main_clean
+    sync_main
     rec=$(record "$branch")
     [ -f "$rec" ] || die "run tools/land check $branch first"
     tip=$(git rev-parse --verify "$branch^{commit}")
     [ "$(sed -n 's/^tip=//p' "$rec")" = "$tip" ] || die "$branch moved since its check; run tools/land check $branch again"
+    git merge-base --is-ancestor main "$tip" || die "main moved since $branch was checked; rebase $branch onto main and check it again"
     declared=$(git log --format=%B "main..$tip" | grep -E '^(Protected|Removes test|Modifies test):' || true)
     if [ -n "$declared" ] && [ "$accept" = 0 ]; then
         echo "$branch declares changes to protected paths or tests:"
@@ -147,12 +273,21 @@ merge)
         env -u GIT_ALTERNATE_OBJECT_DIRECTORIES git rev-list --objects "main..$tip" >/dev/null \
             || die "the agent's objects did not reach the repository's store; nothing was merged"
     fi
-    git merge -q --ff-only "$tip"
-    rm -f "$rec"
-    echo "merged $branch; main is at $(git rev-parse --short HEAD). Push with: tools/land push"
+    if [ "$landing" = pr ]; then
+        land_pr "$branch" "$tip"
+        rm -f "$rec"
+    else
+        git merge -q --ff-only "$tip"
+        rm -f "$rec"
+        echo "merged $branch; main is at $(git rev-parse --short HEAD). Push with: tools/land push"
+    fi
     ;;
 push)
     [ "$(git branch --show-current)" = main ] || die "push runs on main"
+    if [ "$landing" = pr ]; then
+        echo "with LANDING=pr, tools/land merge put main on origin already; nothing to push"
+        exit 0
+    fi
     git push origin main
     ;;
 *)

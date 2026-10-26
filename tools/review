@@ -10,7 +10,7 @@
 # head with no git repository (tools/checks.py export), unless WORKDIR says
 # otherwise. Cursor's and Claude's plan modes keep the reviewer read-only;
 # agy's plan mode is a prompt prefix and its headless mode may write inside
-# the export, which is thrown away. A reply that exits
+# the export, which is thrown away; Codex runs in its read-only sandbox. A reply that exits
 # non-zero or has no text is a failed attempt; three failed attempts move on
 # to the next family, and so does one reply saying the reviewer is out of usage.
 # REVIEW_COMMAND, when set, replaces the reviewer (vithai's tests use it): it
@@ -72,6 +72,7 @@ run_reviewer() {
         cursor) (cd "$workdir" && timeout "$REVIEW_TIMEOUT" agent -p --mode plan --trust --model "$CURSOR_MODEL" --output-format stream-json "$text" </dev/null) ;;
         agy) (cd "$workdir" && timeout "$REVIEW_TIMEOUT" agy -p "$text" --mode plan --output-format stream-json </dev/null) ;;
         claude) (cd "$workdir" && timeout "$REVIEW_TIMEOUT" claude -p "$text" --permission-mode plan --output-format stream-json --verbose </dev/null) ;;
+        codex) (cd "$workdir" && timeout "$REVIEW_TIMEOUT" codex exec --sandbox read-only --skip-git-repo-check --ephemeral --json "$text" </dev/null) ;;
         *) echo "ERROR unknown reviewer $who in tools/review.conf" >&2; return 2 ;;
     esac
 }
@@ -95,7 +96,7 @@ for entry in $REVIEWERS; do
             exit 0
         fi
         echo "review attempt $attempt by $who failed (exit $status, $(printf '%s' "$review" | wc -c) bytes of text)" >&2
-        if grep -qiE "out of usage|usage limit|quota exceeded|rate limit|ActionRequiredError" "$stream"; then
+        if grep -qiE "out of usage|usage limit|quota exceeded|quota reached|RESOURCE_EXHAUSTED|rate limit|ActionRequiredError" "$stream"; then
             echo "$who is out of usage; trying the next family" >&2
             break
         fi
