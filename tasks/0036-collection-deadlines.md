@@ -1,0 +1,16 @@
+# 0036: Hold every source to its deadline, and recover from a lost bus
+
+Status: open
+Depends on: none
+Spec: REQ-SRC-03, REQ-SRC-05, REQ-SRC-06, REQ-SESSION-05
+Goal: SEED principle 4 says one slow source or app never holds up the rest, and collection breaks it in several places. The 80 ms AT-SPI budget is checked only between apps and between tree levels, while each D-Bus call can wait 500 ms and the per-app pid lookups and wake polling run unbounded (crates/thodud/src/atspi.rs, sources.rs); one hung background app makes the whole AT-SPI result late, so it is dropped with the focused app's targets in it. The abandoned thread keeps the `bus` and `woken` locks, so later sessions miss the budget too and threads pile up, and `thodu scroll` collects synchronously and blocks for the whole overrun. The image detector's deadline is the image thread's start plus 180 ms, the same instant as the phase deadline (crates/thodud/src/image.rs, `collect_phase` in sources.rs), so a detection that runs to it is always discarded rather than used in part. Measured on GG's laptop on 2026-10-25 with two Foot windows: the image pass took 127 to 196 ms and missed its budget in up to half the runs, the grim capture alone took 76 to 193 ms, and a timed-out worker is never cancelled and keeps the detector lock; grim itself has no timeout. A Chromium process is marked woken before the wake succeeds, so a failed wake or a tree that goes dormant again is never retried; REQ-SRC-03 says at most once per process, so propose a spec change that allows a retry after a failed wake. The bus connection is never reopened after at-spi-bus-launcher restarts, so every later session reports every app as unregistered. A GTK4 cache read that times out (`uses_gtk4`) breaks the app loop, and that app and every unread app are reported as not on the accessibility bus. Bound every AT-SPI call by the time left, walk the focused app first, never hold the bus lock across a walk, give the detector a deadline with room left for mapping and sending, stop or bound a late worker and kill grim at its limit, retry a wake that did not take, reconnect a dead bus, and report as unregistered only apps that were checked and found missing. Also check whether Flatpak apps are matched: the bus may report xdg-dbus-proxy's pid rather than the app's, which would give them no targets and a false message.
+
+Acceptance:
+- run: `tests/acceptance/reqs.sh REQ-SRC-03 REQ-SRC-05 REQ-SRC-06 REQ-SESSION-05`
+- scenario: with a fake bus where one background app hangs, the focused app's targets arrive within the budget, and the next session is not slowed by the first one's abandoned work.
+- scenario: a detection that reaches its deadline is used in part; a grim that hangs is killed; a late image worker does not block the next session's detection.
+- scenario: a failed wake is retried in a later session; a dropped bus connection is reopened; an app after a timed-out read is not called unregistered.
+
+## Log
+
+- 2026-10-27: created from the 2026-10-25 review (queue items 10, 11 and 16) and the image investigation of the same day. Each defect was traced in the code; the image timings were measured live. Confirm each with a failing test first, since line numbers have moved.
