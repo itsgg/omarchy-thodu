@@ -75,6 +75,15 @@ Item {
         name: "BarScan"
         when: windowShown
 
+        // REQ-SHELL-01: the bar rescans after Hyprland events that move its
+        // items, not only once a second.
+        function test_req_shell_01_rescans_on_workspace_and_window_events() {
+            verify(BarScan.rescansOn("workspacev2"));
+            verify(BarScan.rescansOn("openwindow"));
+            verify(BarScan.rescansOn("fullscreen"));
+            verify(!BarScan.rescansOn("submap"), "an event that moves no bar item");
+        }
+
         function test_req_shell_01_a_fake_bar_reports_its_three_items() {
             const found = BarScan.scan(BarScan.rootOf(probe), probe);
             compare(found.length, 3, JSON.stringify(found));

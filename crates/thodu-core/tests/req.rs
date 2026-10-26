@@ -214,9 +214,11 @@ fn req_src_07_same_process_windows_use_their_own_frame_or_skip_ambiguity() {
         tree::match_frame_for_window(&snapshot, false).map(|node| node.name.as_str()),
         Some("background window")
     );
+    // Focused or not, a 300 by 200 window takes the frame of its size; the
+    // 800 by 600 ACTIVE frame belongs to another window of the process.
     assert_eq!(
         tree::match_frame_for_window(&snapshot, true).map(|node| node.name.as_str()),
-        Some("focused sibling")
+        Some("background window")
     );
 
     let mut ambiguous = snapshot.clone();
@@ -264,12 +266,14 @@ fn req_src_01_nonfocused_named_window_does_not_use_active_sibling_frame() {
                     300,
                     200,
                 ),
-                frame("different extents", &["showing", "visible"], 301, 200),
+                frame("near extents", &["showing", "visible"], 301, 200),
             ],
         }],
     };
 
-    assert_eq!(tree::match_frame_indices(&[snapshot]), [None]);
+    // The ACTIVE sibling is never the background window's; the frame within
+    // the size slack is.
+    assert_eq!(tree::match_frame_indices(&[snapshot]), [Some((0, 1))]);
 }
 
 // REQ-SRC-07: even a unique size match cannot assign one same-process frame
@@ -2141,4 +2145,144 @@ fn req_act_03_pixel_fingerprints_tell_new_text_from_a_blinking_cursor() {
         [0; thodu_core::pixels::CELLS],
         "a crop outside the image"
     );
+}
+
+fn frame_of(width: i32, height: i32, active: bool) -> Node {
+    let mut states = vec!["showing".to_string(), "visible".to_string()];
+    if active {
+        states.push("active".into());
+    }
+    Node {
+        role: "frame".into(),
+        states,
+        extents: Some([0, 0, width, height]),
+        ..Node::default()
+    }
+}
+
+fn snapshot_with(focused: bool, frames: Vec<Node>) -> Snapshot {
+    Snapshot {
+        window: Window {
+            address: "0x1".into(),
+            pid: 7,
+            at: (12, 38),
+            size: (1512, 910),
+            workspace: 1,
+            focused,
+            ..Window::default()
+        },
+        monitor: monitor(),
+        apps: vec![App {
+            name: "chromium".into(),
+            pid: 7,
+            frames,
+        }],
+    }
+}
+
+// REQ-SRC-01: a frame belongs to a window only when its size is within the
+// slack of the window's; ACTIVE chooses among such frames for the focused
+// window, and a frame of another size is never taken, even when it is ACTIVE
+// or the process's only one.
+#[test]
+fn req_src_01_frames_match_by_size_within_slack() {
+    let index = |focused, frames| tree::match_frame_index(&snapshot_with(focused, frames), focused);
+    // Seen live: a frame 26 units taller than its window, the bar's height.
+    assert_eq!(
+        index(
+            false,
+            vec![frame_of(1512, 936, false), frame_of(1512, 910, true)]
+        ),
+        Some((0, 0))
+    );
+    assert_eq!(
+        index(
+            true,
+            vec![frame_of(1512, 936, false), frame_of(1512, 910, true)]
+        ),
+        Some((0, 1))
+    );
+    assert_eq!(
+        index(true, vec![frame_of(400, 300, true)]),
+        None,
+        "an ACTIVE dialog-sized frame"
+    );
+    assert_eq!(
+        index(true, vec![frame_of(400, 300, false)]),
+        None,
+        "the only frame, of another size"
+    );
+    assert_eq!(
+        index(
+            false,
+            vec![frame_of(1512, 920, false), frame_of(1512, 900, false)]
+        ),
+        None,
+        "two frames equally near"
+    );
+    assert_eq!(
+        index(
+            false,
+            vec![frame_of(1512, 920, false), frame_of(1512, 911, false)]
+        ),
+        Some((0, 1)),
+        "the nearer frame"
+    );
+}
+
+// REQ-ACT-03: a window whose process or class changed at the same address,
+// position and size is a different window, so its targets are stale.
+#[test]
+fn req_act_03_a_reused_address_with_another_process_is_stale() {
+    let collected = Window {
+        address: "0x1".into(),
+        class: "dialog".into(),
+        pid: 7,
+        at: (10, 10),
+        size: (400, 300),
+        workspace: 1,
+        ..Window::default()
+    };
+    assert!(!is_stale(&collected, Some(&collected.clone())));
+    let other_process = Window {
+        pid: 8,
+        ..collected.clone()
+    };
+    assert!(is_stale(&collected, Some(&other_process)));
+    let other_class = Window {
+        class: "editor".into(),
+        ..collected.clone()
+    };
+    assert!(is_stale(&collected, Some(&other_class)));
+}
+
+// REQ-SRC-02: an XWayland window reports element extents in physical pixels
+// under Omarchy's zero scaling, so they divide by the monitor's scale.
+#[test]
+fn req_src_02_xwayland_extents_are_physical() {
+    let window = Window {
+        address: "0x9".into(),
+        pid: 9,
+        at: (100, 100),
+        size: (400, 300),
+        workspace: 1,
+        xwayland: true,
+        ..Window::default()
+    };
+    let frame = Node {
+        role: "frame".into(),
+        states: vec!["showing".into(), "visible".into(), "active".into()],
+        extents: Some([0, 0, 500, 375]),
+        children: vec![Node {
+            role: "push button".into(),
+            states: vec!["showing".into(), "visible".into()],
+            name: "OK".into(),
+            extents: Some([125, 125, 100, 50]),
+            ..Node::default()
+        }],
+        ..Node::default()
+    };
+    let targets = tree::targets(&frame, &window, &monitor());
+    assert_eq!(targets.len(), 1);
+    assert_eq!(targets[0].bounds, Rect::new(200, 200, 80, 40));
 }

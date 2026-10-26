@@ -9,6 +9,8 @@ pub fn is_stale(collected: &Window, now: Option<&Window>) -> bool {
         None => true,
         Some(now) => {
             now.address != collected.address
+                || now.pid != collected.pid
+                || now.class != collected.class
                 || now.at != collected.at
                 || now.size != collected.size
                 || now.workspace != collected.workspace

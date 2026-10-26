@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import Quickshell.Hyprland
 import Quickshell.Io
 import qs.Commons
 import qs.Commons as Commons
@@ -227,6 +228,16 @@ BarWidget {
             }
         }
         onFileChanged: configFile.reload()
+    }
+
+    // Rescan as soon as the bar's items may have moved, so a click is checked
+    // against current items rather than ones up to a second old.
+    Connections {
+        target: Hyprland
+        function onRawEvent(event) {
+            if (BarScan.rescansOn(event.name))
+                Qt.callLater(probe.report);
+        }
     }
 
     Timer {

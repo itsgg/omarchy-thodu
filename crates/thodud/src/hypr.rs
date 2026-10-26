@@ -85,6 +85,7 @@ pub fn window_from(v: &Value) -> Option<Window> {
         allowed_over_fullscreen: v.get("allowedOverFullscreen").and_then(Value::as_bool)
             == Some(true),
         ignores_input: v.get("acceptsInput").and_then(Value::as_bool) == Some(false),
+        xwayland: v.get("xwayland").and_then(Value::as_bool) == Some(true),
         focused: false,
     })
 }
@@ -212,6 +213,19 @@ fn monitors_from(list: &Value, layers: &Value) -> Vec<MonitorEntry> {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string();
+            // Hyprland's width and height are the mode's; a monitor turned
+            // a quarter or three quarters lays out with them swapped.
+            let mode = (
+                m.get("width").and_then(Value::as_i64).unwrap_or_default() as i32,
+                m.get("height").and_then(Value::as_i64).unwrap_or_default() as i32,
+            );
+            let turned = m
+                .get("transform")
+                .and_then(Value::as_i64)
+                .unwrap_or_default()
+                % 2
+                == 1;
+            let (width, height) = if turned { (mode.1, mode.0) } else { mode };
             MonitorEntry {
                 id: m.get("id").and_then(Value::as_i64).unwrap_or_default(),
                 monitor: Monitor {
@@ -219,8 +233,8 @@ fn monitors_from(list: &Value, layers: &Value) -> Vec<MonitorEntry> {
                     name,
                     x: m.get("x").and_then(Value::as_i64).unwrap_or_default() as i32,
                     y: m.get("y").and_then(Value::as_i64).unwrap_or_default() as i32,
-                    width: m.get("width").and_then(Value::as_i64).unwrap_or_default() as i32,
-                    height: m.get("height").and_then(Value::as_i64).unwrap_or_default() as i32,
+                    width,
+                    height,
                     scale: m.get("scale").and_then(Value::as_f64).unwrap_or(1.0),
                 },
             }
@@ -452,6 +466,25 @@ mod tests {
 
     // REQ-SRC-07: Hyprland draws floating windows above tiled windows even
     // when the tiled window has the newer focus history.
+    // REQ-GRID-01: a monitor turned a quarter lays out with Hyprland's mode
+    // width and height swapped, so the grid and clicks cover the turned area.
+    #[test]
+    fn req_grid_01_a_rotated_monitor_swaps_width_and_height() {
+        let monitors = json!([
+            { "id": 0, "name": "A", "x": 0, "y": 0, "width": 1920, "height": 1200, "scale": 1.0, "transform": 1 },
+            { "id": 1, "name": "B", "x": 0, "y": 0, "width": 1920, "height": 1200, "scale": 1.0, "transform": 2 }
+        ]);
+        let entries = super::monitors_from(&monitors, &serde_json::Value::Null);
+        assert_eq!(
+            (entries[0].monitor.width, entries[0].monitor.height),
+            (1200, 1920)
+        );
+        assert_eq!(
+            (entries[1].monitor.width, entries[1].monitor.height),
+            (1920, 1200)
+        );
+    }
+
     // REQ-SRC-07: Hyprland's layer report becomes each monitor's layers, and
     // a point is owned through the whole stack.
     #[test]

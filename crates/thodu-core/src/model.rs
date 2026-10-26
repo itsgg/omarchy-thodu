@@ -215,6 +215,9 @@ pub struct Window {
     /// The window takes no pointer input, so it owns no point.
     #[serde(skip)]
     pub ignores_input: bool,
+    /// An X11 window through XWayland, whose element extents are physical.
+    #[serde(skip)]
+    pub xwayland: bool,
     /// Whether Hyprland's active-window query selected this window for the
     /// current collection request.
     #[serde(skip)]

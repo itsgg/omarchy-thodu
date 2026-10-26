@@ -117,23 +117,44 @@ pub fn match_frame_index(snapshot: &Snapshot, focused: bool) -> Option<(usize, u
         })
         .filter(|(_, _, frame)| frame.shown() && (focused || !frame.has("active")))
         .collect();
-    if focused && let Some((app, frame, _)) = frames.iter().find(|(_, _, node)| node.has("active"))
-    {
-        return Some((*app, *frame));
-    }
+    // A frame belongs to the window only when its size is near the window's:
+    // a frame can lag the window by a bar's height, while another window of
+    // the process, such as a dialog, is far off.
     let size = snapshot.window.size;
-    let sized: Vec<_> = frames
+    let distance = |frame: &Node| {
+        frame.extents.and_then(|e| {
+            let (dw, dh) = ((e[2] - size.0).abs(), (e[3] - size.1).abs());
+            (dw <= FRAME_SLACK && dh <= FRAME_SLACK).then_some(dw + dh)
+        })
+    };
+    let near: Vec<(usize, usize, &Node, i32)> = frames
         .iter()
-        .filter(|(_, _, frame)| frame.extents.is_some_and(|e| (e[2], e[3]) == size))
+        .filter_map(|(a, f, frame)| distance(frame).map(|d| (*a, *f, *frame, d)))
         .collect();
-    if sized.len() == 1 {
-        Some((sized[0].0, sized[0].1))
-    } else if focused && sized.is_empty() && frames.len() == 1 {
-        Some((frames[0].0, frames[0].1))
-    } else {
-        None
+    if focused {
+        let active: Vec<_> = near
+            .iter()
+            .filter(|(_, _, frame, _)| frame.has("active"))
+            .collect();
+        if let [(app, frame, _, _)] = active.as_slice() {
+            return Some((*app, *frame));
+        }
+    }
+    let closest = near.iter().map(|(_, _, _, d)| *d).min()?;
+    match near
+        .iter()
+        .filter(|(_, _, _, d)| *d == closest)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        [(app, frame, _, _)] => Some((*app, *frame)),
+        _ => None,
     }
 }
+
+/// How far, in logical units, a frame's width or height may be from its
+/// window's and still be that window's frame.
+const FRAME_SLACK: i32 = 48;
 
 /// Match frames to several windows without assigning one AT-SPI frame to
 /// multiple Hyprland windows. A candidate claimed by more than one window is
@@ -236,7 +257,13 @@ pub fn targets(frame: &Node, window: &Window, monitor: &Monitor) -> Vec<Target> 
         layers: &mut layers,
         order: &mut order,
     };
-    walk(frame, &mut at, 1.0, None, false);
+    walk(
+        frame,
+        &mut at,
+        extents_divisor(window, monitor),
+        None,
+        false,
+    );
     let mut seen: Vec<Rect> = Vec::new();
     found
         .into_iter()
@@ -257,6 +284,13 @@ pub fn targets(frame: &Node, window: &Window, monitor: &Monitor) -> Vec<Target> 
             f.target
         })
         .collect()
+}
+
+/// What a window's element extents divide by to become logical units: an
+/// XWayland window reports physical pixels under Omarchy's zero scaling, a
+/// Wayland window logical ones.
+fn extents_divisor(window: &Window, monitor: &Monitor) -> f64 {
+    if window.xwayland { monitor.scale } else { 1.0 }
 }
 
 /// Scrollable areas in one visible accessibility frame (REQ-SRC-08).
@@ -346,7 +380,7 @@ pub fn scroll_targets(frame: &Node, window: &Window, monitor: &Monitor) -> Vec<T
         order: 0,
         found: Vec::new(),
     };
-    walk.visit(frame, 1.0, None);
+    walk.visit(frame, extents_divisor(window, monitor), None);
     let mut found = walk.found;
     found.sort_by_key(|(_, order, target)| (target.bounds.y, target.bounds.x, *order));
     let mut unique: Vec<(u8, usize, Target)> = Vec::new();
