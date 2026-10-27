@@ -97,6 +97,58 @@ Item {
             compare(firstScan[0].identity, secondScan[0].identity);
         }
 
+        function test_req_shell_01_scan_reaches_a_deep_bar_target() {
+            function node(parent) {
+                return {
+                    parent: parent,
+                    children: [],
+                    visible: true,
+                    opacity: 1,
+                    width: 10,
+                    height: 10,
+                    mapToItem: function(root, x, y) { return { x: x, y: y } }
+                };
+            }
+
+            const tree = node(null);
+            let at = tree;
+            for (let depth = 0; depth < 80; depth++) {
+                const child = node(at);
+                at.children.push(child);
+                at = child;
+            }
+            at.text = "Deep target";
+            at.triggerPress = function(button) {};
+
+            const found = BarScan.scan(tree, null);
+            compare(found.length, 1, JSON.stringify(found));
+            compare(found[0].text, "Deep target");
+        }
+
+        function test_req_shell_01_scan_visits_cyclic_bar_items_once() {
+            function node(parent) {
+                return {
+                    parent: parent,
+                    children: [],
+                    visible: true,
+                    opacity: 1,
+                    width: 10,
+                    height: 10,
+                    mapToItem: function(root, x, y) { return { x: x, y: y } }
+                };
+            }
+
+            const tree = node(null);
+            const target = node(tree);
+            target.text = "One target";
+            target.triggerPress = function(button) {};
+            tree.children.push(tree, target);
+
+            const found = BarScan.scan(tree, null);
+            compare(found.length, 1, JSON.stringify(found));
+            compare(found[0].text, "One target");
+        }
+
         function test_req_shell_01_the_root_is_the_bar_window_content() {
             compare(BarScan.rootOf(findChild(bar, "one")), BarScan.rootOf(probe));
         }
