@@ -97,6 +97,24 @@ Item {
             compare(firstScan[0].identity, secondScan[0].identity);
         }
 
+        function test_req_shell_01_identity_cache_evicts_old_unused_items() {
+            const oldItem = { text: "Old target" };
+            const oldIdentity = BarScan.identityOf(oldItem);
+            for (let i = 0; i < 1100; i++)
+                BarScan.identityOf({ index: i });
+            verify(BarScan.identityOf(oldItem) !== oldIdentity);
+        }
+
+        function test_req_shell_01_active_identity_survives_cache_churn() {
+            const activeItem = { text: "Active target" };
+            const activeIdentity = BarScan.identityOf(activeItem);
+            for (let i = 0; i < 1100; i++) {
+                BarScan.identityOf({ index: i });
+                BarScan.identityOf(activeItem);
+            }
+            compare(BarScan.identityOf(activeItem), activeIdentity);
+        }
+
         function test_req_shell_01_scan_reaches_a_deep_bar_target() {
             function node(parent) {
                 return {
