@@ -1,6 +1,6 @@
 # 0020: Release Shift before dispatching shifted keys
 
-Status: review
+Status: done
 Depends on: none
 Spec: REQ-ACT-01
 Goal: Hold a shifted key only when it completes a visible label until physical Shift is released, so the resulting click cannot inherit the browser's Shift-click behavior while shifted prefixes still respond immediately.
@@ -18,3 +18,4 @@ Acceptance:
 - 2026-10-25: buffered shifted letter requests until Shift release, then dispatched them in order; ending a session clears pending requests. This keeps the physical modifier up before an uppercase label can trigger a click. `tests/acceptance/reqs.sh REQ-ACT-01` passed: 92 Rust tests and 53 QML tests.
 - 2026-10-25: narrowed the buffer to a shifted key that completes a visible non-grid label. Prefixes now dispatch immediately, a pending activation shows a release cue, and Escape cancels it. Added coverage for ordering and release behavior after review.
 - 2026-10-25: `tests/acceptance/reqs.sh REQ-ACT-01` passed after the refinement: 92 Rust tests and 55 QML tests.
+- 2026-11-01: Merged to main at ccd1610 and left in review; marked done, as main's gate runs this acceptance and passes.

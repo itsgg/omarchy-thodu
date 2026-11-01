@@ -1,6 +1,6 @@
 # 0021: Show an interactive Thodu control in the bar
 
-Status: review
+Status: done
 Depends on: none
 Spec: REQ-SHELL-02
 Goal: Replace the invisible scan-only bar probe with a visible status control and settings menu, while preserving bar target collection.
@@ -17,3 +17,4 @@ Acceptance:
 - 2026-10-25: `tests/acceptance/reqs.sh REQ-SHELL-02` passed: 92 Rust tests and 73 QML tests, including component-level menu navigation and mode dispatch. Fixture lookup now finds the active worktree when Cargo reuses compiled tests. Live checks remain.
 - 2026-10-25: installed with `make reload`; the Font Awesome keyboard icon and Ready state appeared in the bar. Opened the menu from the icon, moved selection to Grid with Right, closed with Escape, launched Hints from the menu, and exited with Escape. Added the cropped menu screenshot to the README. Grid and Scroll launch mappings are covered by the component test.
 - 2026-10-25: completed the live acceptance in GG's session. The keyboard icon is visible in the bar, the menu reports Ready, and Hints, Grid and Scroll each launched and exited with Escape. Toggled `labels_only` off and back on from the menu; the original config bytes and checksum were restored. The menu closed with Escape. The full gate is the final check before landing.
+- 2026-11-01: Merged to main at 345f13f and left in review; marked done, as main's gate runs this acceptance and passes.

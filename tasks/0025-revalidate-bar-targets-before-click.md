@@ -1,6 +1,6 @@
 # 0025: Revalidate bar targets before clicking
 
-Status: review
+Status: done
 Depends on: none
 Spec: REQ-SHELL-01, REQ-SRC-07
 Goal: Check a selected shell target against the latest reported bar items and current bar origin before clicking, so a removed or moved tray item refreshes the session instead of clicking its former coordinates.
@@ -18,3 +18,4 @@ Acceptance:
 - 2026-10-25: Older `shell-items` reports without identity remain readable; text or ordering changes invalidate their targets before activation.
 - 2026-10-25: `tests/acceptance/reqs.sh REQ-SHELL-01 REQ-SRC-07` passed with 55 requirement tests, 95 core unit tests, and 84 QML tests.
 - 2026-10-25: Merged the stable-identity contract into REQ-SHELL-01 and documented the `shell-items` field and compatibility behavior in SPEC section 7.
+- 2026-11-01: Merged to main at 839f7fa and left in review; marked done, as main's gate runs this acceptance and passes.

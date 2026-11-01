@@ -1,6 +1,6 @@
 # 0007: Install, doctor and the unwanted paths
 
-Status: review
+Status: done
 Depends on: 0001, 0005
 Spec: REQ-INSTALL-01, REQ-CLI-02, REQ-SESSION-04, REQ-SESSION-05
 Goal: `thodu install` sets what Omarchy leaves off (the accessibility variables, the uinput rule, the plugin, the service, the keybindings GG chose) and `thodu doctor` reports each; a missing Hyprland, an empty window and an unregistered app each get the behavior section 8 gives them.
@@ -15,3 +15,4 @@ Acceptance:
 - 2026-10-22: implemented thodu install and thodu doctor (REQ-INSTALL-01), Hyprland connection verification (REQ-CLI-02), session opening on grid when no targets found (REQ-SESSION-04), and diagnostics for unregistered applications (REQ-SESSION-05). All acceptance tests pass.
 - 2026-10-22: fixed the coordinator review findings for the graphical-session service lifecycle, immediate Hyprland environment setup and reload, ordered and applied udev permissions, idempotent rule installation, shared plugin asset manifest, exact GTK3 advice, shared Hyprland socket path, and executable keybinding commands. Install now asks GG to choose both keys or accepts them as CLI options. Focused acceptance and the full gate pass; cargo-deny is unavailable. No live install was run.
 - 2026-10-22: fixed the follow-up review findings for daemon handoff and service health, selected-key replacement, uinput access retries, stale plugin assets, exact session diagnostics, Electron process names, manifest path validation, and Hyprland recovery guidance. Focused acceptance and tools/gate pass; cargo-deny is unavailable. The task 0006 review flags were checked against current Omarchy sources: BarScan maps item coordinates to the bar root, and Bar.qml sets the omarchy-bar namespace. No live install was run.
+- 2026-11-01: Merged to main at a747524 and left in review; marked done, as main's gate runs this acceptance and passes.
