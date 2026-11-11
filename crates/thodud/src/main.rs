@@ -76,6 +76,43 @@ fn socket_id(path: &Path) -> Option<SocketId> {
     })
 }
 
+/// Listen on `socket`: bind a private name beside it, restrict it to the
+/// user and note its identity, then rename it over `socket`. A client can
+/// reach only a socket that is set up, the identity is this daemon's own
+/// whatever happens at the path afterwards, and a stale file there is
+/// replaced in one step (REQ-PERF-02).
+fn listen_on(socket: &Path) -> Result<(UnixListener, SocketId), String> {
+    let staging =
+        socket.with_file_name(format!(".{}.{}", protocol::SOCKET_NAME, std::process::id()));
+    let _ = std::fs::remove_file(&staging);
+    let listener = UnixListener::bind(&staging)
+        .map_err(|e| format!("cannot listen on {}: {e}", staging.display()))?;
+    let set_up = std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o600))
+        .map_err(|e| format!("cannot restrict {}: {e}", staging.display()))
+        .and_then(|()| {
+            socket_id(&staging)
+                .ok_or_else(|| format!("{} vanished right after binding it", staging.display()))
+        })
+        .and_then(|bound| {
+            std::fs::rename(&staging, socket)
+                .map(|()| bound)
+                .map_err(|e| {
+                    format!(
+                        "cannot move {} to {}: {e}",
+                        staging.display(),
+                        socket.display()
+                    )
+                })
+        });
+    match set_up {
+        Ok(bound) => Ok((listener, bound)),
+        Err(e) => {
+            let _ = std::fs::remove_file(&staging);
+            Err(e)
+        }
+    }
+}
+
 /// Why the accept loop ended.
 #[derive(Debug, PartialEq, Eq)]
 enum Ended {
@@ -2066,21 +2103,12 @@ fn main() {
             "ERROR skipped scroll focus recovery because Hyprland dispatch syntax is unavailable; restore it with `hyprctl systeminfo` and restart thodud"
         );
     }
-    let _ = std::fs::remove_file(&socket);
-    let listener = match UnixListener::bind(&socket) {
-        Ok(l) => l,
+    let (listener, bound) = match listen_on(&socket) {
+        Ok(listening) => listening,
         Err(e) => {
-            eprintln!("ERROR cannot listen on {}: {e}", socket.display());
+            eprintln!("ERROR {e}; check $XDG_RUNTIME_DIR and restart the Thodu service");
             std::process::exit(1);
         }
-    };
-    if let Err(e) = std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)) {
-        eprintln!("ERROR cannot restrict {}: {e}", socket.display());
-        std::process::exit(1);
-    }
-    let Some(bound) = socket_id(&socket) else {
-        eprintln!("ERROR {} vanished right after binding it", socket.display());
-        std::process::exit(1);
     };
     let atspi = Arc::new(sources::Atspi {
         bus: Mutex::new(None),
@@ -4212,5 +4240,34 @@ mod tests {
     #[test]
     fn req_act_01_shifted_lowercase_key_text_is_uppercase() {
         assert_eq!(parse_key("d", true, false), Some(Key::Upper { c: 'D' }));
+    }
+
+    // REQ-PERF-02: the socket replaces a stale one in one step, is the
+    // user's alone, is the file whose identity listen_on returns, and leaves
+    // no staging name behind.
+    #[test]
+    fn req_perf_02_listen_on_replaces_a_stale_socket_set_up() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::net::{UnixListener, UnixStream};
+
+        let directory = test_focus_dir();
+        let socket = directory.0.join(protocol::SOCKET_NAME);
+        drop(UnixListener::bind(&socket).unwrap());
+        let stale = super::socket_id(&socket).expect("a stale socket file");
+
+        let (_listener, bound) = super::listen_on(&socket).unwrap();
+        assert_ne!(bound, stale, "the stale socket is replaced");
+        assert_eq!(super::socket_id(&socket), Some(bound));
+        let mode = std::fs::symlink_metadata(&socket)
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+        assert!(UnixStream::connect(&socket).is_ok());
+        let names: Vec<_> = std::fs::read_dir(&directory.0)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, vec![std::ffi::OsString::from(protocol::SOCKET_NAME)]);
     }
 }

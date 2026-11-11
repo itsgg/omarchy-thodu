@@ -14,38 +14,51 @@ struct Daemon {
     child: Child,
 }
 
+/// A fresh root for one daemon, with its runtime directory made.
+fn test_root(name: &str) -> PathBuf {
+    let home = std::env::var_os("HOME").map(PathBuf::from).expect("HOME");
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    // Under ~/.local/share/thodu (AGENTS.md rule 7), short enough for a
+    // socket path.
+    let root = home
+        .join(".local/share/thodu/tests")
+        .join(format!("{name}-{}-{stamp}", std::process::id()));
+    std::fs::create_dir_all(root.join("rt")).expect("create runtime directory");
+    root
+}
+
 impl Daemon {
-    fn start(name: &str) -> Daemon {
-        let home = std::env::var_os("HOME").map(PathBuf::from).expect("HOME");
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos();
-        // Under ~/.local/share/thodu (AGENTS.md rule 7), short enough for a
-        // socket path.
-        let root = home
-            .join(".local/share/thodu/tests")
-            .join(format!("{name}-{}-{stamp}", std::process::id()));
-        let runtime = root.join("rt");
-        std::fs::create_dir_all(&runtime).expect("create runtime directory");
+    /// Run thodud on `root`'s runtime directory without waiting for it.
+    fn spawn(root: PathBuf) -> Daemon {
         let child = Command::new(env!("CARGO_BIN_EXE_thodud"))
             .env_clear()
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", root.join("home"))
             .env("XDG_DATA_HOME", root.join("data"))
-            .env("XDG_RUNTIME_DIR", &runtime)
+            .env("XDG_RUNTIME_DIR", root.join("rt"))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
             .expect("start thodud");
-        let daemon = Daemon { root, child };
+        Daemon { root, child }
+    }
+
+    fn start(name: &str) -> Daemon {
+        let daemon = Daemon::spawn(test_root(name));
+        daemon.wait_listening();
+        daemon
+    }
+
+    fn wait_listening(&self) {
         let deadline = Instant::now() + Duration::from_secs(5);
-        while UnixStream::connect(daemon.socket()).is_err() {
+        while UnixStream::connect(self.socket()).is_err() {
             assert!(Instant::now() < deadline, "thodud never listened");
             std::thread::sleep(Duration::from_millis(10));
         }
-        daemon
     }
 
     fn runtime(&self) -> PathBuf {
@@ -122,6 +135,43 @@ fn shutdown(socket: &Path) -> String {
         .read_line(&mut reply)
         .expect("shutdown reply");
     reply
+}
+
+#[test]
+fn req_perf_02_the_socket_appears_only_once_set_up() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    // A watcher spins on the path while thodud starts and records the first
+    // file it sees. Binding the public path and restricting it afterwards
+    // let a client in before thodud knew its socket; the first sight must
+    // already be the user's alone and the file thodud keeps.
+    for round in 0..10 {
+        let root = test_root(&format!("seen{round}"));
+        let socket = root.join("rt/thodu.sock");
+        let watched = socket.clone();
+        let watcher = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Ok(meta) = std::fs::symlink_metadata(&watched) {
+                    return Some((meta.permissions().mode() & 0o777, meta.ino()));
+                }
+                if Instant::now() >= deadline {
+                    return None;
+                }
+            }
+        });
+        let daemon = Daemon::spawn(root);
+        let (mode, ino) = watcher
+            .join()
+            .expect("watcher")
+            .expect("the socket never appeared");
+        daemon.wait_listening();
+        assert_eq!(mode, 0o600, "round {round}: first seen with mode {mode:o}");
+        let kept = std::fs::symlink_metadata(&socket).expect("socket").ino();
+        assert_eq!(
+            ino, kept,
+            "round {round}: the first file seen is not the one kept"
+        );
+    }
 }
 
 #[test]
