@@ -349,7 +349,15 @@ The time from `thodu hints` starting to the overlay drawing labels shall be at m
 Acceptance:
 - measured: `thodu bench --sessions 50` prints both percentiles and exits 1 above the thresholds.
 
-Determinism: the same targets in the same order get the same labels. `thodud` uses no CPU while idle and under 50 MB of memory (provisional).
+### REQ-PERF-02: Sleep while idle, stop when unreachable
+While idle, `thodud` shall wait in the kernel for a client and wake at most once a second. When its socket path is removed or names another file, `thodud` shall stop within 2 seconds with an ERROR line and exit status 1, leaving whatever now holds the path in place. A `shutdown` request shall release the socket at once. On shutdown `thodud` shall unlink its socket only while the path still names it, before it stops listening.
+Acceptance:
+- scenario: an idle `thodud` makes at most 30 context switches over 3 seconds.
+- scenario: WHEN its runtime directory is removed THEN `thodud` exits 1 within 3 seconds with an ERROR line.
+- scenario: WHEN its socket is replaced by another listener THEN `thodud` exits 1 and the replacement still accepts connections.
+- scenario: WHEN `shutdown` is sent THEN `thodud` exits 0 within 500 ms and its socket is gone.
+
+Determinism: the same targets in the same order get the same labels. `thodud` uses under 50 MB of memory (provisional); idle CPU is REQ-PERF-02.
 
 ## 10. Verification and the gate
 
@@ -395,6 +403,7 @@ Unit tests and properties cover labels, search, the grid, coordinates and the st
 - 2026-10-25: change 0026, accessible elements are read again before a click, each click checks right before its press under one pointer lock, and the second click of a double click is checked too.
 - 2026-10-25: change 0027, the grid follows the label rule, Return refines a coarse cell, and change 0009 is merged: a lingering click on the bar that switches workspace ends the session, for grid cells as for bar targets.
 - 2026-10-25: change 0028, image targets keep a fingerprint of their pixels, captured again before a click.
+- 2026-11-11: change 0029, `thodud` sleeps while idle, stops once its socket is removed or replaced, and releases it at once on shutdown.
 
 ### Retired
 

@@ -15,9 +15,9 @@ mod wheel;
 
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -56,6 +56,73 @@ const LINGER_MAX: Duration = Duration::from_millis(1000);
 const LISTENER_WRITE: Duration = Duration::from_millis(100);
 /// Sessions nobody finished are dropped after this.
 const SESSION_LIFE: Duration = Duration::from_secs(120);
+/// How often an idle thodud wakes to check that its socket is still its own
+/// (REQ-PERF-02).
+const SOCKET_CHECK: Duration = Duration::from_secs(1);
+
+/// The socket file thodud bound, by device and inode: a path that is gone or
+/// names another file means no client can reach this daemon again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SocketId {
+    dev: u64,
+    ino: u64,
+}
+
+fn socket_id(path: &Path) -> Option<SocketId> {
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    meta.file_type().is_socket().then(|| SocketId {
+        dev: meta.dev(),
+        ino: meta.ino(),
+    })
+}
+
+/// Why the accept loop ended.
+#[derive(Debug, PartialEq, Eq)]
+enum Ended {
+    /// A shutdown request: hand the socket over (SPEC section 7, `shutdown`).
+    Shutdown,
+    /// The socket path was removed or now names another file (REQ-PERF-02).
+    SocketLost,
+    /// Accepting failed with this error.
+    Failed(String),
+}
+
+/// Accept clients until shutdown, a lost socket or an accept error. Between
+/// clients it sleeps in the reactor, waking every `check` to look at the
+/// socket path, so an idle daemon uses no CPU (REQ-PERF-02).
+fn accept_until_done(
+    listener: &async_io::Async<UnixListener>,
+    socket: &Path,
+    bound: SocketId,
+    shutdown: &AtomicBool,
+    check: Duration,
+    mut serve_client: impl FnMut(UnixStream),
+) -> Ended {
+    loop {
+        if shutdown.load(Ordering::Acquire) {
+            return Ended::Shutdown;
+        }
+        let ready = futures_lite::future::block_on(futures_lite::future::or(
+            async { listener.readable().await.map(|()| true) },
+            async {
+                async_io::Timer::after(check).await;
+                Ok(false)
+            },
+        ));
+        match ready {
+            Ok(true) => match listener.get_ref().accept() {
+                Ok((stream, _)) => serve_client(stream),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(e) => return Ended::Failed(e.to_string()),
+            },
+            Ok(false) => {}
+            Err(e) => return Ended::Failed(e.to_string()),
+        }
+        if socket_id(socket) != Some(bound) {
+            return Ended::SocketLost;
+        }
+    }
+}
 
 struct WindowScope {
     windows: HashMap<String, Window>,
@@ -1915,6 +1982,8 @@ fn serve(daemon: &Arc<Daemon>, stream: UnixStream) {
             )
         {
             daemon.shutdown.store(true, Ordering::Release);
+            // Wake the accept loop so the socket is released at once.
+            let _ = UnixStream::connect(&daemon.socket);
             return;
         }
     }
@@ -2009,6 +2078,10 @@ fn main() {
         eprintln!("ERROR cannot restrict {}: {e}", socket.display());
         std::process::exit(1);
     }
+    let Some(bound) = socket_id(&socket) else {
+        eprintln!("ERROR {} vanished right after binding it", socket.display());
+        std::process::exit(1);
+    };
     let atspi = Arc::new(sources::Atspi {
         bus: Mutex::new(None),
         woken: Mutex::new(HashSet::new()),
@@ -2036,27 +2109,44 @@ fn main() {
         focus_records,
         dispatch_syntax,
     });
-    if let Err(e) = listener.set_nonblocking(true) {
-        eprintln!("ERROR cannot make the service listener nonblocking: {e}");
-        std::process::exit(1);
-    }
-    while !daemon.shutdown.load(Ordering::Acquire) {
-        match listener.accept() {
-            Ok((stream, _)) => {
-                let daemon = Arc::clone(&daemon);
-                thread::spawn(move || serve(&daemon, stream));
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(10));
-            }
-            Err(e) => {
-                eprintln!("ERROR cannot accept a Thodu client: {e}");
-                break;
-            }
+    let listener = match async_io::Async::new(listener) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("ERROR cannot watch the service listener: {e}");
+            std::process::exit(1);
         }
+    };
+    let ended = accept_until_done(
+        &listener,
+        &daemon.socket,
+        bound,
+        &daemon.shutdown,
+        SOCKET_CHECK,
+        |stream| {
+            let daemon = Arc::clone(&daemon);
+            thread::spawn(move || serve(&daemon, stream));
+        },
+    );
+    // Unlink the socket only while it is still this daemon's, and before the
+    // listener closes, so a successor that binds the path keeps its socket.
+    if socket_id(&daemon.socket) == Some(bound) {
+        let _ = std::fs::remove_file(&daemon.socket);
     }
     drop(listener);
-    let _ = std::fs::remove_file(&daemon.socket);
+    match ended {
+        Ended::Shutdown => {}
+        Ended::SocketLost => {
+            eprintln!(
+                "ERROR {} was removed or replaced, so no client can reach this thodud; it stops, and the Thodu service or the next thodu command starts another",
+                daemon.socket.display()
+            );
+            std::process::exit(1);
+        }
+        Ended::Failed(e) => {
+            eprintln!("ERROR cannot accept a Thodu client: {e}; restart the Thodu service");
+            std::process::exit(1);
+        }
+    }
 }
 
 #[cfg(test)]
