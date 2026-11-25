@@ -551,12 +551,9 @@ impl Atspi {
             return (Vec::new(), "0 scroll areas across 0 windows".into());
         }
         let started = Instant::now();
-        let snapshots = self.scan(windows, monitor, started).map(|found| {
-            (
-                atspi::snapshots(&found.apps, windows, monitor),
-                found.truncated,
-            )
-        });
+        let snapshots = self
+            .scan(windows, monitor, started)
+            .map(|found| (atspi::snapshots(&found, windows, monitor), found.truncated));
 
         let mut targets = Vec::new();
         let mut semantic_count = 0;
@@ -614,7 +611,7 @@ impl Atspi {
             return Ok(SourceTargets::new(Vec::new(), "0 targets from atspi"));
         }
         let found = self.scan(windows, monitor, started)?;
-        let snapshots = atspi::snapshots(&found.apps, windows, monitor);
+        let snapshots = atspi::snapshots(&found, windows, monitor);
         let took = started.elapsed().as_millis();
         let mut targets = Vec::new();
         let mut unavailable = Vec::new();
@@ -622,7 +619,11 @@ impl Atspi {
         for ((window, snapshot), frame_index) in
             windows.iter().zip(snapshots.iter()).zip(frame_indices)
         {
-            if !snapshot.apps.iter().any(|app| app.pid == window.pid) {
+            if !snapshot
+                .apps
+                .iter()
+                .any(|app| app.pid == snapshot.window.pid)
+            {
                 // Only a process the bus was searched for and lacks is
                 // unregistered (REQ-SESSION-05); one that was not read in
                 // time is the cut below.
@@ -1896,6 +1897,8 @@ mod tests {
         hang: Option<(u32, Duration)>,
         /// The GTK4 process whose cache read times out.
         cache_timeout: Option<u32>,
+        /// The process whose pid lookup gets no answer.
+        no_pid: Option<u32>,
         dead: bool,
         reopened: Arc<std::sync::atomic::AtomicUsize>,
     }
@@ -1906,6 +1909,7 @@ mod tests {
                 pids: pids.to_vec(),
                 hang: None,
                 cache_timeout: None,
+                no_pid: None,
                 dead: false,
                 reopened: Arc::default(),
             }
@@ -1939,7 +1943,7 @@ mod tests {
         }
 
         fn pid(&self, app: &atspi::Ref) -> Option<u32> {
-            Some(Self::pid_in(app.1.as_str()))
+            Some(Self::pid_in(app.1.as_str())).filter(|pid| Some(*pid) != self.no_pid)
         }
 
         fn name(&self, app: &atspi::Ref) -> String {
@@ -2132,5 +2136,133 @@ mod tests {
             1,
             "reopened once and kept"
         );
+    }
+
+    // REQ-SESSION-05: a pid lookup that gets no answer may have been any
+    // window's process, so no window is called unregistered on its account.
+    #[test]
+    fn req_session_05_a_failed_pid_lookup_calls_no_window_unregistered() {
+        let bus = Desk {
+            no_pid: Some(34),
+            ..Desk::new(&[31, 34])
+        };
+        let atspi = atspi_on(bus, Duration::from_millis(200));
+        let windows = [
+            window_of(31, "alpha", 0, true),
+            window_of(33, "gamma", 100, false),
+        ];
+        let got = atspi
+            .collect_many(&windows, &wide_monitor())
+            .expect("atspi answers");
+        assert!(
+            got.targets.iter().any(|target| target.text == "B31"),
+            "{}",
+            got.status
+        );
+        assert!(
+            !got.status.contains("not on the accessibility bus"),
+            "{}",
+            got.status
+        );
+    }
+
+    /// One Flatpak instance with two windows in two processes, whose app
+    /// the bus names by the instance's xdg-dbus-proxy: a frame per window.
+    struct Instance;
+
+    impl atspi::Tree for Instance {
+        fn apps(&self) -> Vec<atspi::Ref> {
+            vec![Desk::at("/a500".into())]
+        }
+
+        fn pid(&self, _: &atspi::Ref) -> Option<u32> {
+            Some(500)
+        }
+
+        fn name(&self, app: &atspi::Ref) -> String {
+            app.1.to_string()
+        }
+
+        fn read(&self, at: &[atspi::Ref]) -> Vec<(tree::Node, Vec<atspi::Ref>)> {
+            let shown = vec!["showing".to_string(), "visible".to_string()];
+            at.iter()
+                .map(|reference| {
+                    let path = reference.1.as_str();
+                    let pid = Desk::pid_in(path);
+                    let node = if path.starts_with("/f") {
+                        tree::Node {
+                            role: "frame".into(),
+                            states: shown.clone(),
+                            extents: Some([0, 0, if pid == 402 { 100 } else { 120 }, 100]),
+                            ..tree::Node::default()
+                        }
+                    } else {
+                        tree::Node {
+                            role: "push button".into(),
+                            states: shown.clone(),
+                            name: format!("B{pid}"),
+                            extents: Some([10, 10, 20, 20]),
+                            ..tree::Node::default()
+                        }
+                    };
+                    (node, self.children(reference))
+                })
+                .collect()
+        }
+
+        fn children(&self, at: &atspi::Ref) -> Vec<atspi::Ref> {
+            let path = at.1.as_str();
+            match &path[..2] {
+                "/a" => vec![Desk::at("/f402".into()), Desk::at("/f403".into())],
+                "/f" => vec![Desk::at(format!("/b{}", Desk::pid_in(path)))],
+                _ => Vec::new(),
+            }
+        }
+
+        fn attributes(&self, _: &atspi::Ref) {}
+
+        fn uses_gtk4(&self, _: u32) -> bool {
+            false
+        }
+
+        fn process(&self, pid: u32) -> Option<(String, u32)> {
+            let (name, parent) = match pid {
+                500 => ("xdg-dbus-proxy", 499),
+                499 => ("bwrap", 400),
+                400 => ("bwrap", 300),
+                401 => ("bwrap", 400),
+                402 | 403 => ("electron", 401),
+                300 => ("bash", 1),
+                _ => return None,
+            };
+            Some((name.to_string(), parent))
+        }
+    }
+
+    // REQ-SESSION-05: every window of a Flatpak instance gets the targets
+    // of its own frame, not only the window whose process the app was read
+    // under.
+    #[test]
+    fn req_session_05_every_window_of_a_flatpak_instance_gets_its_targets() {
+        let atspi = Arc::new(Atspi {
+            bus: Mutex::new(Some(Arc::new(Instance))),
+            woken: Mutex::new(HashSet::new()),
+            budget: Duration::from_millis(200),
+        });
+        let mut second = window_of(403, "app", 100, false);
+        second.size = (120, 100);
+        let windows = [window_of(402, "app", 0, true), second];
+        let got = atspi
+            .collect_many(&windows, &wide_monitor())
+            .expect("atspi answers");
+        for (text, address) in [("B402", "0x402"), ("B403", "0x403")] {
+            assert!(
+                got.targets
+                    .iter()
+                    .any(|target| target.text == text && target.window == address),
+                "{text}: {}",
+                got.status
+            );
+        }
     }
 }

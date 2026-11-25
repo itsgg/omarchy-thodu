@@ -14,7 +14,7 @@
 //! GetAttributes call, at most once per process in a session, and again in a
 //! later session if the wake did not take (REQ-SRC-03).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -767,6 +767,10 @@ pub struct Scan {
     /// Whether every application on the bus had its process looked up, so a
     /// window process missing from `registered` is known to be missing.
     pub looked_up: bool,
+    /// Window processes read as another: the windows of one Flatpak
+    /// instance whose apps the bus names by the instance's proxy all match
+    /// against the apps, read under one of them.
+    pub aliases: HashMap<u32, u32>,
     /// Why the registry did not answer, when it did not.
     pub registry: Option<String>,
     /// Processes woken in this collection whose tree then filled.
@@ -811,7 +815,10 @@ pub fn scan(
         }
     };
     let pids = bus.pids(&on_bus);
-    let looked_up = pids.len() == on_bus.len() && Instant::now() < walk.deadline;
+    // A lookup that did not answer may have been any window's process.
+    let looked_up = pids.len() == on_bus.len()
+        && pids.iter().all(Option::is_some)
+        && Instant::now() < walk.deadline;
     let window_pids: HashSet<u32> = windows.iter().map(|window| window.pid).collect();
     let focused_pid = windows
         .iter()
@@ -819,23 +826,31 @@ pub fn scan(
         .or_else(|| windows.first())
         .map(|window| window.pid);
     let mut registered = HashSet::new();
+    let mut aliases = HashMap::new();
     let mut app_refs: Vec<(Ref, u32)> = Vec::new();
     for (app, pid) in on_bus.into_iter().zip(pids) {
         let Some(pid) = pid else { continue };
         let owners = window_pids_of(pid, &window_pids, &|p| bus.process(p));
         registered.extend(owners.iter().copied());
+        // The app is read under one of its windows' processes, the focused
+        // one when it is among them, and its other windows are read as it.
         let owner = owners
             .iter()
             .copied()
             .find(|owner| Some(*owner) == focused_pid)
             .or_else(|| owners.first().copied());
         if let Some(owner) = owner {
+            for other in owners.iter().copied().filter(|other| *other != owner) {
+                aliases.insert(other, owner);
+            }
             app_refs.push((app, owner));
         }
     }
+    let aliases_found = aliases.clone();
     publish(out, |scan| {
         scan.registered = registered;
         scan.looked_up = looked_up;
+        scan.aliases = aliases_found;
     });
     prioritize_applications(&mut app_refs, focused_pid);
     let mut order: Vec<u32> = Vec::new();
@@ -855,7 +870,9 @@ pub fn scan(
             .filter(|(_, p)| *p == pid)
             .map(|(app, _)| app)
             .collect();
-        let apps = read_process(bus, &group, pid, windows, monitor, walk, &mut tried, out);
+        let apps = read_process(
+            bus, &group, pid, windows, &aliases, monitor, walk, &mut tried, out,
+        );
         publish(out, |scan| scan.apps.extend(apps));
     }
     finish(out, walk);
@@ -869,6 +886,7 @@ fn read_process(
     group: &[&Ref],
     pid: u32,
     windows: &[Window],
+    aliases: &HashMap<u32, u32>,
     monitor: &Monitor,
     walk: &mut Walk,
     tried: &mut HashSet<u32>,
@@ -915,9 +933,10 @@ fn read_process(
     }
     let shallow: Vec<_> = windows
         .iter()
+        .map(|window| read_as(window, aliases))
         .filter(|window| window.pid == pid)
         .map(|window| Snapshot {
-            window: window.clone(),
+            window,
             monitor: monitor.clone(),
             apps: apps.clone(),
         })
@@ -995,18 +1014,28 @@ pub fn snapshot_many(
     scan(bus, windows, monitor, walk, &out);
     let found = out.into_inner().unwrap_or_default();
     woken.retain(|pid| !found.unwoken.contains(pid));
-    woken.extend(found.woken);
-    snapshots(&found.apps, windows, monitor)
+    woken.extend(found.woken.iter().copied());
+    snapshots(&found, windows, monitor)
 }
 
-/// One snapshot per window over every application read.
-pub fn snapshots(apps: &[App], windows: &[Window], monitor: &Monitor) -> Vec<Snapshot> {
+/// `window` with the process its apps are read under.
+fn read_as(window: &Window, aliases: &HashMap<u32, u32>) -> Window {
+    let mut window = window.clone();
+    if let Some(pid) = aliases.get(&window.pid) {
+        window.pid = *pid;
+    }
+    window
+}
+
+/// One snapshot per window over every application read, each window under
+/// the process its apps were read as.
+pub fn snapshots(found: &Scan, windows: &[Window], monitor: &Monitor) -> Vec<Snapshot> {
     windows
         .iter()
         .map(|window| Snapshot {
-            window: window.clone(),
+            window: read_as(window, &found.aliases),
             monitor: monitor.clone(),
-            apps: apps.to_vec(),
+            apps: found.apps.clone(),
         })
         .collect()
 }
