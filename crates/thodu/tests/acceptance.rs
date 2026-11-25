@@ -1253,10 +1253,32 @@ fn req_install_01_service_names_thodud_by_a_quoted_absolute_path() {
     let unit = std::fs::read_to_string(root.home().join(".config/systemd/user/thodud.service"))
         .expect("read unit");
     let expected = format!(
-        "ExecStart=\"{}/odd dir 100%% $$HOME/thodud\"\n",
+        "ExecStart=\"{}/odd dir 100%% $HOME/thodud\"\n",
         root.0.display()
     );
     assert!(unit.contains(&expected), "{unit}");
+    // systemd itself reads the command back, where systemd-analyze is
+    // installed: a misquoted path is "not executable" or has "special
+    // characters".
+    match Command::new("systemd-analyze")
+        .args(["verify", "--user"])
+        .arg(root.home().join(".config/systemd/user/thodud.service"))
+        .output()
+    {
+        Ok(out) => {
+            let said = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                !said.contains("is not executable") && !said.contains("special characters"),
+                "{said}"
+            );
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!(
+                "systemd-analyze is not installed; the unit's command is not checked by systemd"
+            );
+        }
+        Err(e) => panic!("cannot run systemd-analyze: {e}"),
+    }
 
     // No thodud beside thodu or on PATH.
     std::fs::remove_file(dir.join("thodud")).expect("remove thodud");

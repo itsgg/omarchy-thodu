@@ -1193,31 +1193,34 @@ fn installed_daemon() -> Result<PathBuf, String> {
         })
 }
 
-/// `path` as the command of a systemd `ExecStart=`: quoted, with `\` and
-/// `"` escaped and `%` and `$` doubled, so spaces, specifiers and variables
-/// in it reach the program as written.
+/// `path` as the command of a systemd `ExecStart=`: normalized, quoted so a
+/// space stays in it, with `%` doubled so no specifier is expanded (systemd
+/// expands no `$` in the command's path). systemd refuses a command path
+/// with a quote, a backslash, a glob character or a control character, as
+/// `systemd-analyze verify` shows, so install refuses one too.
 fn systemd_exec_path(path: &Path) -> Result<String, String> {
-    let text = path.to_str().filter(|t| !t.chars().any(char::is_control)).ok_or_else(|| {
+    let normal: PathBuf = path.components().collect();
+    let refuse = |why: &str| {
         format!(
-            "{} cannot be written in a systemd unit; move thodud to a plain path and rerun thodu install",
+            "{} {why}, which a systemd unit cannot run; move thodud to a plain path and rerun thodu install",
             path.display()
         )
-    })?;
-    if !path.is_absolute() {
-        return Err(format!("{text} is not an absolute path"));
+    };
+    if !normal.is_absolute()
+        || normal
+            .components()
+            .any(|c| c == std::path::Component::ParentDir)
+    {
+        return Err(refuse("is not a normalized absolute path"));
     }
-    let mut out = String::from("\"");
-    for c in text.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '%' => out.push_str("%%"),
-            '$' => out.push_str("$$"),
-            c => out.push(c),
-        }
+    let text = normal.to_str().ok_or_else(|| refuse("is not UTF-8"))?;
+    if let Some(c) = text
+        .chars()
+        .find(|c| c.is_control() || "\"'\\*?[".contains(*c))
+    {
+        return Err(refuse(&format!("has the character {c:?}")));
     }
-    out.push('"');
-    Ok(out)
+    Ok(format!("\"{}\"", text.replace('%', "%%")))
 }
 
 fn enable_user_service(home: &Path, unit: &str) -> Result<(), String> {
@@ -1719,11 +1722,23 @@ mod tests {
     #[test]
     fn req_install_01_unit_paths_are_quoted_for_systemd() {
         assert_eq!(
-            systemd_exec_path(Path::new("/a b/100%/$x/q\"\\/thodud")).expect("quoted"),
-            "\"/a b/100%%/$$x/q\\\"\\\\/thodud\""
+            systemd_exec_path(Path::new("/a b//100%/./$x/thodud")).expect("quoted"),
+            "\"/a b/100%%/$x/thodud\""
         );
-        assert!(systemd_exec_path(Path::new("thodud")).is_err());
-        assert!(systemd_exec_path(Path::new("/a\nb/thodud")).is_err());
+        for refused in [
+            "thodud",
+            "/a/../thodud",
+            "/a\nb/thodud",
+            "/q\"/thodud",
+            "/q\\/thodud",
+            "/q'/thodud",
+            "/q*/thodud",
+            "/q?/thodud",
+            "/q[/thodud",
+        ] {
+            let err = systemd_exec_path(Path::new(refused)).expect_err(refused);
+            assert!(err.contains("rerun thodu install"), "{err}");
+        }
     }
 
     // bench's own ERROR is not repeated.
