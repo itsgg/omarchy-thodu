@@ -120,10 +120,17 @@ pub fn match_frame_index(snapshot: &Snapshot, focused: bool) -> Option<(usize, u
     // A frame belongs to the window only when its size is near the window's:
     // a frame can lag the window by a bar's height, while another window of
     // the process, such as a dialog, is far off.
+    // An XWayland frame's extents are physical, so they compare in logical
+    // units, as its targets are read (REQ-SRC-02).
     let size = snapshot.window.size;
+    let div = extents_divisor(&snapshot.window, &snapshot.monitor);
+    let logical = |v: i32| (f64::from(v) / div).round() as i32;
     let distance = |frame: &Node| {
         frame.extents.and_then(|e| {
-            let (dw, dh) = ((e[2] - size.0).abs(), (e[3] - size.1).abs());
+            let (dw, dh) = (
+                (logical(e[2]) - size.0).abs(),
+                (logical(e[3]) - size.1).abs(),
+            );
             (dw <= FRAME_SLACK && dh <= FRAME_SLACK).then_some(dw + dh)
         })
     };

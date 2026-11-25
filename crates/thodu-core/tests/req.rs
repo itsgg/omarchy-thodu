@@ -2286,3 +2286,17 @@ fn req_src_02_xwayland_extents_are_physical() {
     assert_eq!(targets.len(), 1);
     assert_eq!(targets[0].bounds, Rect::new(200, 200, 80, 40));
 }
+
+// REQ-SRC-02 and REQ-SRC-01: an XWayland window's frame reports its size in
+// physical pixels, so it matches the window by its logical size, while the
+// same frame for a Wayland window is far off and never matches.
+#[test]
+fn req_src_02_an_xwayland_frame_matches_by_its_logical_size() {
+    // 1512 by 910 logical units at the monitor's scale of 1.25.
+    let physical = || vec![frame_of(1890, 1138, false)];
+    let mut xwayland = snapshot_with(false, physical());
+    xwayland.window.xwayland = true;
+    assert_eq!(tree::match_frame_index(&xwayland, false), Some((0, 0)));
+    let wayland = snapshot_with(false, physical());
+    assert_eq!(tree::match_frame_index(&wayland, false), None);
+}

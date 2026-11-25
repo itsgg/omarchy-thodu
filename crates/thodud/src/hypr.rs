@@ -464,8 +464,6 @@ mod tests {
         );
     }
 
-    // REQ-SRC-07: Hyprland draws floating windows above tiled windows even
-    // when the tiled window has the newer focus history.
     // REQ-GRID-01: a monitor turned a quarter lays out with Hyprland's mode
     // width and height swapped, so the grid and clicks cover the turned area.
     #[test]
@@ -547,6 +545,8 @@ mod tests {
         assert_eq!(visible, ["0xdialog", "0xfull"]);
     }
 
+    // REQ-SRC-07: Hyprland draws floating windows above tiled windows even
+    // when the tiled window has the newer focus history.
     #[test]
     fn req_src_07_floating_window_owns_an_overlap_above_the_active_tiled_window() {
         let monitors = json!([{
