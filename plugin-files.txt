@@ -6,6 +6,7 @@ manifest.json
 Thodu.qml
 BarProbe.qml
 components/BarMenu.qml
+components/BarRescan.qml
 components/Client.qml
 components/FocusPolicy.qml
 components/Listener.qml
