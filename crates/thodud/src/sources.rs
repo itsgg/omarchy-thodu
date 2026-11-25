@@ -342,10 +342,104 @@ fn unregistered_status(window: &Window) -> String {
 }
 
 /// The accessibility tree of the window's process.
+///
+/// Each collection runs on a worker of its own against a copy of the bus
+/// link whose every call is bounded by the collection's deadline, and takes
+/// whatever the worker has published by then. No lock is held across a
+/// walk, so work a late collection leaves behind never delays the next one
+/// (REQ-SRC-05).
 pub struct Atspi {
-    pub bus: Mutex<Option<atspi::Bus>>,
+    /// The bus link, held only to copy or replace it.
+    pub bus: Mutex<Option<atspi::Shared>>,
+    /// Processes whose tree was woken and filled (REQ-SRC-03).
     pub woken: Mutex<HashSet<u32>>,
     pub budget: Duration,
+}
+
+/// What a collection's worker learned about the bus link.
+enum Link {
+    /// The link it was given still answers, or it could not tell.
+    Keep,
+    /// The link to keep from now on: a reopened one, or none after the bus
+    /// was lost, so the next collection opens a new one.
+    Set(Option<atspi::Shared>),
+}
+
+/// Open the accessibility bus, or reopen it after `old` stopped answering.
+fn open_link(old: Option<&atspi::Shared>) -> Result<atspi::Shared, String> {
+    match old {
+        Some(old) => old.reopen(),
+        None => atspi::Bus::connect().map(|bus| Arc::new(bus) as atspi::Shared),
+    }
+}
+
+/// One collection on `current`, opened first when there is none and reopened
+/// once when its registry does not answer before `deadline`.
+fn scan_on(
+    current: Option<atspi::Shared>,
+    windows: &[Window],
+    monitor: &Monitor,
+    deadline: Instant,
+    out: &Mutex<atspi::Scan>,
+) -> Link {
+    let lost = |error: String| {
+        if let Ok(mut scan) = out.lock() {
+            *scan = atspi::Scan {
+                registry: Some(error),
+                done: true,
+                ..atspi::Scan::default()
+            };
+        }
+    };
+    let (mut bus, mut fresh) = match current {
+        Some(bus) => (bus, false),
+        None => match open_link(None) {
+            Ok(bus) => (bus, true),
+            Err(error) => {
+                lost(error);
+                return Link::Set(None);
+            }
+        },
+    };
+    loop {
+        let bounded = bus.bounded(deadline).unwrap_or_else(|| Arc::clone(&bus));
+        let mut walk = atspi::Walk::until(deadline);
+        atspi::scan(&*bounded, windows, monitor, &mut walk, out);
+        let failed = out.lock().map_or(true, |scan| scan.registry.is_some());
+        if !failed {
+            return if fresh {
+                Link::Set(Some(bus))
+            } else {
+                Link::Keep
+            };
+        }
+        if Instant::now() >= deadline {
+            // A registry that did not answer in time may only be busy.
+            return if fresh {
+                Link::Set(Some(bus))
+            } else {
+                Link::Keep
+            };
+        }
+        if fresh {
+            return Link::Set(None);
+        }
+        // An error before the deadline: the bus went away, as when
+        // at-spi-bus-launcher restarts. Reopen it and collect again.
+        match open_link(Some(&bus)) {
+            Ok(reopened) => {
+                if let Ok(mut scan) = out.lock() {
+                    *scan = atspi::Scan::default();
+                }
+                bus = reopened;
+                fresh = true;
+            }
+            Err(error) => {
+                lost(error);
+                return Link::Set(None);
+            }
+        }
+    }
 }
 
 impl Source for Atspi {
@@ -371,28 +465,82 @@ impl Source for Atspi {
 }
 
 impl Atspi {
+    /// The bus link, opened when there is none, for record-tree.
+    pub fn link(&self) -> Result<atspi::Shared, String> {
+        let mut bus = self.bus.lock().map_err(|_| "bus lock".to_string())?;
+        if let Some(bus) = bus.as_ref() {
+            return Ok(Arc::clone(bus));
+        }
+        let opened = open_link(None)?;
+        *bus = Some(Arc::clone(&opened));
+        Ok(opened)
+    }
+
     /// Whether an accessible target's element moved, went or stopped showing
     /// since collection (REQ-ACT-03). A bus that stays busy past a short wait
     /// counts as moved, so the session refreshes instead of clicking unchecked.
     pub fn element_moved(&self, check: &ElementCheck) -> bool {
         let deadline = Instant::now() + Duration::from_millis(150);
-        loop {
+        let bus = loop {
             match self.bus.try_lock() {
-                Ok(bus) => {
-                    return bus
-                        .as_ref()
-                        .is_none_or(|bus| atspi::element_moved(bus, check));
-                }
+                Ok(bus) => break bus.clone(),
                 Err(std::sync::TryLockError::WouldBlock) if Instant::now() < deadline => {
                     thread::sleep(Duration::from_millis(5));
                 }
                 Err(_) => return true,
             }
+        };
+        let Some(bus) = bus else {
+            return true;
+        };
+        let bounded = bus.bounded(deadline).unwrap_or(bus);
+        atspi::element_moved(&*bounded, check)
+    }
+
+    /// Collect on a worker and take what it published by the budget: the
+    /// walk stops at seven eighths of it and the wait at fifteen sixteenths,
+    /// so a partial tree still arrives in time.
+    fn scan(
+        &self,
+        windows: &[Window],
+        monitor: &Monitor,
+        started: Instant,
+    ) -> Result<atspi::Scan, String> {
+        let walk_until = started + self.budget.saturating_sub(self.budget / 8);
+        let wait_until = started + self.budget.saturating_sub(self.budget / 16);
+        let current = self.bus.lock().map_err(|_| "bus lock".to_string())?.clone();
+        let out = Arc::new(Mutex::new(atspi::Scan::default()));
+        let (tx, rx) = mpsc::channel();
+        {
+            let (out, windows, monitor) = (Arc::clone(&out), windows.to_vec(), monitor.clone());
+            thread::Builder::new()
+                .name("atspi".into())
+                .spawn(move || {
+                    let _ = tx.send(scan_on(current, &windows, &monitor, walk_until, &out));
+                })
+                .map_err(|e| format!("cannot start a collection: {e}"))?;
+        }
+        if let Ok(Link::Set(link)) =
+            rx.recv_timeout(wait_until.saturating_duration_since(Instant::now()))
+        {
+            *self.bus.lock().map_err(|_| "bus lock".to_string())? = link;
+        }
+        let mut found = out.lock().map_err(|_| "scan lock".to_string())?.clone();
+        found.truncated |= !found.done;
+        if let Ok(mut woken) = self.woken.lock() {
+            woken.retain(|pid| !found.unwoken.contains(pid));
+            woken.extend(found.woken.iter().copied());
+        }
+        match found.registry.take() {
+            Some(error) => Err(error),
+            None => Ok(found),
         }
     }
 
     /// Collect semantic scroll regions, with one window fallback where the
-    /// app tree has no usable scroll role (REQ-SRC-08).
+    /// app tree has no usable scroll role (REQ-SRC-08). Held to the same
+    /// budget as a hints collection, so `thodu scroll` never waits on a
+    /// slow application.
     pub fn collect_scroll_areas(
         &self,
         windows: &[Window],
@@ -403,17 +551,12 @@ impl Atspi {
             return (Vec::new(), "0 scroll areas across 0 windows".into());
         }
         let started = Instant::now();
-        let snapshots = (|| -> Result<(Vec<tree::Snapshot>, bool), String> {
-            let mut bus = self.bus.lock().map_err(|_| "bus lock".to_string())?;
-            if bus.is_none() {
-                *bus = Some(atspi::Bus::connect()?);
-            }
-            let reader = bus.as_ref().ok_or("no bus")?;
-            let mut woken = self.woken.lock().map_err(|_| "wake lock".to_string())?;
-            let mut walk = atspi::Walk::new(self.budget.saturating_sub(self.budget / 8));
-            let snapshots = atspi::snapshot_many(reader, windows, monitor, &mut walk, &mut woken);
-            Ok((snapshots, walk.truncated))
-        })();
+        let snapshots = self.scan(windows, monitor, started).map(|found| {
+            (
+                atspi::snapshots(&found.apps, windows, monitor),
+                found.truncated,
+            )
+        });
 
         let mut targets = Vec::new();
         let mut semantic_count = 0;
@@ -470,16 +613,8 @@ impl Atspi {
         if windows.is_empty() {
             return Ok(SourceTargets::new(Vec::new(), "0 targets from atspi"));
         }
-        let mut bus = self.bus.lock().map_err(|_| "bus lock".to_string())?;
-        if bus.is_none() {
-            *bus = Some(atspi::Bus::connect()?);
-        }
-        let reader = bus.as_ref().ok_or("no bus")?;
-        let mut woken = self.woken.lock().map_err(|_| "wake lock".to_string())?;
-        // The walk stops short of the budget, so its partial tree still
-        // arrives in time.
-        let mut walk = atspi::Walk::new(self.budget.saturating_sub(self.budget / 8));
-        let snapshots = atspi::snapshot_many(reader, windows, monitor, &mut walk, &mut woken);
+        let found = self.scan(windows, monitor, started)?;
+        let snapshots = atspi::snapshots(&found.apps, windows, monitor);
         let took = started.elapsed().as_millis();
         let mut targets = Vec::new();
         let mut unavailable = Vec::new();
@@ -488,7 +623,12 @@ impl Atspi {
             windows.iter().zip(snapshots.iter()).zip(frame_indices)
         {
             if !snapshot.apps.iter().any(|app| app.pid == window.pid) {
-                unavailable.push(unregistered_status(window));
+                // Only a process the bus was searched for and lacks is
+                // unregistered (REQ-SESSION-05); one that was not read in
+                // time is the cut below.
+                if found.looked_up && !found.registered.contains(&window.pid) {
+                    unavailable.push(unregistered_status(window));
+                }
                 continue;
             }
             let frame = frame_index.map(|(app, frame)| &snapshot.apps[app].frames[frame]);
@@ -500,7 +640,7 @@ impl Atspi {
                 target
             }));
         }
-        let cut = if walk.truncated {
+        let cut = if found.truncated {
             ", cut short at the budget"
         } else {
             ""
@@ -1744,6 +1884,253 @@ mod tests {
             got.targets
                 .iter()
                 .all(|target| target.source != From::Image)
+        );
+    }
+
+    /// A fake accessibility bus with one frame and one button per process,
+    /// whose calls can hang without regard for any deadline.
+    #[derive(Clone)]
+    struct Desk {
+        pids: Vec<u32>,
+        /// The process whose frame read hangs for this long.
+        hang: Option<(u32, Duration)>,
+        /// The GTK4 process whose cache read times out.
+        cache_timeout: Option<u32>,
+        dead: bool,
+        reopened: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Desk {
+        fn new(pids: &[u32]) -> Self {
+            Self {
+                pids: pids.to_vec(),
+                hang: None,
+                cache_timeout: None,
+                dead: false,
+                reopened: Arc::default(),
+            }
+        }
+
+        fn at(path: String) -> atspi::Ref {
+            (
+                ":1.9".into(),
+                zbus::zvariant::OwnedObjectPath::try_from(path).expect("a path"),
+            )
+        }
+
+        fn pid_in(path: &str) -> u32 {
+            path[2..].parse().expect("a pid in the path")
+        }
+    }
+
+    impl atspi::Tree for Desk {
+        fn apps(&self) -> Vec<atspi::Ref> {
+            self.pids
+                .iter()
+                .map(|pid| Self::at(format!("/a{pid}")))
+                .collect()
+        }
+
+        fn registry(&self) -> Result<Vec<atspi::Ref>, String> {
+            if self.dead {
+                return Err("the connection is closed".into());
+            }
+            Ok(self.apps())
+        }
+
+        fn pid(&self, app: &atspi::Ref) -> Option<u32> {
+            Some(Self::pid_in(app.1.as_str()))
+        }
+
+        fn name(&self, app: &atspi::Ref) -> String {
+            app.1.to_string()
+        }
+
+        fn read(&self, at: &[atspi::Ref]) -> Vec<(tree::Node, Vec<atspi::Ref>)> {
+            let shown = vec!["showing".to_string(), "visible".to_string()];
+            at.iter()
+                .map(|reference| {
+                    let path = reference.1.as_str();
+                    let pid = Self::pid_in(path);
+                    let node = if path.starts_with("/f") {
+                        if let Some((_, hang)) = self.hang.filter(|(slow, _)| *slow == pid) {
+                            thread::sleep(hang);
+                        }
+                        tree::Node {
+                            role: "frame".into(),
+                            states: shown.clone(),
+                            extents: Some([0, 0, 100, 100]),
+                            ..tree::Node::default()
+                        }
+                    } else {
+                        tree::Node {
+                            role: "push button".into(),
+                            states: shown.clone(),
+                            name: format!("B{pid}"),
+                            extents: Some([10, 10, 20, 20]),
+                            ..tree::Node::default()
+                        }
+                    };
+                    (node, self.children(reference))
+                })
+                .collect()
+        }
+
+        fn children(&self, at: &atspi::Ref) -> Vec<atspi::Ref> {
+            let path = at.1.as_str();
+            let pid = Self::pid_in(path);
+            match &path[..2] {
+                "/a" => vec![Self::at(format!("/f{pid}"))],
+                "/f" => vec![Self::at(format!("/b{pid}"))],
+                _ => Vec::new(),
+            }
+        }
+
+        fn attributes(&self, _: &atspi::Ref) {}
+
+        fn cache_frames(&self, _: &atspi::Ref, walk: &mut atspi::Walk) -> Option<Vec<tree::Node>> {
+            thread::sleep(Duration::from_millis(400));
+            walk.truncated = true;
+            None
+        }
+
+        fn uses_gtk4(&self, pid: u32) -> bool {
+            self.cache_timeout == Some(pid)
+        }
+
+        fn reopen(&self) -> Result<atspi::Shared, String> {
+            self.reopened
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(Arc::new(Self {
+                dead: false,
+                ..self.clone()
+            }))
+        }
+    }
+
+    fn atspi_on(bus: Desk, budget: Duration) -> Arc<Atspi> {
+        Arc::new(Atspi {
+            bus: Mutex::new(Some(Arc::new(bus))),
+            woken: Mutex::new(HashSet::new()),
+            budget,
+        })
+    }
+
+    fn window_of(pid: u32, class: &str, x: i32, focused: bool) -> Window {
+        Window {
+            address: format!("0x{pid}"),
+            class: class.into(),
+            pid,
+            at: (x, 0),
+            focused,
+            ..window()
+        }
+    }
+
+    fn wide_monitor() -> Monitor {
+        Monitor {
+            width: 300,
+            ..monitor()
+        }
+    }
+
+    // REQ-SRC-05: one background app that hangs on every call leaves the
+    // focused app's targets in the session within the atspi budget, and the
+    // next session is not slowed by the first one's abandoned work.
+    #[test]
+    fn req_src_05_a_hung_background_app_leaves_the_focused_targets_in_time() {
+        let budget = Duration::from_millis(300);
+        let bus = Desk {
+            hang: Some((22, Duration::from_millis(1500))),
+            ..Desk::new(&[21, 22])
+        };
+        let atspi = atspi_on(bus, budget);
+        let sources: Vec<Arc<dyn Source>> = vec![atspi];
+        let windows = [
+            window_of(21, "focused", 0, true),
+            window_of(22, "background", 100, false),
+        ];
+        for session in ["first", "second"] {
+            let started = Instant::now();
+            let got = collect_primary_visible(&sources, &windows, &wide_monitor());
+            let took = started.elapsed();
+            assert!(
+                got.targets.iter().any(|target| target.text == "B21"),
+                "{session} session: the focused app's targets, got {:?}",
+                got.status
+            );
+            assert!(
+                !got.status.iter().any(|status| status.contains("missed")),
+                "{session} session: {:?}",
+                got.status
+            );
+            assert!(
+                took < Duration::from_millis(1000),
+                "{session} session took {took:?}"
+            );
+        }
+    }
+
+    // REQ-SESSION-05: a GTK4 cache read that times out leaves that app and
+    // every app after it unread, not unregistered; only a process the bus
+    // was searched for and lacks is named as unregistered.
+    #[test]
+    fn req_session_05_an_app_after_a_timed_out_read_is_not_called_unregistered() {
+        let bus = Desk {
+            cache_timeout: Some(31),
+            ..Desk::new(&[31, 32])
+        };
+        let atspi = atspi_on(bus, Duration::from_millis(200));
+        let windows = [
+            window_of(31, "alpha", 0, true),
+            window_of(32, "beta", 100, false),
+            window_of(33, "gamma", 200, false),
+        ];
+        let got = atspi
+            .collect_many(&windows, &wide_monitor())
+            .expect("atspi answers");
+        assert!(got.status.contains("cut short"), "{}", got.status);
+        assert!(
+            got.status.contains("gamma is not on the accessibility bus"),
+            "{}",
+            got.status
+        );
+        for read_late in ["alpha", "beta"] {
+            assert!(
+                !got.status.contains(&format!("{read_late} is not on")),
+                "{}",
+                got.status
+            );
+        }
+    }
+
+    // REQ-SESSION-05: a bus link that stopped answering, as after
+    // at-spi-bus-launcher restarts, is reopened and its apps found, rather
+    // than every later session calling them unregistered.
+    #[test]
+    fn req_session_05_a_dropped_bus_connection_is_reopened() {
+        let bus = Desk {
+            dead: true,
+            ..Desk::new(&[41])
+        };
+        let reopened = Arc::clone(&bus.reopened);
+        let atspi = atspi_on(bus, Duration::from_millis(200));
+        let windows = [window_of(41, "app", 0, true)];
+        for session in ["first", "second"] {
+            let got = atspi
+                .collect_many(&windows, &wide_monitor())
+                .expect("atspi answers");
+            assert!(
+                got.targets.iter().any(|target| target.text == "B41"),
+                "{session} session: {}",
+                got.status
+            );
+            assert!(!got.status.contains("not on the accessibility bus"));
+        }
+        assert_eq!(
+            reopened.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "reopened once and kept"
         );
     }
 }

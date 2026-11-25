@@ -3,14 +3,20 @@
 //! Only the frames of visible windows' processes are read (REQ-SRC-01), and
 //! only frames matched to those windows are walked below their tops. A
 //! subtree that is not SHOWING and VISIBLE is not descended into, and the
-//! walk stops at a node cap or a shared deadline, so one slow application
-//! cannot hold a session up. Each level is read with calls in flight at once.
+//! walk stops at a node cap or a shared deadline. Every call to the bus is
+//! bounded by the time left, and the focused window's process is read and
+//! walked before any other, so one slow application cannot hold a session up
+//! or cost the focused app its targets (REQ-SRC-05). Each level is read with
+//! calls in flight at once.
 //!
 //! Chromium and Electron keep their tree dormant until something asks for
 //! it: a frame whose only child is the null object is woken with one
-//! GetAttributes call, once per process (REQ-SRC-03).
+//! GetAttributes call, at most once per process in a session, and again in a
+//! later session if the wake did not take (REQ-SRC-03).
 
 use std::collections::HashSet;
+use std::future::Future;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use futures_util::future::join_all;
@@ -89,11 +95,22 @@ struct CachedNode {
     node: Node,
 }
 
+/// A bus link shared between sessions and the walks they leave behind.
+pub type Shared = Arc<dyn Tree + Send + Sync>;
+
 /// What the walk needs from the bus, so a fake can stand in for it.
 pub trait Tree {
     /// The applications on the bus.
     fn apps(&self) -> Vec<Ref>;
+    /// The applications on the bus, or why the registry did not answer.
+    fn registry(&self) -> Result<Vec<Ref>, String> {
+        Ok(self.apps())
+    }
     fn pid(&self, app: &Ref) -> Option<u32>;
+    /// The process of each of `apps`, the lookups in flight at once.
+    fn pids(&self, apps: &[Ref]) -> Vec<Option<u32>> {
+        apps.iter().map(|app| self.pid(app)).collect()
+    }
     fn name(&self, at: &Ref) -> String;
     /// One node without its children, and the references to them; all of
     /// `at`'s calls in flight at once.
@@ -106,10 +123,118 @@ pub trait Tree {
     fn cache_frames(&self, _app: &Ref, _walk: &mut Walk) -> Option<Vec<Node>> {
         None
     }
+    /// This link with every call bounded by `deadline`, when it can be.
+    fn bounded(&self, _deadline: Instant) -> Option<Shared> {
+        None
+    }
+    /// A new link to the bus, for when this one stopped answering.
+    fn reopen(&self) -> Result<Shared, String> {
+        Err("the accessibility bus cannot be reopened".into())
+    }
+    /// A process's name and parent, for matching sandboxed applications.
+    fn process(&self, pid: u32) -> Option<(String, u32)> {
+        process_of(pid)
+    }
+    /// Whether a process uses GTK4, whose Cache interface lists its tree.
+    fn uses_gtk4(&self, pid: u32) -> bool {
+        uses_gtk4(pid)
+    }
 }
 
+/// The accessibility bus. A copy shares the connection and may carry a
+/// deadline that bounds every call it makes.
+#[derive(Clone)]
 pub struct Bus {
     conn: Connection,
+    deadline: Option<Instant>,
+}
+
+/// `request`'s answer, or None once `deadline` passes first.
+pub(crate) async fn within<T>(
+    deadline: Option<Instant>,
+    request: impl Future<Output = Option<T>>,
+) -> Option<T> {
+    let Some(deadline) = deadline else {
+        return request.await;
+    };
+    let left = deadline.saturating_duration_since(Instant::now());
+    if left.is_zero() {
+        return None;
+    }
+    futures_lite::future::race(request, async {
+        async_io::Timer::after(left).await;
+        None
+    })
+    .await
+}
+
+/// A process's command name and parent pid, from /proc.
+fn process_of(pid: u32) -> Option<(String, u32)> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let (open, close) = (stat.find('(')?, stat.rfind(')')?);
+    let name = stat.get(open + 1..close)?.to_string();
+    let ppid = stat
+        .get(close + 1..)?
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()?;
+    Some((name, ppid))
+}
+
+/// The visible window processes an application on the bus may belong to. A
+/// Flatpak app reaches the accessibility bus through its instance's
+/// xdg-dbus-proxy, so the bus names the proxy's pid, not the app's. Flatpak
+/// starts the proxy before it becomes the instance's outer bwrap, so the
+/// proxy and the app's processes share that bwrap as an ancestor, while two
+/// instances share none. Sorted, so the choice among them is stable.
+pub(crate) fn window_pids_of(
+    bus_pid: u32,
+    window_pids: &HashSet<u32>,
+    process: &dyn Fn(u32) -> Option<(String, u32)>,
+) -> Vec<u32> {
+    if window_pids.contains(&bus_pid) {
+        return vec![bus_pid];
+    }
+    let ancestors = |pid: u32| {
+        let mut chain = Vec::new();
+        let mut at = pid;
+        while chain.len() < 64 {
+            let Some((name, parent)) = process(at) else {
+                break;
+            };
+            chain.push((at, name));
+            if parent <= 1 {
+                break;
+            }
+            at = parent;
+        }
+        chain
+    };
+    let proxy = ancestors(bus_pid);
+    if proxy
+        .first()
+        .is_none_or(|(_, name)| name != "xdg-dbus-proxy")
+    {
+        return Vec::new();
+    }
+    let sandboxes: Vec<u32> = proxy
+        .iter()
+        .skip(1)
+        .filter(|(_, name)| name == "bwrap")
+        .map(|(pid, _)| *pid)
+        .collect();
+    let mut owners: Vec<u32> = window_pids
+        .iter()
+        .copied()
+        .filter(|&window| {
+            ancestors(window)
+                .iter()
+                .any(|(pid, name)| name == "bwrap" && sandboxes.contains(pid))
+        })
+        .collect();
+    owners.sort_unstable();
+    owners
 }
 
 fn is_null(r: &Ref) -> bool {
@@ -180,8 +305,12 @@ fn children_ready(children: &[Ref]) -> bool {
 
 impl Bus {
     pub fn connect() -> Result<Self, String> {
-        let session =
-            zbus::blocking::Connection::session().map_err(|e| format!("no session bus: {e}"))?;
+        // Reopening after at-spi-bus-launcher restarts asks for the address
+        // again; a session bus that does not answer must not hold that up.
+        let session = zbus::blocking::connection::Builder::session()
+            .map(|builder| builder.method_timeout(Duration::from_millis(500)))
+            .and_then(|builder| builder.build())
+            .map_err(|e| format!("no session bus: {e}"))?;
         let address: String = session
             .call_method(
                 Some("org.a11y.Bus"),
@@ -199,27 +328,64 @@ impl Bus {
                 .await
         })
         .map_err(|e| format!("cannot join the accessibility bus: {e}"))?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            deadline: None,
+        })
     }
 
-    async fn call<B, T>(&self, (dest, path): &Ref, iface: &str, method: &str, body: &B) -> Option<T>
+    /// One call, its answer or why there is none, bounded by the deadline.
+    async fn try_call<B, T>(
+        &self,
+        (dest, path): &Ref,
+        iface: &str,
+        method: &str,
+        body: &B,
+    ) -> Result<T, String>
     where
         B: serde::Serialize + zbus::zvariant::DynamicType,
         T: for<'d> zbus::zvariant::DynamicDeserialize<'d>,
     {
-        self.conn
-            .call_method(
-                Some(dest.as_str()),
-                path.as_str(),
-                Some(iface),
-                method,
-                body,
+        let request = async {
+            Some(
+                self.conn
+                    .call_method(
+                        Some(dest.as_str()),
+                        path.as_str(),
+                        Some(iface),
+                        method,
+                        body,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())
+                    .and_then(|m| m.body().deserialize().map_err(|e| e.to_string())),
             )
+        };
+        within(self.deadline, request)
             .await
-            .ok()?
-            .body()
-            .deserialize()
-            .ok()
+            .unwrap_or_else(|| Err("no answer before the deadline".into()))
+    }
+
+    async fn call<B, T>(&self, at: &Ref, iface: &str, method: &str, body: &B) -> Option<T>
+    where
+        B: serde::Serialize + zbus::zvariant::DynamicType,
+        T: for<'d> zbus::zvariant::DynamicDeserialize<'d>,
+    {
+        self.try_call(at, iface, method, body).await.ok()
+    }
+
+    async fn pid_of(&self, app: &Ref) -> Option<u32> {
+        let daemon = (
+            "org.freedesktop.DBus".to_string(),
+            OwnedObjectPath::try_from("/org/freedesktop/DBus").ok()?,
+        );
+        self.call(
+            &daemon,
+            "org.freedesktop.DBus",
+            "GetConnectionUnixProcessID",
+            &(app.0.as_str(),),
+        )
+        .await
     }
 
     async fn property(&self, at: &Ref, name: &str) -> String {
@@ -268,29 +434,34 @@ impl Bus {
 
 impl Tree for Bus {
     fn apps(&self) -> Vec<Ref> {
+        self.registry().unwrap_or_default()
+    }
+
+    fn registry(&self) -> Result<Vec<Ref>, String> {
         let root: Ref = (
             "org.a11y.atspi.Registry".into(),
             OwnedObjectPath::try_from("/org/a11y/atspi/accessible/root").expect("a valid path"),
         );
-        self.children(&root)
+        futures_lite::future::block_on(self.try_call(&root, ACCESSIBLE, "GetChildren", &()))
     }
 
     fn pid(&self, app: &Ref) -> Option<u32> {
-        futures_lite::future::block_on(async {
-            self.conn
-                .call_method(
-                    Some("org.freedesktop.DBus"),
-                    "/org/freedesktop/DBus",
-                    Some("org.freedesktop.DBus"),
-                    "GetConnectionUnixProcessID",
-                    &(app.0.as_str(),),
-                )
-                .await
-                .ok()?
-                .body()
-                .deserialize()
-                .ok()
-        })
+        futures_lite::future::block_on(self.pid_of(app))
+    }
+
+    fn pids(&self, apps: &[Ref]) -> Vec<Option<u32>> {
+        futures_lite::future::block_on(join_all(apps.iter().map(|app| self.pid_of(app))))
+    }
+
+    fn bounded(&self, deadline: Instant) -> Option<Shared> {
+        Some(Arc::new(Self {
+            conn: self.conn.clone(),
+            deadline: Some(deadline),
+        }))
+    }
+
+    fn reopen(&self) -> Result<Shared, String> {
+        Ok(Arc::new(Self::connect()?))
     }
 
     fn name(&self, at: &Ref) -> String {
@@ -450,8 +621,12 @@ pub struct Walk {
 
 impl Walk {
     pub fn new(budget: Duration) -> Self {
+        Self::until(Instant::now() + budget)
+    }
+
+    pub fn until(deadline: Instant) -> Self {
         Self {
-            deadline: Instant::now() + budget,
+            deadline,
             nodes: 0,
             truncated: false,
         }
@@ -569,16 +744,219 @@ fn walk_from(bus: &dyn Tree, roots: Vec<Ref>, walk: &mut Walk) -> Vec<Node> {
     built.into_iter().flatten().collect()
 }
 
-/// Wake `frame` if its tree is dormant and its process was not woken
-/// before; true when it was woken now.
-fn wake(bus: &dyn Tree, frame: &Ref, pid: u32, woken: &mut HashSet<u32>) -> bool {
+/// Wake `frame` if its tree is dormant and its process was not tried in this
+/// session; true when it was woken now.
+fn wake(bus: &dyn Tree, frame: &Ref, pid: u32, tried: &mut HashSet<u32>) -> bool {
     let children = bus.children(frame);
     let dormant = !children.is_empty() && children.iter().all(is_null);
-    if !dormant || !woken.insert(pid) {
+    if !dormant || !tried.insert(pid) {
         return false;
     }
     bus.attributes(frame);
     true
+}
+
+/// What one AT-SPI collection found, published as it goes so a caller can
+/// take what has arrived by its deadline.
+#[derive(Clone, Debug, Default)]
+pub struct Scan {
+    /// The applications read so far, the focused window's process first.
+    pub apps: Vec<App>,
+    /// Window processes with an application on the bus.
+    pub registered: HashSet<u32>,
+    /// Whether every application on the bus had its process looked up, so a
+    /// window process missing from `registered` is known to be missing.
+    pub looked_up: bool,
+    /// Why the registry did not answer, when it did not.
+    pub registry: Option<String>,
+    /// Processes woken in this collection whose tree then filled.
+    pub woken: HashSet<u32>,
+    /// Processes woken in this collection whose tree stayed dormant.
+    pub unwoken: HashSet<u32>,
+    pub truncated: bool,
+    pub done: bool,
+}
+
+fn publish(out: &Mutex<Scan>, change: impl FnOnce(&mut Scan)) {
+    if let Ok(mut scan) = out.lock() {
+        change(&mut scan);
+    }
+}
+
+/// Read each visible process, the focused window's first, and walk each
+/// frame matched to one of its windows, publishing into `out` after each
+/// process so the focused app's targets are there even if another process
+/// never answers.
+pub fn scan(
+    bus: &dyn Tree,
+    windows: &[Window],
+    monitor: &Monitor,
+    walk: &mut Walk,
+    out: &Mutex<Scan>,
+) {
+    let finish = |out: &Mutex<Scan>, walk: &Walk| {
+        publish(out, |scan| {
+            scan.truncated |= walk.truncated;
+            scan.done = true;
+        });
+    };
+    if windows.is_empty() {
+        return finish(out, walk);
+    }
+    let on_bus = match bus.registry() {
+        Ok(apps) => apps,
+        Err(error) => {
+            publish(out, |scan| scan.registry = Some(error));
+            return finish(out, walk);
+        }
+    };
+    let pids = bus.pids(&on_bus);
+    let looked_up = pids.len() == on_bus.len() && Instant::now() < walk.deadline;
+    let window_pids: HashSet<u32> = windows.iter().map(|window| window.pid).collect();
+    let focused_pid = windows
+        .iter()
+        .find(|window| window.focused)
+        .or_else(|| windows.first())
+        .map(|window| window.pid);
+    let mut registered = HashSet::new();
+    let mut app_refs: Vec<(Ref, u32)> = Vec::new();
+    for (app, pid) in on_bus.into_iter().zip(pids) {
+        let Some(pid) = pid else { continue };
+        let owners = window_pids_of(pid, &window_pids, &|p| bus.process(p));
+        registered.extend(owners.iter().copied());
+        let owner = owners
+            .iter()
+            .copied()
+            .find(|owner| Some(*owner) == focused_pid)
+            .or_else(|| owners.first().copied());
+        if let Some(owner) = owner {
+            app_refs.push((app, owner));
+        }
+    }
+    publish(out, |scan| {
+        scan.registered = registered;
+        scan.looked_up = looked_up;
+    });
+    prioritize_applications(&mut app_refs, focused_pid);
+    let mut order: Vec<u32> = Vec::new();
+    for (_, pid) in &app_refs {
+        if !order.contains(pid) {
+            order.push(*pid);
+        }
+    }
+    let mut tried = HashSet::new();
+    for pid in order {
+        if Instant::now() >= walk.deadline {
+            walk.truncated = true;
+            break;
+        }
+        let group: Vec<&Ref> = app_refs
+            .iter()
+            .filter(|(_, p)| *p == pid)
+            .map(|(app, _)| app)
+            .collect();
+        let apps = read_process(bus, &group, pid, windows, monitor, walk, &mut tried, out);
+        publish(out, |scan| scan.apps.extend(apps));
+    }
+    finish(out, walk);
+}
+
+/// One process's applications, each frame read at its top and the frames
+/// matched to its windows walked.
+#[allow(clippy::too_many_arguments)]
+fn read_process(
+    bus: &dyn Tree,
+    group: &[&Ref],
+    pid: u32,
+    windows: &[Window],
+    monitor: &Monitor,
+    walk: &mut Walk,
+    tried: &mut HashSet<u32>,
+    out: &Mutex<Scan>,
+) -> Vec<App> {
+    let mut apps = Vec::new();
+    let mut frame_refs = Vec::new();
+    let mut cached_apps = Vec::new();
+    let gtk4 = bus.uses_gtk4(pid);
+    for app in group {
+        if Instant::now() >= walk.deadline {
+            walk.truncated = true;
+            break;
+        }
+        if gtk4 {
+            if let Some(frames) = bus.cache_frames(app, walk) {
+                apps.push(App {
+                    name: String::new(),
+                    pid,
+                    frames,
+                });
+                frame_refs.push(Vec::new());
+                cached_apps.push(true);
+                continue;
+            }
+            if Instant::now() >= walk.deadline {
+                walk.truncated = true;
+                break;
+            }
+        }
+        let refs: Vec<Ref> = bus
+            .children(app)
+            .into_iter()
+            .filter(|r| !is_null(r))
+            .collect();
+        let frames = bus.read(&refs).into_iter().map(|(n, _)| n).collect();
+        apps.push(App {
+            name: bus.name(app),
+            pid,
+            frames,
+        });
+        frame_refs.push(refs);
+        cached_apps.push(false);
+    }
+    let shallow: Vec<_> = windows
+        .iter()
+        .filter(|window| window.pid == pid)
+        .map(|window| Snapshot {
+            window: window.clone(),
+            monitor: monitor.clone(),
+            apps: apps.clone(),
+        })
+        .collect();
+    let selected: Vec<_> = tree::match_frame_indices(&shallow)
+        .into_iter()
+        .flatten()
+        .collect();
+    for (a, f) in selected {
+        if cached_apps[a] {
+            continue;
+        }
+        let at = frame_refs[a][f].clone();
+        if wake(bus, &at, pid, tried) {
+            // The tree fills in tens of milliseconds; wait for its first
+            // children, within the shared session budget. A wake that has
+            // not taken by then is tried again in a later session.
+            let took = loop {
+                if children_ready(&bus.children(&at)) {
+                    break true;
+                }
+                if Instant::now() + WAKE_POLL >= walk.deadline {
+                    break false;
+                }
+                std::thread::sleep(WAKE_POLL);
+            };
+            publish(out, |scan| {
+                if took {
+                    scan.woken.insert(pid);
+                } else {
+                    scan.unwoken.insert(pid);
+                }
+            });
+        }
+        if let Some(full) = walk_from(bus, vec![at], walk).pop() {
+            apps[a].frames[f] = full;
+        }
+    }
+    apps
 }
 
 /// The applications of `window`'s process, each frame read at its top,
@@ -603,7 +981,9 @@ pub fn snapshot(
 }
 
 /// Read each visible process once, then walk each matching frame once for a
-/// session spanning multiple windows.
+/// session spanning multiple windows, waiting for the whole scan. `woken`
+/// keeps the processes whose tree was woken and filled.
+#[cfg(test)]
 pub fn snapshot_many(
     bus: &dyn Tree,
     windows: &[Window],
@@ -611,97 +991,22 @@ pub fn snapshot_many(
     walk: &mut Walk,
     woken: &mut HashSet<u32>,
 ) -> Vec<Snapshot> {
-    if windows.is_empty() {
-        return Vec::new();
-    }
-    let pids: HashSet<u32> = windows.iter().map(|window| window.pid).collect();
-    let focused_pid = windows
-        .iter()
-        .find(|window| window.focused)
-        .or_else(|| windows.first())
-        .map(|window| window.pid);
-    let mut app_refs: Vec<(Ref, u32)> = bus
-        .apps()
-        .into_iter()
-        .filter_map(|app| bus.pid(&app).map(|pid| (app, pid)))
-        .filter(|(_, pid)| pids.contains(pid))
-        .collect();
-    prioritize_applications(&mut app_refs, focused_pid);
-    let mut apps = Vec::new();
-    let mut frame_refs = Vec::new();
-    let mut cached_apps = Vec::new();
-    for (app, pid) in app_refs {
-        if Instant::now() >= walk.deadline {
-            walk.truncated = true;
-            break;
-        }
-        let gtk4 = uses_gtk4(pid);
-        if gtk4 {
-            if let Some(frames) = bus.cache_frames(&app, walk) {
-                apps.push(App {
-                    name: String::new(),
-                    pid,
-                    frames,
-                });
-                frame_refs.push(Vec::new());
-                cached_apps.push(true);
-                continue;
-            }
-            if Instant::now() >= walk.deadline {
-                walk.truncated = true;
-                break;
-            }
-        }
-        let refs: Vec<Ref> = bus
-            .children(&app)
-            .into_iter()
-            .filter(|r| !is_null(r))
-            .collect();
-        let frames = bus.read(&refs).into_iter().map(|(n, _)| n).collect();
-        apps.push(App {
-            name: bus.name(&app),
-            pid,
-            frames,
-        });
-        frame_refs.push(refs);
-        cached_apps.push(false);
-    }
-    let shallow: Vec<_> = windows
-        .iter()
-        .map(|window| Snapshot {
-            window: window.clone(),
-            monitor: monitor.clone(),
-            apps: apps.clone(),
-        })
-        .collect();
-    let selected: Vec<_> = tree::match_frame_indices(&shallow)
-        .into_iter()
-        .flatten()
-        .collect();
-    for (a, f) in selected {
-        if cached_apps[a] {
-            continue;
-        }
-        let pid = apps[a].pid;
-        let at = frame_refs[a][f].clone();
-        if wake(bus, &at, pid, woken) {
-            // The tree fills in tens of milliseconds; wait for its first
-            // children, within the shared session budget.
-            while Instant::now() + WAKE_POLL < walk.deadline && !children_ready(&bus.children(&at))
-            {
-                std::thread::sleep(WAKE_POLL);
-            }
-        }
-        if let Some(full) = walk_from(bus, vec![at], walk).pop() {
-            apps[a].frames[f] = full;
-        }
-    }
+    let out = Mutex::new(Scan::default());
+    scan(bus, windows, monitor, walk, &out);
+    let found = out.into_inner().unwrap_or_default();
+    woken.retain(|pid| !found.unwoken.contains(pid));
+    woken.extend(found.woken);
+    snapshots(&found.apps, windows, monitor)
+}
+
+/// One snapshot per window over every application read.
+pub fn snapshots(apps: &[App], windows: &[Window], monitor: &Monitor) -> Vec<Snapshot> {
     windows
         .iter()
         .map(|window| Snapshot {
             window: window.clone(),
             monitor: monitor.clone(),
-            apps: apps.clone(),
+            apps: apps.to_vec(),
         })
         .collect()
 }
@@ -1147,5 +1452,199 @@ mod tests {
         assert!(walk.truncated);
         assert!(snapshots.iter().all(|snapshot| snapshot.apps.is_empty()));
         assert!(bus.reads.borrow().is_empty());
+    }
+
+    // REQ-SRC-05: every bus call races the time left, so one application
+    // that never answers costs a collection no more than its deadline.
+    #[test]
+    fn req_src_05_every_bus_call_is_bounded_by_the_time_left() {
+        use futures_lite::future::block_on as block;
+        let started = Instant::now();
+        let hung = block(within(
+            Some(Instant::now() + Duration::from_millis(30)),
+            std::future::pending::<Option<u32>>(),
+        ));
+        assert_eq!(hung, None);
+        let took = started.elapsed();
+        assert!(
+            took >= Duration::from_millis(30) && took < Duration::from_millis(300),
+            "a hung call ends at its deadline, took {took:?}"
+        );
+        let started = Instant::now();
+        assert_eq!(
+            block(within(
+                Some(Instant::now()),
+                std::future::pending::<Option<u32>>()
+            )),
+            None
+        );
+        assert!(
+            started.elapsed() < Duration::from_millis(20),
+            "no time left"
+        );
+        assert_eq!(
+            block(within(
+                Some(Instant::now() + Duration::from_secs(5)),
+                async { Some(3) }
+            )),
+            Some(3)
+        );
+        assert_eq!(block(within(None, async { Some(4) })), Some(4));
+    }
+
+    /// A Chromium-like app whose first wake does not take.
+    struct Stubborn {
+        attribute_calls: Cell<u32>,
+    }
+
+    impl Tree for Stubborn {
+        fn apps(&self) -> Vec<Ref> {
+            vec![r("/app")]
+        }
+
+        fn pid(&self, _: &Ref) -> Option<u32> {
+            Some(7)
+        }
+
+        fn name(&self, _: &Ref) -> String {
+            "Chromium".into()
+        }
+
+        fn read(&self, at: &[Ref]) -> Vec<(Node, Vec<Ref>)> {
+            at.iter()
+                .map(|a| (Fake::node(a.1.as_str()), self.children(a)))
+                .collect()
+        }
+
+        fn children(&self, at: &Ref) -> Vec<Ref> {
+            match at.1.as_str() {
+                "/app" => vec![r("/frame")],
+                "/frame" if self.attribute_calls.get() >= 2 => vec![r("/button")],
+                "/frame" => vec![r(NULL_PATH)],
+                _ => Vec::new(),
+            }
+        }
+
+        fn attributes(&self, _: &Ref) {
+            self.attribute_calls.set(self.attribute_calls.get() + 1);
+        }
+
+        fn uses_gtk4(&self, _: u32) -> bool {
+            false
+        }
+    }
+
+    // REQ-SRC-03 (change 0030): a wake that did not take is tried again in
+    // a later session, and once it takes the process is left alone.
+    #[test]
+    fn req_src_03_a_wake_that_did_not_take_is_retried_later() {
+        let bus = Stubborn {
+            attribute_calls: Cell::new(0),
+        };
+        let mut woken = HashSet::new();
+        let mut walk = Walk::new(Duration::from_millis(40));
+        let snap = snapshot(&bus, &window(), &monitor(), &mut walk, &mut woken);
+        assert_eq!(bus.attribute_calls.get(), 1, "one wake in a session");
+        assert!(tree::match_frame(&snap).expect("frame").children.is_empty());
+        assert!(woken.is_empty(), "a wake that did not take is not kept");
+
+        let mut walk = Walk::new(Duration::from_millis(200));
+        let snap = snapshot(&bus, &window(), &monitor(), &mut walk, &mut woken);
+        assert_eq!(bus.attribute_calls.get(), 2, "the next session wakes again");
+        let frame = tree::match_frame(&snap).expect("frame");
+        assert_eq!(frame.children.len(), 1, "the woken tree's button");
+        assert!(woken.contains(&7));
+
+        let mut walk = Walk::new(Duration::from_millis(200));
+        snapshot(&bus, &window(), &monitor(), &mut walk, &mut woken);
+        assert_eq!(bus.attribute_calls.get(), 2, "a wake that took holds");
+    }
+
+    /// Two Flatpak instances and a host process, as /proc shows them: each
+    /// instance's xdg-dbus-proxy runs in a bwrap of its own under the
+    /// instance's outer bwrap, which also holds the app.
+    fn flatpak_process(pid: u32) -> Option<(String, u32)> {
+        let (name, parent) = match pid {
+            500 => ("xdg-dbus-proxy", 499),
+            499 => ("bwrap", 400),
+            400 => ("bwrap", 300),
+            402 => ("electron", 401),
+            401 => ("bwrap", 400),
+            600 => ("xdg-dbus-proxy", 599),
+            599 => ("bwrap", 598),
+            598 => ("bwrap", 300),
+            602 => ("other", 601),
+            601 => ("bwrap", 598),
+            300 => ("bash", 1),
+            700 => ("foot", 300),
+            _ => return None,
+        };
+        Some((name.to_string(), parent))
+    }
+
+    // REQ-SESSION-05: a Flatpak app reaches the bus through its instance's
+    // xdg-dbus-proxy; it is matched to the window process in the proxy's
+    // sandbox, never to another instance or a host process.
+    #[test]
+    fn req_session_05_a_flatpak_app_behind_its_proxy_is_matched_to_its_window() {
+        let windows: HashSet<u32> = [402, 602, 700].into_iter().collect();
+        assert_eq!(window_pids_of(500, &windows, &flatpak_process), [402]);
+        assert_eq!(window_pids_of(600, &windows, &flatpak_process), [602]);
+        assert_eq!(window_pids_of(700, &windows, &flatpak_process), [700]);
+        let only_host: HashSet<u32> = [700].into_iter().collect();
+        assert!(window_pids_of(500, &only_host, &flatpak_process).is_empty());
+        assert!(window_pids_of(300, &windows, &flatpak_process).is_empty());
+        assert!(window_pids_of(999, &windows, &flatpak_process).is_empty());
+    }
+
+    /// The Chromium-like fake, seen through a Flatpak proxy.
+    struct Proxied(Fake);
+
+    impl Tree for Proxied {
+        fn apps(&self) -> Vec<Ref> {
+            self.0.apps()
+        }
+
+        fn pid(&self, _: &Ref) -> Option<u32> {
+            Some(500)
+        }
+
+        fn name(&self, at: &Ref) -> String {
+            self.0.name(at)
+        }
+
+        fn read(&self, at: &[Ref]) -> Vec<(Node, Vec<Ref>)> {
+            self.0.read(at)
+        }
+
+        fn children(&self, at: &Ref) -> Vec<Ref> {
+            self.0.children(at)
+        }
+
+        fn attributes(&self, at: &Ref) {
+            self.0.attributes(at);
+        }
+
+        fn process(&self, pid: u32) -> Option<(String, u32)> {
+            flatpak_process(pid)
+        }
+
+        fn uses_gtk4(&self, _: u32) -> bool {
+            false
+        }
+    }
+
+    // REQ-SESSION-05: the proxied app's frame is walked for its window.
+    #[test]
+    fn req_session_05_a_proxied_app_gets_its_targets() {
+        let bus = Proxied(Fake::new());
+        bus.0.woken.set(true);
+        let mut window = window();
+        window.pid = 402;
+        let mut woken = HashSet::new();
+        let mut walk = Walk::new(Duration::from_millis(200));
+        let snap = snapshot(&bus, &window, &monitor(), &mut walk, &mut woken);
+        let frame = tree::match_frame(&snap).expect("the proxied frame");
+        assert_eq!(frame.children[0].name, "Save");
     }
 }

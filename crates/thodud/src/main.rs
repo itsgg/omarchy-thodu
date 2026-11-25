@@ -399,13 +399,10 @@ impl Daemon {
     fn record(&self, window: Option<String>) -> Res<Reply> {
         let window = self.window(window.as_deref())?;
         let monitor = hypr::monitor_of(&window).map_err(internal)?;
-        let mut bus = self.atspi.bus.lock().map_err(|_| internal("bus lock"))?;
-        if bus.is_none() {
-            *bus = Some(atspi::Bus::connect().map_err(|e| fail(ErrorKind::NoTree, e))?);
-        }
-        let reader = bus.as_ref().ok_or_else(|| internal("no bus"))?;
+        let bus = self.atspi.link().map_err(|e| fail(ErrorKind::NoTree, e))?;
+        let reader = bus.bounded(Instant::now() + RECORD_BUDGET).unwrap_or(bus);
         let mut walk = atspi::Walk::new(RECORD_BUDGET);
-        let snapshot = atspi::record(reader, &window, &monitor, &mut walk);
+        let snapshot = atspi::record(&*reader, &window, &monitor, &mut walk);
         let cut = if walk.truncated { ", cut short" } else { "" };
         Ok(Reply {
             status: Some(format!("{} application(s){cut}", snapshot.apps.len())),
