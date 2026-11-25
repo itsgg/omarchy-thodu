@@ -209,6 +209,37 @@ struct Entry {
     scroll_released: bool,
 }
 
+impl Entry {
+    /// Drop a wheel action still waiting for the overlay's pass-through,
+    /// with the pending count it holds; one already sent is left to finish.
+    fn cancel_queued_scroll(&mut self) {
+        if self.session.take_scroll_action().is_some() {
+            self.pending = self.pending.saturating_sub(1);
+            self.scroll_released = true;
+        }
+    }
+}
+
+/// Where a scroll reads the pointer from and puts it back; tests replace
+/// the compositor with a recorder.
+trait ScrollPointer {
+    /// The position to return the pointer to after scrolling `target`.
+    fn capture(&self, target: &Target, test: bool) -> Option<(Monitor, (i32, i32))>;
+    fn move_to(&self, monitor: &Monitor, point: (i32, i32)) -> Result<(), String>;
+}
+
+struct LivePointer;
+
+impl ScrollPointer for LivePointer {
+    fn capture(&self, target: &Target, test: bool) -> Option<(Monitor, (i32, i32))> {
+        scroll_restore_candidate(target, test)
+    }
+
+    fn move_to(&self, monitor: &Monitor, point: (i32, i32)) -> Result<(), String> {
+        pointer::move_to(monitor, point)
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct SessionOptions {
     overlay: bool,
@@ -746,24 +777,23 @@ impl Daemon {
         }
         let generation = entry.session.generation;
         let at = entry.created.elapsed().as_millis() as u64;
-        let cancel_unstarted_scroll = key == Key::Escape
-            && entry.session.scroll_mode
-            && entry.session.state == State::Acting
-            && entry.session.pending_scroll_action().is_some();
-        let act = entry.session.key_at(key, at);
-        if cancel_unstarted_scroll {
-            entry.pending = entry.pending.saturating_sub(1);
-            entry.scroll_released = true;
+        let waiting_scroll = entry.session.pending_scroll_action().is_some();
+        if key == Key::Escape {
+            entry.cancel_queued_scroll();
         }
+        let act = entry.session.key_at(key, at);
         let scroll = entry.session.pending_scroll_action();
-        if scroll.is_some() {
+        // A key that arrives while a scroll waits for pass-through is
+        // ignored, so only a key that queues a scroll counts one.
+        let queued_scroll = !waiting_scroll && scroll.is_some();
+        if queued_scroll {
             entry.scroll_released = false;
         }
         let view = Self::view(entry);
         // New targets, from the grid, go with the reply.
         let targets = (entry.session.generation != generation).then(|| Self::labeled(entry));
         let closed = entry.session.state == State::Closed;
-        if act.is_some() || scroll.is_some() {
+        if act.is_some() || queued_scroll {
             entry.pending += 1;
         }
         drop(sessions);
@@ -1056,6 +1086,24 @@ impl Daemon {
             bool,
         ) -> Result<(), ScrollFailure>,
     {
+        self.scroll_ready_using(id, &LivePointer, perform)
+    }
+
+    fn scroll_ready_using<F>(
+        &self,
+        id: &str,
+        pointer: &impl ScrollPointer,
+        perform: F,
+    ) -> Res<Reply>
+    where
+        F: FnOnce(
+            &Target,
+            Option<&Window>,
+            &Monitor,
+            ScrollAction,
+            bool,
+        ) -> Result<(), ScrollFailure>,
+    {
         let action = {
             let mut sessions = self.sessions.lock().map_err(|_| internal("session lock"))?;
             let entry = sessions
@@ -1068,7 +1116,7 @@ impl Daemon {
                 )
             })?
         };
-        self.scroll_with(id, action, perform)
+        self.scroll_with(id, action, pointer, perform)
     }
 
     fn scroll_stop(&self, id: &str) -> Res<Reply> {
@@ -1113,7 +1161,13 @@ impl Daemon {
 
     /// Send one wheel action after the overlay has made its pointer region
     /// transparent. Tests inject the wheel input through `perform`.
-    fn scroll_with<F>(&self, id: &str, action: ScrollAction, perform: F) -> Res<Reply>
+    fn scroll_with<F>(
+        &self,
+        id: &str,
+        action: ScrollAction,
+        pointer: &impl ScrollPointer,
+        perform: F,
+    ) -> Res<Reply>
     where
         F: FnOnce(
             &Target,
@@ -1145,7 +1199,7 @@ impl Daemon {
         if capture_pointer
             && let Some(restore) = target
                 .as_ref()
-                .and_then(|target| scroll_restore_candidate(target, test))
+                .and_then(|target| pointer.capture(target, test))
         {
             let mut sessions = self.sessions.lock().map_err(|_| internal("session lock"))?;
             if let Some(entry) = sessions.get_mut(id)
@@ -1206,7 +1260,7 @@ impl Daemon {
         self.changed.notify_all();
         if let Some((monitor, point)) = restore
             && let Err(error) =
-                under_pointer(&self.pointer_action, || pointer::move_to(&monitor, point))
+                under_pointer(&self.pointer_action, || pointer.move_to(&monitor, point))
         {
             if !closing {
                 let mut sessions = self.sessions.lock().map_err(|_| internal("session lock"))?;
@@ -1227,7 +1281,7 @@ impl Daemon {
             }
         }
         if closing {
-            self.finish(id);
+            self.finish_with(id, |monitor, point| pointer.move_to(monitor, point));
             return Err(fail(ErrorKind::BadRequest, "scroll session was closed"));
         }
         reply.ok_or_else(|| internal("scroll action reply was not created"))
@@ -1359,6 +1413,9 @@ impl Daemon {
             let Some(entry) = sessions.get_mut(id) else {
                 return;
             };
+            // A close or Escape cancels a wheel action not yet sent, as
+            // nothing else would ever take its pending count back.
+            entry.cancel_queued_scroll();
             if entry.pending > 0 {
                 entry.closing = true;
                 self.changed.notify_all();
@@ -4265,5 +4322,349 @@ mod tests {
             .map(|entry| entry.unwrap().file_name())
             .collect();
         assert_eq!(names, vec![std::ffi::OsString::from(protocol::SOCKET_NAME)]);
+    }
+
+    /// A pointer that starts at `at` and records every move back.
+    struct RecordingPointer {
+        at: (i32, i32),
+        moves: Mutex<Vec<(i32, i32)>>,
+    }
+
+    impl RecordingPointer {
+        fn at(at: (i32, i32)) -> Self {
+            RecordingPointer {
+                at,
+                moves: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn moves(&self) -> Vec<(i32, i32)> {
+            self.moves.lock().unwrap().clone()
+        }
+    }
+
+    impl super::ScrollPointer for RecordingPointer {
+        fn capture(&self, _: &Target, _: bool) -> Option<(Monitor, (i32, i32))> {
+            Some((lifecycle_monitor(), self.at))
+        }
+
+        fn move_to(&self, _: &Monitor, point: (i32, i32)) -> Result<(), String> {
+            self.moves.lock().unwrap().push(point);
+            Ok(())
+        }
+    }
+
+    fn lifecycle_monitor() -> Monitor {
+        Monitor {
+            name: "M".into(),
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+            scale: 1.0,
+            layers: Vec::new(),
+        }
+    }
+
+    /// A scroll session showing one area, as `start` makes it.
+    fn scroll_daemon() -> Arc<Daemon> {
+        daemon_with_entry(Entry {
+            session: Session::new_scroll(vec![Target {
+                id: "pane".into(),
+                bounds: Rect::new(20, 30, 40, 20),
+                role: Role::ScrollArea,
+                text: "Document".into(),
+                source: TargetSource::Atspi,
+                actions: vec![ActionKind::Scroll],
+                window: String::new(),
+                check: None,
+            }]),
+            window: None,
+            monitor: lifecycle_monitor(),
+            status: "1 scroll area".into(),
+            collecting: false,
+            overlay_bounds: None,
+            overlay: true,
+            test: true,
+            hidden: false,
+            created: Instant::now(),
+            timing: Timing::default(),
+            pending: 0,
+            clicked: false,
+            workspace_changed: false,
+            closing: false,
+            restore: None,
+            scroll_restore: None,
+            scroll_released: true,
+        })
+    }
+
+    fn press(daemon: &Arc<Daemon>, key: &str) {
+        let generation = daemon.sessions.lock().unwrap()["s1"].session.generation;
+        daemon
+            .key("s1", key, false, false, generation)
+            .expect("the key is taken");
+    }
+
+    fn pending(daemon: &Daemon) -> u8 {
+        daemon.sessions.lock().unwrap()["s1"].pending
+    }
+
+    fn wheel_ok(
+        _: &Target,
+        _: Option<&Window>,
+        _: &Monitor,
+        _: thodu_core::session::ScrollAction,
+        _: bool,
+    ) -> Result<(), ScrollFailure> {
+        Ok(())
+    }
+
+    // REQ-ACT-04 and REQ-ACT-06: keys that arrive while a scroll waits for
+    // pass-through are ignored and leave one action pending, so the
+    // release restores the pointer.
+    #[test]
+    fn req_act_04_keys_during_a_queued_scroll_leave_one_pending() {
+        let daemon = scroll_daemon();
+        let pointer = RecordingPointer::at((5, 7));
+        press(&daemon, "j");
+        assert_eq!(pending(&daemon), 1);
+        for key in ["j", "k", "Tab", "1"] {
+            press(&daemon, key);
+        }
+        assert_eq!(pending(&daemon), 1, "ignored keys queue nothing");
+        daemon
+            .scroll_ready_using("s1", &pointer, wheel_ok)
+            .expect("the wheel action runs");
+        assert_eq!(pending(&daemon), 0);
+        assert!(pointer.moves().is_empty(), "the hold goes on");
+
+        let restored = Mutex::new(Vec::new());
+        daemon
+            .scroll_stop_with("s1", |_, point| {
+                restored.lock().unwrap().push(point);
+                Ok(())
+            })
+            .expect("the release is taken");
+        assert_eq!(*restored.lock().unwrap(), [(5, 7)], "the release restores");
+    }
+
+    // REQ-ACT-06: a release before pass-through, then an ignored key, still
+    // ends the hold, so the wheel action restores the pointer after it.
+    #[test]
+    fn req_act_06_an_ignored_key_after_release_keeps_the_release() {
+        let daemon = scroll_daemon();
+        let pointer = RecordingPointer::at((5, 7));
+        press(&daemon, "j");
+        daemon
+            .scroll_stop_with("s1", |_, _| panic!("a wheel action is still pending"))
+            .expect("the release is taken");
+        press(&daemon, "j");
+        daemon
+            .scroll_ready_using("s1", &pointer, wheel_ok)
+            .expect("the wheel action runs");
+        assert_eq!(pointer.moves(), [(5, 7)], "the released hold restores");
+        assert_eq!(pending(&daemon), 0);
+    }
+
+    // REQ-ACT-04: `close` cancels a scroll still waiting for pass-through
+    // and removes the session, as Escape does.
+    #[test]
+    fn req_act_04_close_cancels_a_queued_scroll() {
+        let daemon = scroll_daemon();
+        press(&daemon, "j");
+        press(&daemon, "j");
+        let reply = daemon.handle(r#"{"v":1,"op":"close","session":"s1"}"#);
+        assert!(reply.ok);
+        assert!(
+            daemon.sessions.lock().unwrap().get("s1").is_none(),
+            "the session is gone at once, not at the prune"
+        );
+    }
+
+    // REQ-ACT-06: Escape during a queued scroll, after keys it ignored,
+    // removes the session at once.
+    #[test]
+    fn req_act_06_escape_after_ignored_keys_removes_the_session() {
+        let daemon = scroll_daemon();
+        press(&daemon, "j");
+        press(&daemon, "k");
+        press(&daemon, "Escape");
+        assert!(daemon.sessions.lock().unwrap().get("s1").is_none());
+    }
+
+    // REQ-ACT-06: a session replaced while its next scroll waits for
+    // pass-through is closed, and the pointer goes back to where it was
+    // before the session.
+    #[test]
+    fn req_act_06_a_session_replaced_while_a_scroll_waits_restores_the_pointer() {
+        let daemon = scroll_daemon();
+        let pointer = RecordingPointer::at((5, 7));
+        press(&daemon, "j");
+        daemon
+            .scroll_ready_using("s1", &pointer, wheel_ok)
+            .expect("the first wheel action runs");
+        press(&daemon, "j");
+        daemon.finish_with("s1", |monitor, point| {
+            super::ScrollPointer::move_to(&pointer, monitor, point)
+        });
+        assert!(daemon.sessions.lock().unwrap().get("s1").is_none());
+        assert_eq!(pointer.moves(), [(5, 7)]);
+    }
+
+    // REQ-ACT-06: a session closed while its wheel action runs ends when the
+    // action does, with the pointer back where it was before the session.
+    #[test]
+    fn req_act_06_a_session_replaced_mid_scroll_restores_the_pointer() {
+        let daemon = scroll_daemon();
+        let pointer = RecordingPointer::at((5, 7));
+        press(&daemon, "j");
+        let closer = Arc::clone(&daemon);
+        let result = daemon.scroll_ready_using("s1", &pointer, |_, _, _, _, _| {
+            closer.finish_with("s1", |_, _| panic!("the wheel action owns the restore"));
+            Ok(())
+        });
+        assert!(result.is_err(), "the closed session gives no view");
+        assert!(daemon.sessions.lock().unwrap().get("s1").is_none());
+        assert_eq!(pointer.moves(), [(5, 7)]);
+    }
+
+    /// Send `request` on `stream` and wait for its reply line.
+    fn ask(stream: &mut std::os::unix::net::UnixStream, request: &str) -> String {
+        use std::io::{BufRead, Write};
+        stream.write_all(request.as_bytes()).unwrap();
+        stream.write_all(b"\n").unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(stream.try_clone().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        line
+    }
+
+    /// The overlay's two connections: requests, and the heartbeat's own.
+    fn overlay_connections(
+        daemon: &Arc<Daemon>,
+    ) -> (
+        std::os::unix::net::UnixStream,
+        std::os::unix::net::UnixStream,
+    ) {
+        let mut ours = Vec::new();
+        for _ in 0..2 {
+            let (mine, theirs) = std::os::unix::net::UnixStream::pair().unwrap();
+            let daemon = Arc::clone(daemon);
+            std::thread::spawn(move || super::serve(&daemon, theirs));
+            ours.push(mine);
+        }
+        let heartbeat = ours.pop().unwrap();
+        (ours.pop().unwrap(), heartbeat)
+    }
+
+    // REQ-SESSION-03: a heartbeat on its own connection is answered while
+    // `hidden` waits its 400 ms for a click on the requests connection.
+    #[test]
+    fn req_session_03_heartbeat_is_answered_while_hidden_waits() {
+        let monitor = lifecycle_monitor();
+        let mut session = Session::new(
+            vec![Target {
+                id: "b".into(),
+                bounds: Rect::new(20, 30, 40, 20),
+                role: Role::Button,
+                text: "Open".into(),
+                source: TargetSource::Atspi,
+                actions: vec![ActionKind::Click],
+                window: String::new(),
+                check: None,
+            }],
+            false,
+        );
+        session.state = State::Acting;
+        session.act = Some(thodu_core::session::Act {
+            linger: true,
+            again: false,
+            ..second_click()
+        });
+        let daemon = daemon_with_entry(Entry {
+            session,
+            window: None,
+            monitor,
+            status: String::new(),
+            collecting: false,
+            overlay_bounds: None,
+            overlay: true,
+            test: true,
+            hidden: false,
+            created: Instant::now(),
+            timing: Timing::default(),
+            pending: 1,
+            clicked: false,
+            workspace_changed: false,
+            closing: false,
+            restore: None,
+            scroll_restore: None,
+            scroll_released: true,
+        });
+        let (requests, mut heartbeat) = overlay_connections(&daemon);
+        let (done, waited) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut requests = requests;
+            let started = Instant::now();
+            ask(&mut requests, r#"{"v":1,"op":"hidden","session":"s1"}"#);
+            done.send(started.elapsed()).unwrap();
+        });
+        std::thread::sleep(Duration::from_millis(50));
+        let asked = Instant::now();
+        let reply = ask(
+            &mut heartbeat,
+            r#"{"v":1,"op":"session","session":"s1","brief":true}"#,
+        );
+        let answered = asked.elapsed();
+        assert!(reply.contains(r#""ok":true"#), "{reply}");
+        let hidden = waited.recv().unwrap();
+        assert!(
+            hidden >= Duration::from_millis(350),
+            "hidden waited {hidden:?}"
+        );
+        assert!(
+            answered < Duration::from_millis(200),
+            "the heartbeat took {answered:?} behind hidden"
+        );
+    }
+
+    // REQ-SESSION-03: a heartbeat on its own connection is answered while
+    // the first scroll-ready opens the wheel and sends its action.
+    #[test]
+    fn req_session_03_heartbeat_is_answered_while_the_first_scroll_runs() {
+        let daemon = scroll_daemon();
+        press(&daemon, "j");
+        let (_requests, mut heartbeat) = overlay_connections(&daemon);
+        let (running, started) = mpsc::channel();
+        let (finished, release) = mpsc::channel::<()>();
+        let worker = Arc::clone(&daemon);
+        let scroll = std::thread::spawn(move || {
+            let pointer = RecordingPointer::at((5, 7));
+            worker
+                .scroll_ready_using("s1", &pointer, |_, _, _, _, _| {
+                    running.send(()).unwrap();
+                    // As long as Wheel::open's settle and the focus override.
+                    let _ = release.recv_timeout(Duration::from_millis(400));
+                    Ok(())
+                })
+                .map(|_| ())
+                .map_err(|_| ())
+        });
+        started.recv().unwrap();
+        let asked = Instant::now();
+        let reply = ask(
+            &mut heartbeat,
+            r#"{"v":1,"op":"session","session":"s1","brief":true}"#,
+        );
+        let answered = asked.elapsed();
+        finished.send(()).ok();
+        scroll.join().unwrap().unwrap();
+        assert!(reply.contains(r#""ok":true"#), "{reply}");
+        assert!(
+            answered < Duration::from_millis(200),
+            "the heartbeat took {answered:?} behind scroll-ready"
+        );
     }
 }
