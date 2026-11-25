@@ -295,8 +295,24 @@ fn run_bounded(mut command: Command, limit: Duration) -> Result<Vec<u8>, String>
         Ok(Err(_)) => return stop(child, "grim output could not be read"),
         Err(_) => return stop(child, "grim did not capture in time"),
     };
-    // The output is complete; grim exits right after it, but a process
-    // that closed its output and lingers is held to the same limit.
+    exit_status(child, bytes, until)
+}
+
+/// How long a capture whose output is already complete gets to exit, even
+/// at or past its limit. grim exits within a millisecond of closing its
+/// output, so a few milliseconds keep a capture that finished right at its
+/// limit without letting a process that lingers run on.
+const EXIT_GRACE: Duration = Duration::from_millis(10);
+
+/// The complete output of `child`, once it exits successfully by `until`
+/// or within EXIT_GRACE of now; a child still running after both is
+/// killed.
+fn exit_status(
+    mut child: std::process::Child,
+    bytes: Vec<u8>,
+    until: Instant,
+) -> Result<Vec<u8>, String> {
+    let until = until.max(Instant::now() + EXIT_GRACE);
     loop {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => return Ok(bytes),
@@ -307,7 +323,11 @@ fn run_bounded(mut command: Command, limit: Duration) -> Result<Vec<u8>, String>
                 ));
             }
             Ok(None) if Instant::now() < until => thread::sleep(Duration::from_millis(1)),
-            _ => return stop(child, "grim did not capture in time"),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("grim did not capture in time".into());
+            }
         }
     }
 }
@@ -1046,5 +1066,28 @@ mod tests {
         assert!(took < Duration::from_millis(1000), "waited {took:?}");
         assert_eq!(next.targets.len(), 1, "{}", next.status);
         late.join().expect("the late worker").expect("its result");
+    }
+
+    // REQ-SRC-06: a capture whose output is complete at its limit is kept
+    // if it exits within the grace, while one that lingers is still killed.
+    #[test]
+    fn req_src_06_a_capture_complete_at_its_limit_is_kept() {
+        let exited = std::process::Command::new("true")
+            .spawn()
+            .expect("true starts");
+        assert_eq!(
+            super::exit_status(exited, b"png".to_vec(), Instant::now()),
+            Ok(b"png".to_vec())
+        );
+        let lingering = std::process::Command::new("sleep")
+            .arg("5")
+            .spawn()
+            .expect("sleep starts");
+        let started = Instant::now();
+        assert_eq!(
+            super::exit_status(lingering, b"png".to_vec(), Instant::now()),
+            Err("grim did not capture in time".to_string())
+        );
+        assert!(started.elapsed() < Duration::from_millis(500));
     }
 }
