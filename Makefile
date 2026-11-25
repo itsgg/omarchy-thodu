@@ -9,9 +9,13 @@ PLUGIN_FILES := $(shell sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$$/d' plugi
 check:
 	@tools/gate
 
+# Only the listed files and their directories are copied; anything else in
+# DEST, or beside them here, is left out or removed.
+PLUGIN_DIRS := $(sort $(filter-out ./,$(dir $(PLUGIN_FILES))))
+
 install:
 	@mkdir -p "$(DEST)"
-	@rsync -a --checksum --delete $(PLUGIN_FILES) "$(DEST)/"
+	@rsync -a --checksum --delete-excluded $(addprefix --include=/,$(PLUGIN_DIRS) $(PLUGIN_FILES)) --exclude='*' ./ "$(DEST)/"
 	@echo "installed; enable with: omarchy plugin enable $(PLUGIN_ID)"
 
 reload:

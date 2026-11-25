@@ -1,5 +1,16 @@
+# The plugin's files, one per line, as thodu install and make install copy
+# them. Name each file: a directory is refused, so a stray or untracked file
+# beside them (an editor's lock or swap file) is never shipped. A test checks
+# that this list matches the plugin files git tracks.
 manifest.json
 Thodu.qml
 BarProbe.qml
-components
-lib
+components/BarMenu.qml
+components/Client.qml
+components/FocusPolicy.qml
+components/Listener.qml
+components/SessionView.qml
+components/WorkspaceGuard.qml
+lib/BarMenuActions.js
+lib/BarScan.js
+lib/BarSettings.js

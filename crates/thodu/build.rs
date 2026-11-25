@@ -2,36 +2,22 @@ use std::env;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-fn visit(path: &Path, root: &Path, files: &mut Vec<String>) {
-    let metadata = fs::symlink_metadata(path).expect("read plugin asset metadata");
-    if metadata.file_type().is_symlink() {
-        panic!("plugin assets cannot be symlinks: {}", path.display());
-    }
+/// One listed plugin file. Only the files plugin-files.txt names are
+/// embedded, so nothing else under components/ or lib/ (an editor's lock
+/// symlink, a swap file, an untracked draft) is read or shipped. A listed
+/// path that is not a regular file is an error with what to change.
+fn listed_file(source: &Path, line: &str, files: &mut Vec<String>) {
+    let metadata = fs::symlink_metadata(source).unwrap_or_else(|e| {
+        panic!("plugin-files.txt lists {line}, which cannot be read: {e}; fix the list")
+    });
     if metadata.is_dir() {
-        println!("cargo:rerun-if-changed={}", path.display());
-        let mut entries: Vec<_> = fs::read_dir(path)
-            .expect("read plugin asset directory")
-            .map(|entry| entry.expect("read plugin asset entry").path())
-            .collect();
-        entries.sort();
-        for entry in entries {
-            visit(&entry, root, files);
-        }
-    } else if metadata.is_file() {
-        println!("cargo:rerun-if-changed={}", path.display());
-        let relative = path
-            .strip_prefix(root)
-            .expect("plugin asset is under repository root")
-            .to_str()
-            .expect("plugin asset path is UTF-8")
-            .replace('\\', "/");
-        files.push(relative);
-    } else {
-        panic!(
-            "plugin assets must be files or directories: {}",
-            path.display()
-        );
+        panic!("plugin-files.txt lists the directory {line}; name each file in it instead");
     }
+    if !metadata.is_file() {
+        panic!("plugin-files.txt lists {line}, which is not a regular file; list the file itself");
+    }
+    println!("cargo:rerun-if-changed={}", source.display());
+    files.push(line.to_string());
 }
 
 fn main() {
@@ -58,8 +44,7 @@ fn main() {
         {
             panic!("plugin asset path must stay under repository root: {line}");
         }
-        let source = root.join(relative);
-        visit(&source, &root, &mut files);
+        listed_file(&root.join(relative), line, &mut files);
     }
     files.sort();
     files.dedup();
