@@ -61,6 +61,12 @@ FocusScope {
     // A brief session request this often tells a live thodud from a dead
     // one, and shows changes made by keys sent over the IPC in test mode.
     property int heartbeatMs: 200
+    // Replies taken on the requests connection, and for each heartbeat
+    // still out, its session and that count when it was sent. Heartbeats go
+    // on a connection of their own, so a slow request cannot hold them past
+    // the silence limit, and their replies can overtake a request's.
+    property int replySerial: 0
+    property var heartbeatMarks: []
     // REQ-SESSION-03: this long without a reply ends the session, inside
     // the second the spec allows.
     property int silenceMs: 800
@@ -76,6 +82,9 @@ FocusScope {
     property string fontFamily: "monospace"
 
     signal send(var request)
+    // A heartbeat, for a connection that no other request waits on; its
+    // reply comes back through applyHeartbeat.
+    signal heartbeat(var request)
     // Why the session ended, and whether thodud now acts: the overlay must
     // then hide and say so with a hidden request.
     signal finished(string why, bool acting)
@@ -90,6 +99,10 @@ FocusScope {
     // Start drawing session `id`; `reply` is its full session reply when
     // thodud pushed it, else the view asks for it.
     function begin(id, reply) {
+        // A session still open, as one whose end waits on a scroll, is
+        // closed first, so thodud ends it and puts the pointer back.
+        if (view.active)
+            view.end("replaced", false);
         view.session = id;
         view.targets = [];
         view.loaded = false;
@@ -134,8 +147,10 @@ FocusScope {
     function end(why, acting) {
         if (!view.active)
             return;
+        // A replaced session cannot wait for its scroll: the next one
+        // takes the view, so it ends now and thodud closes it.
         if (view.scrollMode && view.scrollBusy && why !== "thodud stopped answering" &&
-                why !== "thodud closed the connection" && why !== "escape") {
+                why !== "thodud closed the connection" && why !== "escape" && why !== "replaced") {
             view.stopScrollHold("");
             view.deferredEnd = { why: why, acting: acting };
             return;
@@ -156,6 +171,7 @@ FocusScope {
     }
 
     function apply(reply) {
+        view.replySerial += 1;
         if (!view.active || !reply)
             return;
         if (reply.session !== undefined && reply.session !== view.session)
@@ -255,6 +271,37 @@ FocusScope {
                     view.submitKeyRequest(request);
             }
         }
+    }
+
+    function sendHeartbeat() {
+        view.heartbeatMarks = view.heartbeatMarks.concat([{ session: view.session, serial: view.replySerial }]);
+        view.heartbeat({ op: "session", session: view.session, brief: true });
+    }
+
+    // A heartbeat's reply. Its view is newer than every reply already taken
+    // only when no request's reply came while it was out; otherwise it shows
+    // only that thodud answers. Replies are in order on its connection.
+    function applyHeartbeat(reply) {
+        const mark = view.heartbeatMarks.length > 0 ? view.heartbeatMarks[0] : null;
+        view.heartbeatMarks = view.heartbeatMarks.slice(1);
+        if (!view.active || !reply || mark === null || mark.session !== view.session)
+            return;
+        if (reply.session !== undefined && reply.session !== view.session)
+            return;
+        if (mark.serial === view.replySerial) {
+            view.apply(reply);
+            view.replySerial = mark.serial;
+        } else if (reply.ok) {
+            silence.restart();
+        } else {
+            view.apply(reply);
+        }
+    }
+
+    // The heartbeat connection was lost or replaced: no reply is coming
+    // for the heartbeats out on it.
+    function resetHeartbeats() {
+        view.heartbeatMarks = [];
     }
 
     // A key as SPEC section 7 names it, or null for keys a session ignores.
@@ -519,7 +566,7 @@ FocusScope {
         interval: view.heartbeatMs
         repeat: true
         running: view.active
-        onTriggered: view.send({ op: "session", session: view.session, brief: true })
+        onTriggered: view.sendHeartbeat()
     }
 
     Timer {

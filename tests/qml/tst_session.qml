@@ -38,9 +38,49 @@ Item {
             status: "2 targets from atspi in 3 ms"
         })
 
+    // How long the fake takes over each request, in order, as a slow
+    // hidden or first scroll-ready does; heartbeats have their own line.
+    property int requestLagMs: 0
+    property var lagged: []
+
+    property bool heartbeatsAnswered: true
+
+    function answerHeartbeat(request) {
+        if (!top.answering || !top.heartbeatsAnswered)
+            return;
+        const reply = { v: 1, ok: true, session: "s1", view: top.shownView };
+        Qt.callLater(() => {
+            top.lastReplyAt = Date.now();
+            view.applyHeartbeat(reply);
+        });
+    }
+
     function answer(request) {
         if (!top.answering)
             return;
+        if (top.requestLagMs > 0) {
+            top.lagged = top.lagged.concat([request]);
+            if (!requestLag.running)
+                requestLag.start();
+            return;
+        }
+        top.respond(request);
+    }
+
+    Timer {
+        id: requestLag
+        interval: top.requestLagMs
+        onTriggered: {
+            const request = top.lagged[0];
+            top.lagged = top.lagged.slice(1);
+            if (top.lagged.length > 0)
+                requestLag.start();
+            if (top.answering)
+                top.respond(request);
+        }
+    }
+
+    function respond(request) {
         let reply;
         if (request.op === "session" && !request.brief) {
             reply = top.fallbackReply || top.fullReply;
@@ -85,6 +125,10 @@ Item {
             top.sent.push(request);
             top.answer(request);
         }
+        onHeartbeat: request => {
+            top.sent.push(request);
+            top.answerHeartbeat(request);
+        }
         onFinished: (why, acting) => top.ended = { why: why, acting: acting }
     }
 
@@ -115,6 +159,11 @@ Item {
             top.fallbackReply = null;
             top.sawScrollPassThrough = false;
             top.scrollReplyStatus = "";
+            top.requestLagMs = 0;
+            top.lagged = [];
+            top.heartbeatsAnswered = true;
+            view.heartbeatMs = 50;
+            requestLag.stop();
             focusPolicy.testing = false;
             focusPolicy.keyboardFocusMode = 23;
             view.statusTimeoutMs = 2000;
@@ -281,6 +330,103 @@ Item {
 
         function test_req_session_03_connection_loss_during_scroll_releases_keyboard() {
             assert_req_session_03_daemon_loss_releases_busy_scroll("thodud closed the connection");
+        }
+
+        // REQ-SESSION-03: a request thodud takes its time over, as a 400 ms
+        // hidden, holds no heartbeat, so the session stays open.
+        function test_req_session_03_heartbeat_answered_behind_a_slow_request() {
+            top.requestLagMs = view.silenceMs + 200;
+            view.send({ op: "hidden", session: "s1" });
+            wait(view.silenceMs + 300);
+            verify(view.active, "the heartbeat kept the session while hidden waited");
+            verify(top.ended === null, "nothing ended the session");
+            compare(top.lagged.length, 0, "the slow request was answered");
+        }
+
+        // REQ-SESSION-03: the first scroll-ready, which opens the wheel and
+        // sets the focus override, holds no heartbeat either.
+        function test_req_session_03_heartbeat_answered_during_the_first_scroll() {
+            view.scrollMode = true;
+            top.nextState = "acting";
+            top.shownView = Object.assign({}, top.shownView, { scroll_mode: true, focused: "a0" });
+            keyPress(Qt.Key_J);
+            top.requestLagMs = view.silenceMs + 200;
+            tryVerify(() => top.lagged.some(r => r.op === "scroll-ready"), 1000, "scroll-ready is out");
+            wait(view.silenceMs + 100);
+            verify(view.active, "the heartbeat kept the session while the wheel opened");
+            tryVerify(() => !view.scrollBusy, 1000, "the scroll finished");
+            keyRelease(Qt.Key_J);
+            verify(view.active);
+        }
+
+        // REQ-SESSION-03: a heartbeat's view that a request's reply may have
+        // overtaken is not drawn, so it cannot reopen a finished scroll.
+        function test_req_session_03_an_overtaken_heartbeat_view_is_not_applied() {
+            view.heartbeatMs = 100000;
+            wait(20);
+            view.resetHeartbeats();
+            top.heartbeatsAnswered = false;
+            view.scrollMode = true;
+            const acting = Object.assign({}, top.shownView, { state: "acting", scroll_mode: true, focused: "a0" });
+            const showing = Object.assign({}, acting, { state: "showing" });
+
+            view.sendHeartbeat();
+            view.apply({ v: 1, ok: true, session: "s1", view: showing });
+            view.applyHeartbeat({ v: 1, ok: true, session: "s1", view: acting });
+            verify(!view.scrollPassThrough, "the older acting view is dropped");
+            verify(!view.scrollBusy);
+            verify(view.active);
+
+            view.sendHeartbeat();
+            view.applyHeartbeat({ v: 1, ok: true, session: "s1", view: Object.assign({}, showing, { focused: "a1" }) });
+            compare(view.focusedId, "a1", "a heartbeat no reply overtook is drawn");
+        }
+
+        // REQ-SESSION-03: a heartbeat for a session the view replaced, even
+        // an error, leaves the new session alone.
+        function test_req_session_03_a_replaced_sessions_heartbeat_is_ignored() {
+            view.heartbeatMs = 100000;
+            wait(20);
+            view.resetHeartbeats();
+            top.heartbeatsAnswered = false;
+            view.sendHeartbeat();
+            view.begin("s2", top.fullReply);
+            view.applyHeartbeat({ v: 1, ok: false, error: "bad-request", message: "no session s1" });
+            verify(view.active, "the old session's heartbeat did not end the new one");
+        }
+
+        // REQ-ACT-06: a session replaced while a scroll is in flight ends at
+        // once, so the overlay closes it in thodud and the pointer goes back.
+        function test_req_act_06_a_session_replaced_mid_scroll_ends_at_once() {
+            view.scrollMode = true;
+            top.nextState = "acting";
+            top.shownView = Object.assign({}, top.shownView, { scroll_mode: true, focused: "a0" });
+            keyPress(Qt.Key_J);
+            top.requestLagMs = 500;
+            tryVerify(() => top.lagged.some(r => r.op === "scroll-ready"), 1000, "scroll-ready is out");
+            verify(view.scrollBusy, "a scroll is in flight");
+            view.end("replaced", false);
+            verify(top.ended !== null, "the replaced session ended, not deferred");
+            compare(top.ended.why, "replaced");
+            keyRelease(Qt.Key_J);
+        }
+
+        // REQ-ACT-06: begin closes a session whose end still waits on its
+        // scroll, instead of dropping that end.
+        function test_req_act_06_begin_closes_a_session_waiting_on_its_scroll() {
+            view.scrollMode = true;
+            top.nextState = "acting";
+            top.shownView = Object.assign({}, top.shownView, { scroll_mode: true, focused: "a0" });
+            keyPress(Qt.Key_J);
+            top.requestLagMs = 500;
+            tryVerify(() => top.lagged.some(r => r.op === "scroll-ready"), 1000, "scroll-ready is out");
+            view.end("clicked away", false);
+            verify(top.ended === null, "the end waits for the scroll");
+            view.begin("s2", null);
+            verify(top.ended !== null, "the waiting session ended when replaced");
+            compare(top.ended.why, "replaced");
+            compare(view.session, "s2");
+            keyRelease(Qt.Key_J);
         }
 
         function test_heartbeats_keep_a_session_open() {

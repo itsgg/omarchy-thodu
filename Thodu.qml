@@ -45,6 +45,16 @@ Item {
     Component.onCompleted: {
         listener.start(root.socketPath);
         client.connectTo(root.socketPath);
+        root.connectHeartbeat(root.socketPath);
+    }
+
+    // The heartbeat's connection, apart from the requests', so a request
+    // that takes a while cannot hold it past the silence limit
+    // (REQ-SESSION-03).
+    function connectHeartbeat(socket) {
+        if (heartbeatClient.path !== socket)
+            view.resetHeartbeats();
+        heartbeatClient.connectTo(socket);
     }
 
     function open(payloadJson) {
@@ -77,6 +87,7 @@ Item {
         root.keyboardFocusMode = WlrKeyboardFocus.Exclusive;
         root.drawnSent = false;
         client.connectTo(socket);
+        root.connectHeartbeat(socket);
         root.opened = true;
         view.begin(session, reply);
         root.bindSessionWorkspace();
@@ -153,6 +164,15 @@ Item {
             view.apply(reply);
         }
         onLost: view.end("thodud closed the connection", false)
+    }
+
+    Client {
+        id: heartbeatClient
+        onReply: reply => view.applyHeartbeat(reply)
+        onLost: {
+            view.resetHeartbeats();
+            view.end("thodud closed the connection", false);
+        }
     }
 
     // The click waits for the overlay to go (REQ-ACT-01): the surface is
@@ -256,6 +276,7 @@ Item {
             fontFamily: Style.font.family
 
             onSend: request => client.send(request)
+            onHeartbeat: request => heartbeatClient.send(request)
             onScrollFrameRequested: view.Window.window.update()
             onLingered: {
                 // Hyprland's exclusive layer fallback catches pointer events
