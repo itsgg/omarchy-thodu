@@ -713,10 +713,18 @@ impl Daemon {
     fn labeled(entry: &Entry) -> Vec<LabeledTarget> {
         let s = &entry.session;
         let area = entry.monitor.logical();
+        let placed = labels::place_all(&s.targets, &s.labels, &area, |target| {
+            entry
+                .window
+                .as_ref()
+                .and_then(|scope| scope.windows.get(&target.window))
+                .map(Window::rect)
+        });
         s.targets
             .iter()
             .zip(&s.labels)
-            .map(|(t, label)| LabeledTarget {
+            .zip(placed)
+            .map(|((t, label), placed)| LabeledTarget {
                 id: t.id.clone(),
                 bounds: t.bounds,
                 role: t.role,
@@ -725,7 +733,7 @@ impl Daemon {
                 actions: t.actions.clone(),
                 window: t.window.clone(),
                 label: label.clone(),
-                placed: labels::place(&t.bounds, protocol::label_size(label.len()), &area),
+                placed,
             })
             .collect()
     }
@@ -2701,6 +2709,66 @@ mod tests {
             (probes == 3).then_some(2)
         }));
         assert_eq!(probes, 3);
+    }
+
+    // REQ-LABEL-02: the labels a session sends place image text beside it
+    // within the text's own window: a run ending near the window's right
+    // edge is labelled before its start, not past the window's edge.
+    #[test]
+    fn req_label_02_session_labels_keep_image_text_labels_in_their_window() {
+        let monitor = Monitor {
+            name: "M".into(),
+            x: 0,
+            y: 0,
+            width: 400,
+            height: 200,
+            scale: 1.0,
+            layers: Vec::new(),
+        };
+        let mut window = on(0);
+        window.at = (0, 0);
+        window.size = (200, 200);
+        let target = Target {
+            id: "0x1:i0".into(),
+            bounds: Rect::new(60, 40, 132, 12),
+            role: Role::Text,
+            text: String::new(),
+            source: TargetSource::Image,
+            actions: vec![ActionKind::Click],
+            window: window.address.clone(),
+            check: None,
+        };
+        let session = Session::new(vec![target.clone()], false);
+        let label = session.labels[0].clone();
+        let entry = Entry {
+            session,
+            window: Some(WindowScope {
+                windows: HashMap::from([(window.address.clone(), window.clone())]),
+                refetch_address: None,
+            }),
+            monitor,
+            status: "1 visual candidate".into(),
+            collecting: false,
+            overlay_bounds: None,
+            overlay: true,
+            test: true,
+            hidden: false,
+            created: Instant::now(),
+            timing: Timing::default(),
+            pending: 0,
+            clicked: false,
+            workspace_changed: false,
+            closing: false,
+            restore: None,
+            scroll_restore: None,
+            scroll_released: false,
+        };
+        let labeled = Daemon::labeled(&entry);
+        let (w, h) = protocol::text_label_size(label.len());
+        assert_eq!(
+            labeled[0].placed,
+            Rect::new(60 - labels::TEXT_LABEL_GAP - w, 40 + (12 - h) / 2, w, h)
+        );
     }
 
     // REQ-ACT-04: wheel input waits for pointer pass-through, then resumes

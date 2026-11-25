@@ -117,6 +117,36 @@ Item {
         return top.sent.filter(r => r.op === "key");
     }
 
+    // Text under the overlay, for the image text label test: light ink on
+    // a terminal's dark background, drawn only there.
+    Rectangle {
+        id: inkBed
+        visible: false
+        x: 240
+        y: 140
+        width: 260
+        height: 80
+        color: "#1e1e2e"
+
+        Rectangle {
+            objectName: "ink-under-text-label"
+            x: 121
+            y: 10
+            width: 4
+            height: 13
+            color: "#cdd6f4"
+        }
+
+        Rectangle {
+            objectName: "ink-under-opaque-label"
+            x: 121
+            y: 50
+            width: 4
+            height: 13
+            color: "#cdd6f4"
+        }
+    }
+
     SessionView {
         id: view
         anchors.fill: parent
@@ -583,6 +613,47 @@ Item {
             tryVerify(() => chip !== null && chip.imageDerived);
             compare(chip.color, view.imageBackground);
             compare(chip.border.color, view.imageBorder);
+        }
+
+        // REQ-LABEL-02: a label on image-detected text is drawn smaller; one
+        // beside the text is opaque, and one thodud had to place over the
+        // text is translucent, so the ink under it stays visible. The ink's
+        // contrast is measured in the rendered frame under each kind.
+        function test_req_label_02_image_text_labels_are_small_and_leave_text_visible() {
+            inkBed.visible = true;
+            const over = { id: "i0", bounds: { x: 300, y: 200, w: 200, h: 13 }, role: "text", text: "", source: "image",
+                           actions: ["click"], window: "0x2", label: "q", placed: { x: 460, y: 200, w: 40, h: 13 } };
+            const beside = { id: "i1", bounds: { x: 300, y: 260, w: 100, h: 13 }, role: "text", text: "", source: "image",
+                             actions: ["click"], window: "0x2", label: "w", placed: { x: 402, y: 260, w: 10, h: 13 } };
+            const control = { id: "i2", bounds: { x: 300, y: 240, w: 200, h: 30 }, role: "unknown", text: "", source: "image",
+                              actions: ["click"], window: "0x2", label: "e", placed: { x: 460, y: 240, w: 40, h: 13 } };
+            view.targets = [over, beside, control];
+            view.kept = { i0: true, i1: true, i2: true };
+            tryVerify(() => findChild(view, "label-q") !== null && findChild(view, "label-q").visible, 1000, "the labels are drawn");
+            const overChip = findChild(view, "label-q");
+            const besideChip = findChild(view, "label-w");
+            const controlChip = findChild(view, "label-e");
+            verify(overChip.imageText && overChip.overText);
+            verify(besideChip.imageText && !besideChip.overText);
+            verify(!controlChip.imageText);
+            compare(overChip.children[0].font.pixelSize, 10);
+            compare(besideChip.children[0].font.pixelSize, 10);
+            compare(controlChip.children[0].font.pixelSize, 12);
+            verify(overChip.color.a < 0.5, "the label over text is translucent");
+            compare(besideChip.color.a, 1);
+            compare(controlChip.color.a, 1);
+
+            const frame = grabImage(top);
+            const luma = c => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+            const contrast = (x, y) => Math.abs(luma(frame.pixel(x, y)) - luma(frame.pixel(x + 6, y)));
+            // Chips sit at placed minus the area's origin (100, 50); the ink
+            // stripes are at the chips' left edge plus one, inside the border.
+            const bare = Math.abs(luma(Qt.color("#cdd6f4")) - luma(Qt.color("#1e1e2e")));
+            const underText = contrast(460 - 100 + 2, 200 - 50 + 6);
+            const underOpaque = contrast(460 - 100 + 2, 240 - 50 + 6);
+            verify(underText > 0.5 * bare, "ink shows through the translucent label: " + underText + " of " + bare);
+            verify(underOpaque < 0.05 * bare, "an opaque label hides it: " + underOpaque);
+            inkBed.visible = false;
         }
 
         function test_acting_hands_over_to_thodud() {

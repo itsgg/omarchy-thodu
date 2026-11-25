@@ -79,6 +79,8 @@ FocusScope {
     property color scrollAccent: "#a6e3a1"
     property color imageBackground: "#332a16"
     property color imageBorder: "#fab387"
+    // How opaque the background of a label drawn over image text is.
+    property real textChipOpacity: 0.35
     property string fontFamily: "monospace"
 
     signal send(var request)
@@ -445,6 +447,10 @@ FocusScope {
         return view.targets.length > 0 && view.targets[0].source === "grid";
     }
 
+    function overlaps(a, b) {
+        return !!a && !!b && a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+    }
+
     function hintCue() {
         if (view.inGrid())
             return "";
@@ -708,6 +714,11 @@ FocusScope {
             required property var modelData
             readonly property bool focusedOne: view.focusedId === modelData.id
             readonly property bool imageDerived: modelData.source === "image"
+            // REQ-LABEL-02: a label on image-detected text is drawn smaller,
+            // beside the text; where thodud had to place it over the text it
+            // is translucent so the text shows through.
+            readonly property bool imageText: imageDerived && (modelData.role === "text" || modelData.role === "link")
+            readonly property bool overText: imageText && view.overlaps(modelData.placed, modelData.bounds)
             objectName: "label-" + modelData.label
             z: focusedOne ? 1 : 0
             visible: view.kept[modelData.id] === true && !view.lingering && !(view.zoomed && modelData.source === "grid")
@@ -716,7 +727,9 @@ FocusScope {
             width: modelData.placed.w
             height: modelData.placed.h
             radius: 3
-            color: focusedOne ? view.selectedBackground : imageDerived ? view.imageBackground : view.background
+            color: focusedOne ? view.selectedBackground : !imageDerived ? view.background
+                 : overText ? Qt.rgba(view.imageBackground.r, view.imageBackground.g, view.imageBackground.b, view.textChipOpacity)
+                 : view.imageBackground
             border.width: focusedOne ? 2 : 1
             border.color: focusedOne ? view.selectedText : imageDerived ? view.imageBorder : view.border
 
@@ -726,7 +739,7 @@ FocusScope {
                 textFormat: Text.StyledText
                 color: chip.focusedOne ? view.selectedText : chip.imageDerived ? view.imageBorder : view.foreground
                 font.family: view.fontFamily
-                font.pixelSize: 12
+                font.pixelSize: chip.imageText ? 10 : 12
                 font.bold: true
             }
         }

@@ -1,6 +1,7 @@
 //! Labels and where they are drawn (REQ-LABEL-01, REQ-LABEL-02).
 
-use crate::model::{Rect, Source, Target};
+use crate::model::{Rect, Role, Source, Target};
+use crate::protocol;
 
 /// The home row first, then the rest of the letters.
 pub const ALPHABET: &str = "asdfghjklqwertyuiopzxcvbnm";
@@ -80,4 +81,90 @@ pub fn place(target: &Rect, size: (i32, i32), monitor: &Rect) -> Rect {
     let x = x.clamp(monitor.x, (monitor.right() - w).max(monitor.x));
     let y = y.clamp(monitor.y, (monitor.bottom() - h).max(monitor.y));
     Rect::new(x, y, w, h)
+}
+
+/// Whether a target is text the image detector found, whose label is drawn
+/// small and beside the text so the text stays readable (REQ-LABEL-02).
+pub fn is_image_text(target: &Target) -> bool {
+    target.source == Source::Image && matches!(target.role, Role::Text | Role::Link)
+}
+
+/// The space between image text and the label beside it.
+pub const TEXT_LABEL_GAP: i32 = 2;
+
+/// REQ-LABEL-02: where the label of image text sits, centered on its line:
+/// just after the text's end when that spot lies inside `room` (the
+/// target's window on the monitor) and `free` says it overlaps no other
+/// target or label already placed, else just before its start on the same
+/// terms; otherwise over the end of the text,
+/// where the overlay draws it translucent. Either way it is kept on the
+/// monitor.
+pub fn place_text(
+    target: &Rect,
+    size: (i32, i32),
+    room: &Rect,
+    monitor: &Rect,
+    free: impl Fn(&Rect) -> bool,
+) -> Rect {
+    let (w, h) = size;
+    let y = target.y + (target.h - h) / 2;
+    let fits = |chip: &Rect| room.contains(chip) && monitor.contains(chip) && free(chip);
+    let after = Rect::new(target.right() + TEXT_LABEL_GAP, y, w, h);
+    if fits(&after) {
+        return after;
+    }
+    let before = Rect::new(target.x - TEXT_LABEL_GAP - w, y, w, h);
+    if fits(&before) {
+        return before;
+    }
+    let x = (target.right() - w).max(target.x);
+    let x = x.clamp(monitor.x, (monitor.right() - w).max(monitor.x));
+    let y = y.clamp(monitor.y, (monitor.bottom() - h).max(monitor.y));
+    Rect::new(x, y, w, h)
+}
+
+/// REQ-LABEL-02: where each target's label sits, for labels `labels` of the
+/// same targets on `monitor`. Image text is labelled by place_text with the
+/// smaller text label box, after every other label is placed by place;
+/// `room` gives a target's window, or None for the monitor alone.
+pub fn place_all(
+    targets: &[Target],
+    labels: &[String],
+    monitor: &Rect,
+    room: impl Fn(&Target) -> Option<Rect>,
+) -> Vec<Rect> {
+    let mut placed: Vec<Option<Rect>> = targets
+        .iter()
+        .zip(labels)
+        .map(|(target, label)| {
+            (!is_image_text(target))
+                .then(|| place(&target.bounds, protocol::label_size(label.len()), monitor))
+        })
+        .collect();
+    let mut taken: Vec<Rect> = placed.iter().flatten().copied().collect();
+    for (index, (target, label)) in targets.iter().zip(labels).enumerate() {
+        if placed[index].is_some() {
+            continue;
+        }
+        let room = room(target)
+            .and_then(|room| room.intersect(monitor))
+            .unwrap_or(*monitor);
+        let chip = place_text(
+            &target.bounds,
+            protocol::text_label_size(label.len()),
+            &room,
+            monitor,
+            |chip| {
+                let overlaps = |rect: &Rect| rect.intersect(chip).is_some();
+                !taken.iter().any(overlaps)
+                    && !targets
+                        .iter()
+                        .enumerate()
+                        .any(|(other, t)| other != index && overlaps(&t.bounds))
+            },
+        );
+        taken.push(chip);
+        placed[index] = Some(chip);
+    }
+    placed.into_iter().flatten().collect()
 }

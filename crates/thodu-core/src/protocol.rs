@@ -30,6 +30,11 @@ pub fn session_named(line: &str) -> Option<String> {
 pub const LABEL_HEIGHT: i32 = 18;
 pub const LABEL_CHAR_WIDTH: i32 = 9;
 pub const LABEL_PADDING: i32 = 8;
+/// The smaller box for labels on text the image detector found
+/// (REQ-LABEL-02), which sit beside the text rather than over it.
+pub const TEXT_LABEL_HEIGHT: i32 = 13;
+pub const TEXT_LABEL_CHAR_WIDTH: i32 = 6;
+pub const TEXT_LABEL_PADDING: i32 = 4;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "kebab-case")]
@@ -332,6 +337,14 @@ impl Reply {
 /// The label box for a label of `len` letters.
 pub const fn label_size(len: usize) -> (i32, i32) {
     (len as i32 * LABEL_CHAR_WIDTH + LABEL_PADDING, LABEL_HEIGHT)
+}
+
+/// The label box for a label of `len` letters on image-detected text.
+pub const fn text_label_size(len: usize) -> (i32, i32) {
+    (
+        len as i32 * TEXT_LABEL_CHAR_WIDTH + TEXT_LABEL_PADDING,
+        TEXT_LABEL_HEIGHT,
+    )
 }
 
 #[cfg(test)]

@@ -791,6 +791,40 @@ proptest! {
         }
     }
 
+    // REQ-LABEL-02: a label on image text sits right after the text or
+    // right before it, centered on its line, inside the target's window and
+    // clear of every other target and label; only when neither spot is free
+    // does it go over the end of the text. Always on the monitor.
+    #[test]
+    fn req_label_02_image_text_labels_sit_beside_their_text(
+        x in 0i32..1500, y in 0i32..900, w in 8i32..600, h in 6i32..20,
+        room_x in -50i32..200, room_w in 100i32..1600,
+        others in proptest::collection::vec((0i32..1536, 0i32..960, 4i32..200, 6i32..20), 0..6),
+        len in 1usize..4,
+    ) {
+        let screen = Rect::new(0, 0, 1536, 960);
+        let room = Rect::new(room_x, 0, room_w, 960);
+        let text = Rect::new(x, y, w, h);
+        let taken: Vec<Rect> = others.iter().map(|&(x, y, w, h)| Rect::new(x, y, w, h)).collect();
+        let size = thodu_core::protocol::text_label_size(len);
+        let free = |chip: &Rect| !taken.iter().any(|t| t.intersect(chip).is_some());
+        let placed = labels::place_text(&text, size, &room, &screen, free);
+        prop_assert!(screen.contains(&placed));
+        prop_assert_eq!((placed.w, placed.h), size);
+        let line = y + (h - size.1) / 2;
+        let after = Rect::new(text.right() + labels::TEXT_LABEL_GAP, line, size.0, size.1);
+        let before = Rect::new(text.x - labels::TEXT_LABEL_GAP - size.0, line, size.0, size.1);
+        let fits = |chip: &Rect| room.contains(chip) && screen.contains(chip) && free(chip);
+        if fits(&after) {
+            prop_assert_eq!(placed, after);
+        } else if fits(&before) {
+            prop_assert_eq!(placed, before);
+        } else if screen.contains(&text) && text.w >= size.0 {
+            prop_assert!(text.contains(&Rect::new(placed.x, text.y, placed.w, text.h)), "over the text's own end");
+            prop_assert_eq!(placed.right(), text.right());
+        }
+    }
+
     // SPEC section 5 invariant: logical to physical and back moves a point by at most one unit.
     #[test]
     fn invariant_coordinates_round_trip(px in 0i32..1536, py in 0i32..960) {
@@ -2299,4 +2333,76 @@ fn req_src_02_an_xwayland_frame_matches_by_its_logical_size() {
     assert_eq!(tree::match_frame_index(&xwayland, false), Some((0, 0)));
     let wayland = snapshot_with(false, physical());
     assert_eq!(tree::match_frame_index(&wayland, false), None);
+}
+
+// REQ-LABEL-02: in a whole session, image text gets the smaller text label
+// beside it, while every other target keeps the label place gives it, and
+// no label beside its text covers another target or label.
+#[test]
+fn req_label_02_place_all_labels_image_text_beside_and_others_on_targets() {
+    let target = |id: &str, bounds: Rect, role: Role, source: Source| Target {
+        id: id.into(),
+        bounds,
+        role,
+        text: String::new(),
+        source,
+        actions: vec![thodu_core::model::ActionKind::Click],
+        window: "0x1".into(),
+        check: None,
+    };
+    let screen = Rect::new(0, 0, 1536, 960);
+    let targets = vec![
+        target("b", Rect::new(10, 10, 80, 30), Role::Button, Source::Atspi),
+        target("t0", Rect::new(10, 100, 200, 12), Role::Text, Source::Image),
+        target(
+            "t1",
+            Rect::new(220, 100, 100, 12),
+            Role::Text,
+            Source::Image,
+        ),
+        target("t2", Rect::new(10, 130, 750, 12), Role::Text, Source::Image),
+        target(
+            "u",
+            Rect::new(400, 400, 10, 10),
+            Role::Unknown,
+            Source::Image,
+        ),
+    ];
+    let names: Vec<String> = ["a", "zaa", "zas", "zad", "zaf"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let window = Rect::new(0, 0, 768, 960);
+    let placed = labels::place_all(&targets, &names, &screen, |_| Some(window));
+    let size = thodu_core::protocol::text_label_size(3);
+    assert_eq!(
+        placed[0],
+        labels::place(
+            &targets[0].bounds,
+            thodu_core::protocol::label_size(1),
+            &screen
+        )
+    );
+    assert_eq!(
+        placed[4],
+        labels::place(
+            &targets[4].bounds,
+            thodu_core::protocol::label_size(3),
+            &screen
+        )
+    );
+    // t0 is followed too closely by t1, so its label goes before it if it can;
+    // at the window's edge it cannot, and goes over its own end.
+    assert_eq!(placed[1], Rect::new(210 - size.0, 100, size.0, size.1));
+    assert_eq!(placed[2], Rect::new(322, 100, size.0, size.1));
+    // t2 reaches the window's right edge and starts at its left one.
+    assert_eq!(placed[3], Rect::new(760 - size.0, 130, size.0, size.1));
+    for (i, chip) in placed.iter().enumerate() {
+        for (j, other) in placed.iter().enumerate() {
+            assert!(
+                i == j || chip.intersect(other).is_none(),
+                "{chip:?} and {other:?}"
+            );
+        }
+    }
 }
