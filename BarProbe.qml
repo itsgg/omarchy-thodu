@@ -22,6 +22,8 @@ BarWidget {
     property bool configDirectoryReady: false
     property bool configReady: false
     property bool settingsValid: true
+    // Why the last write of the configuration failed, shown in the menu.
+    property string saveError: ""
     property var options: BarSettings.defaults()
 
     readonly property string socketPath: Quickshell.env("XDG_RUNTIME_DIR") + "/thodu.sock"
@@ -101,8 +103,15 @@ BarWidget {
         const host = probe.bar;
         if (!host || typeof host.run !== "function")
             return;
-        if (probe.configText.trim() === "") {
-            const initial = BarSettings.defaultsText();
+        // Never write over a configuration that was not read.
+        const initial = BarSettings.editorStart({
+            configReady: probe.configReady,
+            configDirectoryReady: probe.configDirectoryReady,
+            configText: probe.configText
+        });
+        if (initial === null)
+            return;
+        if (initial !== "") {
             probe.configText = initial;
             probe.options = BarSettings.parse(initial);
             configFile.setText(initial);
@@ -165,12 +174,14 @@ BarWidget {
         settingsReady: probe.configReady && probe.settingsValid
         configEditable: probe.configReady
         configPath: probe.configPath
+        notice: probe.saveError
         onActionRequested: function(action) { probe.handleMenuAction(action) }
     }
 
     Client {
         id: client
         keepLatest: true
+        backoff: true
     }
 
     Process {
@@ -178,7 +189,13 @@ BarWidget {
         command: ["systemctl", "--user", "is-active", "thodud.service"]
         stdout: StdioCollector {
             waitForEnd: true
-            onStreamFinished: probe.serviceState = text.trim() || "inactive"
+            onStreamFinished: {
+                const was = probe.serviceState;
+                probe.serviceState = text.trim() || "inactive";
+                // thodud is back: connect at once instead of after the backoff.
+                if (probe.serviceState === "active" && was !== "active")
+                    client.retryNow();
+            }
         }
         onExited: function(exitCode) {
             if (exitCode !== 0 && probe.serviceState === "active")
@@ -228,6 +245,14 @@ BarWidget {
             }
         }
         onFileChanged: configFile.reload()
+        onSaved: probe.saveError = ""
+        // A write that failed leaves the file as it was: say so, and read it
+        // again so the menu shows what is really there.
+        onSaveFailed: function(error) {
+            probe.saveError = "Could not save " + probe.configPath + "; edit it to fix";
+            console.warn("thodu: cannot write " + probe.configPath + ": " + error);
+            configFile.reload();
+        }
     }
 
     // Rescan as soon as the bar's items may have moved, as well as every second.

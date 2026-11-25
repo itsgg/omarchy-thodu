@@ -14,3 +14,4 @@ components/WorkspaceGuard.qml
 lib/BarMenuActions.js
 lib/BarScan.js
 lib/BarSettings.js
+lib/Reconnect.js

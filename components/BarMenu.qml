@@ -24,6 +24,8 @@ Item {
     property bool settingsReady: false
     property bool configEditable: false
     property string configPath: ""
+    // A problem to show in place of the footer hint, such as a failed save.
+    property string notice: ""
     property int selectedIndex: 0
 
     signal actionRequested(var action)
@@ -40,7 +42,14 @@ Item {
         root.open = false;
     }
 
+    function rowEnabled(index) {
+        return Actions.enabledFor(index, root.options, root.settingsReady, root.configEditable);
+    }
+
+    // A disabled row does nothing, from the pointer or the keyboard.
     function dispatch(index, direction) {
+        if (!root.rowEnabled(index))
+            return;
         const action = Actions.actionFor(index, root.options, direction || 0);
         if (Actions.closesAfter(action))
             root.close();
@@ -49,6 +58,8 @@ Item {
 
     // A click on one option of a choice sets it directly; the keyboard steps.
     function choose(key, value) {
+        if (!root.settingsReady)
+            return;
         root.actionRequested({ kind: "setting", key: key, value: value });
     }
 
@@ -258,8 +269,10 @@ Item {
 
                 Text {
                     id: hint
+                    objectName: "thoduBarMenuHint"
                     textFormat: Text.PlainText
-                    text: root.settingsReady ? "Applies to new sessions" : "The configuration needs editing"
+                    text: root.notice !== "" ? root.notice
+                        : root.settingsReady ? "Applies to new sessions" : "The configuration needs editing"
                     color: Qt.darker(Commons.Color.foreground, 1.4)
                     font.family: Style.font.family
                     font.pixelSize: Style.font.caption
