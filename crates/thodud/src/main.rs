@@ -6,6 +6,7 @@ mod atspi;
 mod focus;
 mod hypr;
 mod image;
+mod ipc;
 mod keyboard;
 mod listeners;
 mod overlay;
@@ -14,7 +15,7 @@ mod sources;
 mod wheel;
 
 use std::collections::{HashMap, HashSet};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, ErrorKind as IoErrorKind, Write};
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -149,7 +150,11 @@ fn accept_until_done(
         match ready {
             Ok(true) => match listener.get_ref().accept() {
                 Ok((stream, _)) => serve_client(stream),
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                // Another wakeup took the client, or it left before it was
+                // taken: nothing is wrong with the listener.
+                Err(e) if accept_error_passes(e.kind()) => {}
+                // Anything else, such as running out of descriptors, is
+                // fatal: thodud exits 1 so the service restarts it.
                 Err(e) => return Ended::Failed(e.to_string()),
             },
             Ok(false) => {}
@@ -159,6 +164,14 @@ fn accept_until_done(
             return Ended::SocketLost;
         }
     }
+}
+
+/// Whether an accept error leaves the listener sound.
+fn accept_error_passes(kind: IoErrorKind) -> bool {
+    matches!(
+        kind,
+        IoErrorKind::WouldBlock | IoErrorKind::Interrupted | IoErrorKind::ConnectionAborted
+    )
 }
 
 struct WindowScope {
@@ -834,10 +847,7 @@ impl Daemon {
                 .keyboard
                 .lock()
                 .map_err(|_| "keyboard lock".to_string())?;
-            if keyboard.is_none() {
-                *keyboard = Some(keyboard::Keyboard::open()?);
-            }
-            keyboard.as_mut().ok_or("no keyboard")?.ctrl(down)
+            keyboard::set_ctrl(&mut keyboard, down, keyboard::Keyboard::open)
         };
         pointer::perform(monitor, &input::plan(act), restore, &mut ctrl)
     }
@@ -1498,7 +1508,18 @@ impl Daemon {
         })
     }
 
+    /// The reply to one request line. An error for a request that names a
+    /// session carries that session, so an overlay showing a newer one can
+    /// tell a late error for an old session from one for its own.
     fn handle(self: &Arc<Self>, line: &str) -> Reply {
+        let mut reply = self.handle_request(line);
+        if !reply.ok && reply.session.is_none() {
+            reply.session = protocol::session_named(line);
+        }
+        reply
+    }
+
+    fn handle_request(self: &Arc<Self>, line: &str) -> Reply {
         let envelope: Envelope = match serde_json::from_str(line) {
             Ok(e) => e,
             Err(e) => return Reply::error(ErrorKind::BadRequest, format!("not a request: {e}")),
@@ -2035,8 +2056,30 @@ fn serve(daemon: &Arc<Daemon>, stream: UnixStream) {
         return;
     };
     let mut writer = writer;
-    for line in BufReader::new(stream).lines() {
-        let Ok(line) = line else { return };
+    let mut requests = ipc::Requests::new(stream, ipc::LIMITS);
+    loop {
+        let line = match requests.next_line() {
+            ipc::Next::Line(line) => line,
+            ipc::Next::TooLong => {
+                let reply = Reply::error(
+                    ErrorKind::BadRequest,
+                    format!(
+                        "a request longer than {} bytes; thodud closed the connection",
+                        ipc::LIMITS.max
+                    ),
+                );
+                if let Ok(mut text) = serde_json::to_string(&reply) {
+                    text.push('\n');
+                    let _ = writer.write_all(text.as_bytes());
+                }
+                // The reply, then the end of file, reach the client before
+                // the socket closes on the rest of its line.
+                let _ = writer.shutdown(std::net::Shutdown::Write);
+                requests.discard(ipc::LIMITS.line);
+                return;
+            }
+            ipc::Next::Closed | ipc::Next::Silent => return,
+        };
         if line.trim().is_empty() {
             continue;
         }

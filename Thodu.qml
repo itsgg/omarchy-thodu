@@ -42,11 +42,10 @@ Item {
         keyboardFocusMode: root.keyboardFocusMode
     }
 
-    Component.onCompleted: {
-        listener.start(root.socketPath);
-        client.connectTo(root.socketPath);
-        root.connectHeartbeat(root.socketPath);
-    }
+    // The request and heartbeat connections are made when a session is
+    // shown: thodud cuts off a connection that sends nothing (SPEC section
+    // 7), and one made at load would be idle until the first session.
+    Component.onCompleted: listener.start(root.socketPath)
 
     // The heartbeat's connection, apart from the requests', so a request
     // that takes a while cannot hold it past the silence limit
@@ -156,10 +155,10 @@ Item {
     Client {
         id: client
         onReply: reply => {
-            if (reply.clicked === true && reply.session === root.hiddenClickSession) {
-                root.hiddenClickSession = "";
-                if (reply.workspace_changed !== true)
+            if (reply.clicked !== undefined && reply.session === root.hiddenClickSession) {
+                if (focusPolicy.reclaimsAfterClick(reply, root.hiddenClickSession, view.session, view.lingering))
                     root.keyboardFocusMode = WlrKeyboardFocus.Exclusive;
+                root.hiddenClickSession = "";
             }
             view.apply(reply);
         }

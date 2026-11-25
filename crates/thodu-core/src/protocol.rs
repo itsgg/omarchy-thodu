@@ -15,6 +15,16 @@ pub const SOCKET_NAME: &str = "thodu.sock";
 pub fn hyprland_socket_path(runtime: &Path, signature: &str) -> PathBuf {
     runtime.join("hypr").join(signature).join(".socket.sock")
 }
+/// The session a request line names, if it names one, even when the line is
+/// not a valid request: an error reply carries it.
+pub fn session_named(line: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()?
+        .get("session")?
+        .as_str()
+        .map(str::to_string)
+}
+
 /// The label size `thodud` places labels for, in logical units: the overlay
 /// draws them in this box.
 pub const LABEL_HEIGHT: i32 = 18;
@@ -322,4 +332,28 @@ impl Reply {
 /// The label box for a label of `len` letters.
 pub const fn label_size(len: usize) -> (i32, i32) {
     (len as i32 * LABEL_CHAR_WIDTH + LABEL_PADDING, LABEL_HEIGHT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::session_named;
+
+    // REQ-SESSION-01: an error reply names the session its request named,
+    // even a request that does not parse, so a late error for an old
+    // session cannot end the overlay's current one.
+    #[test]
+    fn req_session_01_errors_name_the_session_their_request_named() {
+        assert_eq!(
+            session_named(r#"{"v":1,"op":"key","session":"s3","generation":0,"key":"a"}"#),
+            Some("s3".into())
+        );
+        assert_eq!(
+            session_named(r#"{"v":1,"op":"key","session":"s3"}"#),
+            Some("s3".into()),
+            "a request missing its fields still names its session"
+        );
+        assert_eq!(session_named(r#"{"v":1,"op":"targets"}"#), None);
+        assert_eq!(session_named("not json"), None);
+        assert_eq!(session_named(r#"{"session":7}"#), None);
+    }
 }

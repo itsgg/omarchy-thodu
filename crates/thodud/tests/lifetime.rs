@@ -33,8 +33,14 @@ fn test_root(name: &str) -> PathBuf {
 impl Daemon {
     /// Run thodud on `root`'s runtime directory without waiting for it.
     fn spawn(root: PathBuf) -> Daemon {
-        let child = Command::new(env!("CARGO_BIN_EXE_thodud"))
+        Daemon::spawn_with(root, Command::new(env!("CARGO_BIN_EXE_thodud")), &[])
+    }
+
+    /// Run `command`, which starts thodud, as `spawn` does, with `vars` set.
+    fn spawn_with(root: PathBuf, mut command: Command, vars: &[(&str, &str)]) -> Daemon {
+        let child = command
             .env_clear()
+            .envs(vars.iter().copied())
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", root.join("home"))
             .env("XDG_DATA_HOME", root.join("data"))
@@ -232,5 +238,147 @@ fn req_perf_02_shutdown_releases_the_socket_at_once() {
     assert!(
         !daemon.socket().exists(),
         "shutdown leaves no socket behind"
+    );
+}
+
+/// One request line and its reply line.
+fn ask(socket: &Path, line: &str) -> String {
+    let mut stream = UnixStream::connect(socket).expect("connect");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("timeout");
+    stream.write_all(line.as_bytes()).expect("send");
+    let mut reply = String::new();
+    BufReader::new(stream).read_line(&mut reply).expect("reply");
+    reply
+}
+
+/// How long until thodud closes `stream`, reading whatever it sends.
+fn closed_after(mut stream: UnixStream, wait: Duration) -> Option<(Duration, Vec<u8>)> {
+    stream.set_read_timeout(Some(wait)).expect("timeout");
+    let start = Instant::now();
+    let mut seen = Vec::new();
+    stream
+        .read_to_end(&mut seen)
+        .ok()
+        .map(|_| (start.elapsed(), seen))
+}
+
+// REQ-SESSION-01: an error for a request that named a session names it, so
+// the overlay drops a late error for an old session instead of ending the
+// one it shows.
+#[test]
+fn req_session_01_an_error_names_the_session_it_was_for() {
+    let daemon = Daemon::start("errsession");
+    let reply = ask(
+        &daemon.socket(),
+        "{\"v\":1,\"op\":\"key\",\"session\":\"old\",\"generation\":0,\"key\":\"a\"}\n",
+    );
+    assert!(reply.contains("\"ok\":false"), "{reply}");
+    assert!(reply.contains("\"session\":\"old\""), "{reply}");
+    let reply = ask(
+        &daemon.socket(),
+        "{\"v\":1,\"op\":\"key\",\"session\":\"old\"}\n",
+    );
+    assert!(
+        reply.contains("\"session\":\"old\""),
+        "a malformed request: {reply}"
+    );
+}
+
+// REQ-PERF-02: a client that connects and never sends is cut off, so it
+// cannot hold a thread and two descriptors forever.
+#[test]
+fn req_perf_02_thodud_cuts_off_a_silent_client() {
+    let daemon = Daemon::start("silent");
+    let stream = UnixStream::connect(daemon.socket()).expect("connect");
+    let (after, seen) =
+        closed_after(stream, Duration::from_secs(10)).expect("thodud kept a silent client");
+    assert!(after < Duration::from_secs(8), "cut off after {after:?}");
+    assert!(seen.is_empty());
+}
+
+// REQ-PERF-02: one overlong line is refused with bad-request and the
+// connection closed, before it grows thodud's memory.
+#[test]
+fn req_perf_02_thodud_refuses_an_overlong_line() {
+    let daemon = Daemon::start("long");
+    // Several rounds: the reply is lost only when the socket closes while
+    // the rest of the line is still unread, which depends on timing.
+    for round in 0..5 {
+        let stream = UnixStream::connect(daemon.socket()).expect("connect");
+        let mut writer = stream.try_clone().expect("clone");
+        let sender = std::thread::spawn(move || {
+            let chunk = vec![b'x'; 64 << 10];
+            for _ in 0..64 {
+                if writer.write_all(&chunk).is_err() {
+                    break;
+                }
+            }
+        });
+        let (_, seen) = closed_after(stream, Duration::from_secs(5))
+            .unwrap_or_else(|| panic!("round {round}: no reply and end of file"));
+        let reply = String::from_utf8_lossy(&seen);
+        assert!(
+            reply.contains("\"error\":\"bad-request\""),
+            "round {round}: {reply}"
+        );
+        sender.join().expect("sender");
+    }
+}
+
+// REQ-PERF-02: a fatal accept error, here running out of descriptors,
+// exits 1 so `Restart=on-failure` brings thodud back.
+#[test]
+fn req_perf_02_a_fatal_accept_error_exits_1() {
+    let mut daemon = Daemon::start("nofile");
+    // Let the probe connection of wait_listening close, then cap thodud at
+    // the descriptors it holds, so the next accept fails.
+    std::thread::sleep(Duration::from_millis(300));
+    let pid = daemon.child.id();
+    let open = std::fs::read_dir(format!("/proc/{pid}/fd"))
+        .expect("read descriptors")
+        .count();
+    let capped = Command::new("prlimit")
+        .arg(format!("--pid={pid}"))
+        .arg(format!("--nofile={open}:{open}"))
+        .status()
+        .expect("run prlimit");
+    assert!(capped.success(), "prlimit failed");
+    let _client = UnixStream::connect(daemon.socket()).expect("connect");
+    let status = daemon
+        .exits_within(Duration::from_secs(3))
+        .expect("thodud kept running without descriptors");
+    assert_eq!(status.code(), Some(1), "a fatal accept error is a failure");
+    let stderr = daemon.stderr();
+    assert!(
+        stderr
+            .lines()
+            .any(|l| l.starts_with("ERROR ") && l.contains("cannot accept")),
+        "{stderr}"
+    );
+}
+
+// REQ-PERF-02: in the service handoff the old thodud shuts down and the new
+// one binds only once the old one has released the path, so the old one
+// never removes its successor's socket.
+#[test]
+fn req_perf_02_a_handoff_keeps_the_successor_socket() {
+    let mut old = Daemon::start("handoff");
+    let root = old.root.clone();
+    let new = Daemon::spawn_with(
+        root,
+        Command::new(env!("CARGO_BIN_EXE_thodud")),
+        &[("INVOCATION_ID", "test")],
+    );
+    let status = old
+        .exits_within(Duration::from_secs(3))
+        .expect("the old thodud did not hand over");
+    assert!(status.success(), "a handoff exits 0: {status}");
+    new.wait_listening();
+    std::thread::sleep(Duration::from_millis(1500));
+    assert!(
+        UnixStream::connect(new.socket()).is_ok(),
+        "the successor's socket was removed"
     );
 }

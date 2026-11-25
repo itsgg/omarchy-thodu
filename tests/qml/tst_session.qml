@@ -972,6 +972,45 @@ Item {
             verify(findChild(view, "label-a") !== null);
         }
 
+        // REQ-SESSION-01: an error for an old session, which thodud now names,
+        // does not end the session the overlay shows.
+        function test_req_session_01_an_error_for_an_old_session_keeps_the_current_one() {
+            view.apply({ v: 1, ok: false, error: "bad-request", session: "s0", message: "no session s0" });
+            verify(view.active, "the current session stays open");
+            verify(top.ended === null);
+            view.apply({ v: 1, ok: false, error: "bad-request", session: "s1", message: "no session s1" });
+            verify(top.ended !== null, "an error for the current session still ends it");
+        }
+
+        // REQ-SESSION-02, REQ-ACT-02: the keyboard goes back to exclusive after
+        // a click only for the current session's done click while the wait
+        // runs; a late, failed or workspace-switching reply leaves it on
+        // demand, and the wait still ends by itself and gives the keyboard
+        // back.
+        function test_req_session_02_keyboard_reclaim_after_a_click() {
+            const done = { v: 1, ok: true, session: "s1", clicked: true, workspace_changed: false };
+            verify(focusPolicy.reclaimsAfterClick(done, "s1", "s1", true), "a done click in the wait");
+            verify(!focusPolicy.reclaimsAfterClick(done, "s1", "s1", false), "the wait already ended");
+            verify(!focusPolicy.reclaimsAfterClick(done, "s1", "s2", true), "another session is showing");
+            verify(!focusPolicy.reclaimsAfterClick(done, "", "s1", true), "no click is awaited");
+            verify(!focusPolicy.reclaimsAfterClick(Object.assign({}, done, { clicked: false }), "s1", "s1", true),
+                   "hidden timed out before the click");
+            verify(!focusPolicy.reclaimsAfterClick(Object.assign({}, done, { workspace_changed: true }), "s1", "s1", true),
+                   "the click switched workspace");
+            verify(!focusPolicy.reclaimsAfterClick(null, "s1", "s1", true));
+
+            // With clicked false the view's own wait still ends the session.
+            top.nextState = "acting";
+            top.nextLinger = true;
+            keyClick(Qt.Key_Return);
+            tryVerify(() => view.lingering, 1000);
+            verify(!focusPolicy.reclaimsAfterClick(Object.assign({}, done, { clicked: false }), "s1", view.session, view.lingering));
+            tryVerify(() => top.ended !== null, view.lingerMs + 200, "the wait ends without a done click");
+            focusPolicy.opened = false;
+            compare(focusPolicy.layerKeyboardFocus, focusPolicy.keyboardFocusNone, "the keyboard is given back");
+            focusPolicy.opened = true;
+        }
+
         function test_replies_for_another_session_are_ignored() {
             view.apply({ v: 1, ok: false, session: "s0", message: "no session s0" });
             verify(view.active);

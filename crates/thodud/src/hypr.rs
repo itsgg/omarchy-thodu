@@ -31,9 +31,16 @@ pub fn request(command: &str) -> Result<String, String> {
     stream
         .write_all(command.as_bytes())
         .map_err(|e| e.to_string())?;
-    let mut out = String::new();
-    stream.read_to_string(&mut out).map_err(|e| e.to_string())?;
-    Ok(out)
+    read_reply(stream)
+}
+
+/// Hyprland's reply as text. A window title need not be UTF-8, and one that
+/// is not must not fail the whole reply: it reads with replacement
+/// characters instead.
+fn read_reply(mut reader: impl Read) -> Result<String, String> {
+    let mut out = Vec::new();
+    reader.read_to_end(&mut out).map_err(|e| e.to_string())?;
+    Ok(String::from_utf8_lossy(&out).into_owned())
 }
 
 fn json(command: &str) -> Result<Value, String> {
@@ -481,6 +488,25 @@ mod tests {
             (entries[1].monitor.width, entries[1].monitor.height),
             (1920, 1200)
         );
+    }
+
+    // REQ-SESSION-01: one window title that is not UTF-8 must not fail
+    // reading Hyprland's clients, which would end every hints session with
+    // an internal error; the window still enters the session.
+    #[test]
+    fn req_session_01_a_title_that_is_not_utf8_still_reads() {
+        let mut reply = br#"[{"address":"0xa","class":"app","title":"bad "#.to_vec();
+        reply.extend_from_slice(b"\xff\xfe");
+        reply.extend_from_slice(
+            br#" title","pid":10,"at":[0,0],"size":[100,100],"workspace":{"id":5},"monitor":0,"mapped":true,"hidden":false,"pinned":false,"floating":false,"fullscreen":0,"focusHistoryID":0}]"#,
+        );
+        let text = super::read_reply(reply.as_slice()).expect("the reply reads");
+        let clients: serde_json::Value = serde_json::from_str(&text).expect("the reply parses");
+        let monitors =
+            json!([{ "id": 0, "activeWorkspace": { "id": 5 }, "specialWorkspace": { "id": 0 } }]);
+        let windows = super::visible_windows_from(&monitors, &clients, 0);
+        assert_eq!(windows.len(), 1);
+        assert!(windows[0].title.starts_with("bad "), "{}", windows[0].title);
     }
 
     // REQ-SRC-07: Hyprland's layer report becomes each monitor's layers, and
