@@ -16,16 +16,45 @@ use woints_vision::{ClassicalDetector, DetectParams, DetectionClass, Detector, F
 
 use crate::sources::{Found, Source, SourceTargets};
 
-/// A screen-image source, with detector scratch memory reused across sessions.
+/// How the monitor is captured: the logical area, its scale and how long the
+/// capture may take, to PNG bytes.
+type Capture = dyn Fn(Rect, f64, Duration) -> Result<Vec<u8>, String> + Send + Sync;
+
+/// A screen-image source, with detector scratch memory reused across
+/// sessions. A detection still running when the next one starts holds that
+/// memory, so the next one uses scratch of its own rather than wait for it.
 pub struct ImageSource {
-    detector: Mutex<ClassicalDetector>,
+    detector: Mutex<Box<dyn Detector>>,
+    spare: Box<dyn Fn() -> Box<dyn Detector> + Send + Sync>,
+    capture: Box<Capture>,
     budget: Duration,
+}
+
+/// The part of the image budget kept back from detection, for mapping the
+/// detections to targets, fingerprinting them and sending them, so a
+/// detection that runs to its deadline is still used in part.
+fn reserve(budget: Duration) -> Duration {
+    budget / 6
 }
 
 impl ImageSource {
     pub fn new(budget: Duration) -> Self {
+        Self::with(
+            budget,
+            Box::new(grim),
+            Box::new(|| Box::new(ClassicalDetector::new())),
+        )
+    }
+
+    fn with(
+        budget: Duration,
+        capture: Box<Capture>,
+        spare: Box<dyn Fn() -> Box<dyn Detector> + Send + Sync>,
+    ) -> Self {
         Self {
-            detector: Mutex::new(ClassicalDetector::new()),
+            detector: Mutex::new(spare()),
+            spare,
+            capture,
             budget,
         }
     }
@@ -90,30 +119,15 @@ impl ImageSource {
         }
 
         let visible = monitor.logical();
-        let geometry = format!("{},{} {}x{}", visible.x, visible.y, visible.w, visible.h);
-        let scale = monitor.scale.to_string();
-        let captured = Command::new("grim")
-            // Compression level 0 keeps the PNG stream lossless while
-            // avoiding capture time that would consume the detector budget.
-            .args(["-l", "0", "-g", &geometry, "-s", &scale, "-"])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .output()
-            .map_err(|_| "grim capture failed".to_string())?;
-        if !captured.status.success() {
-            return Err(format!(
-                "grim capture exited with {}",
-                captured.status.code().unwrap_or(-1)
-            ));
-        }
-        if started.elapsed() >= self.budget {
-            return Ok(SourceTargets::new(
-                Vec::new(),
-                "image capture used its budget",
-            ));
-        }
+        let detect_budget = self.budget.saturating_sub(reserve(self.budget));
+        let detect_until = started + detect_budget;
+        let captured = (self.capture)(
+            visible,
+            monitor.scale,
+            detect_until.saturating_duration_since(Instant::now()),
+        )?;
 
-        let (width, height, rgba) = decode_png(&captured.stdout)?;
+        let (width, height, rgba) = decode_png(&captured)?;
         let frame = Frame {
             rgba,
             width,
@@ -121,12 +135,18 @@ impl ImageSource {
             rect: VisionRect::<Global>::new(visible.x, visible.y, visible.w, visible.h),
             scale: monitor.scale as f32,
         };
-        let params = detect_params(started, self.budget);
-        let mut detector = self
-            .detector
-            .lock()
-            .map_err(|_| "image detector lock".to_string())?;
+        let params = detect_params(started, detect_budget);
+        let mut shared = self.detector.try_lock().ok();
+        let mut spare;
+        let detector: &mut dyn Detector = match shared.as_deref_mut() {
+            Some(detector) => detector.as_mut(),
+            None => {
+                spare = (self.spare)();
+                spare.as_mut()
+            }
+        };
         let detections = detector.detect(&frame, &params);
+        drop(shared);
         let boxes: Vec<_> = detections
             .iter()
             .filter_map(|d| {
@@ -232,14 +252,29 @@ fn pixels_changed_with(
 const RECAPTURE_LIMIT: Duration = Duration::from_millis(500);
 
 /// The monitor area the target was detected in, at the same scale, through
-/// grim, read on its own thread so the image cannot fill the pipe, within
-/// RECAPTURE_LIMIT.
+/// grim, within RECAPTURE_LIMIT.
 fn capture_region(check: &PixelCheck) -> Result<(u32, u32, Vec<u8>), String> {
-    let r = check.area;
     let scale = f64::from(check.scale_permille) / 1000.0;
-    let geometry = format!("{},{} {}x{}", r.x, r.y, r.w, r.h);
-    let mut child = Command::new("grim")
-        .args(["-l", "0", "-g", &geometry, "-s", &scale.to_string(), "-"])
+    decode_png(&grim(check.area, scale, RECAPTURE_LIMIT)?)
+}
+
+/// A PNG of the logical `area` at `scale` from grim, which is killed once it
+/// has run for `limit`.
+fn grim(area: Rect, scale: f64, limit: Duration) -> Result<Vec<u8>, String> {
+    let geometry = format!("{},{} {}x{}", area.x, area.y, area.w, area.h);
+    let mut command = Command::new("grim");
+    // Compression level 0 keeps the PNG stream lossless while avoiding
+    // capture time that would consume the detector budget.
+    command.args(["-l", "0", "-g", &geometry, "-s", &scale.to_string(), "-"]);
+    run_bounded(command, limit)
+}
+
+/// `command`'s standard output, read on its own thread so the image cannot
+/// fill the pipe; a command still running after `limit` is killed.
+fn run_bounded(mut command: Command, limit: Duration) -> Result<Vec<u8>, String> {
+    let until = Instant::now() + limit;
+    let mut child = command
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
@@ -250,15 +285,29 @@ fn capture_region(check: &PixelCheck) -> Result<(u32, u32, Vec<u8>), String> {
         let mut bytes = Vec::new();
         let _ = tx.send(stdout.read_to_end(&mut bytes).map(|_| bytes));
     });
-    match rx.recv_timeout(RECAPTURE_LIMIT) {
-        Ok(Ok(bytes)) => {
-            let _ = child.wait();
-            decode_png(&bytes)
-        }
-        _ => {
-            let _ = child.kill();
-            let _ = child.wait();
-            Err("grim did not capture the region in time".into())
+    let stop = |mut child: std::process::Child, why: &str| {
+        let _ = child.kill();
+        let _ = child.wait();
+        Err(why.to_string())
+    };
+    let bytes = match rx.recv_timeout(until.saturating_duration_since(Instant::now())) {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(_)) => return stop(child, "grim output could not be read"),
+        Err(_) => return stop(child, "grim did not capture in time"),
+    };
+    // The output is complete; grim exits right after it, but a process
+    // that closed its output and lingers is held to the same limit.
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(bytes),
+            Ok(Some(status)) => {
+                return Err(format!(
+                    "grim capture exited with {}",
+                    status.code().unwrap_or(-1)
+                ));
+            }
+            Ok(None) if Instant::now() < until => thread::sleep(Duration::from_millis(1)),
+            _ => return stop(child, "grim did not capture in time"),
         }
     }
 }
@@ -843,5 +892,159 @@ mod tests {
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].window, "0xselected");
         assert_eq!(targets[0].bounds, Rect::new(20, 20, 20, 10));
+    }
+
+    /// A blank monitor image, as grim would return it.
+    fn png_of(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut bytes, width, height);
+            encoder.set_color(png::ColorType::Rgba);
+            let mut writer = encoder.write_header().expect("a header");
+            writer
+                .write_image_data(&vec![255; (width * height * 4) as usize])
+                .expect("the pixels");
+        }
+        bytes
+    }
+
+    fn line_at(x: i32, y: i32) -> woints_core::vision::Detection {
+        woints_core::vision::Detection {
+            rect_px: woints_core::geom::Rect::new(x, y, 60, 14),
+            confidence: 0.9,
+            class: woints_vision::DetectionClass::TextLine,
+            source: woints_core::vision::DetectionSource::default(),
+        }
+    }
+
+    /// A detector that runs right up to its deadline and returns what it
+    /// found by then, as the classical detector does.
+    struct ToTheDeadline;
+
+    impl woints_vision::Detector for ToTheDeadline {
+        fn detect(
+            &mut self,
+            _: &woints_vision::Frame,
+            params: &woints_vision::DetectParams,
+        ) -> Vec<woints_core::vision::Detection> {
+            let deadline = params.deadline.expect("a detection deadline");
+            std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+            vec![line_at(120, 70)]
+        }
+    }
+
+    fn monitor() -> thodu_core::model::Monitor {
+        thodu_core::model::Monitor {
+            name: "M".into(),
+            x: 0,
+            y: 0,
+            width: 400,
+            height: 300,
+            scale: 1.0,
+            layers: Vec::new(),
+        }
+    }
+
+    fn blank_capture() -> Box<super::Capture> {
+        Box::new(|area: Rect, _, _| Ok(png_of(area.w as u32, area.h as u32)))
+    }
+
+    // REQ-SRC-06: the detector's deadline leaves room to map and send its
+    // detections, so one that runs to its deadline is used in part rather
+    // than arriving after the image budget and being discarded.
+    #[test]
+    fn req_src_06_a_detection_that_reaches_its_deadline_is_used_in_part() {
+        let source = super::ImageSource::with(
+            Duration::from_millis(180),
+            blank_capture(),
+            Box::new(|| Box::new(ToTheDeadline)),
+        );
+        let sources: Vec<std::sync::Arc<dyn crate::sources::Source>> =
+            vec![std::sync::Arc::new(source)];
+        let got = crate::sources::collect_fallback_visible(&sources, &[window()], &monitor(), &[]);
+        assert!(
+            !got.status.iter().any(|status| status.contains("missed")),
+            "{:?}",
+            got.status
+        );
+        assert_eq!(got.targets.len(), 1, "{:?}", got.status);
+        assert_eq!(got.targets[0].source, Source::Image);
+    }
+
+    // REQ-SRC-06: a capture that hangs is killed at its limit, and one that
+    // fails is named; a complete one is read whole.
+    #[test]
+    fn req_src_06_a_hung_grim_is_killed_at_its_limit() {
+        let marker = format!("7.{}", std::process::id());
+        let mut hung = std::process::Command::new("sleep");
+        hung.arg(&marker);
+        let started = Instant::now();
+        let got = super::run_bounded(hung, Duration::from_millis(50));
+        assert_eq!(got, Err("grim did not capture in time".to_string()));
+        assert!(started.elapsed() < Duration::from_millis(1000));
+        let still_running = std::fs::read_dir("/proc")
+            .expect("/proc")
+            .filter_map(|entry| std::fs::read(entry.ok()?.path().join("cmdline")).ok())
+            .any(|cmdline| cmdline == format!("sleep\0{marker}\0").into_bytes());
+        assert!(!still_running, "the hung capture was killed");
+
+        let mut failed = std::process::Command::new("sh");
+        failed.args(["-c", "exit 3"]);
+        assert_eq!(
+            super::run_bounded(failed, Duration::from_secs(5)),
+            Err("grim capture exited with 3".to_string())
+        );
+        let mut whole = std::process::Command::new("printf");
+        whole.arg("png");
+        assert_eq!(
+            super::run_bounded(whole, Duration::from_secs(5)),
+            Ok(b"png".to_vec())
+        );
+    }
+
+    /// A detector whose first detection overruns its deadline by far, as a
+    /// worker left behind by a late session does.
+    struct OverrunsOnce(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    impl woints_vision::Detector for OverrunsOnce {
+        fn detect(
+            &mut self,
+            _: &woints_vision::Frame,
+            _: &woints_vision::DetectParams,
+        ) -> Vec<woints_core::vision::Detection> {
+            if self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                std::thread::sleep(Duration::from_millis(1500));
+            }
+            vec![line_at(120, 70)]
+        }
+    }
+
+    // REQ-SRC-06: a late image worker still holding the detector does not
+    // block the next session's detection.
+    #[test]
+    fn req_src_06_a_late_image_worker_does_not_block_the_next_detection() {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let spare_calls = std::sync::Arc::clone(&calls);
+        let source = std::sync::Arc::new(super::ImageSource::with(
+            Duration::from_millis(180),
+            blank_capture(),
+            Box::new(move || Box::new(OverrunsOnce(std::sync::Arc::clone(&spare_calls)))),
+        ));
+        let late = {
+            let source = std::sync::Arc::clone(&source);
+            std::thread::spawn(move || {
+                crate::sources::Source::collect_many(&*source, &[window()], &monitor())
+            })
+        };
+        while calls.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            std::thread::yield_now();
+        }
+        let started = Instant::now();
+        let next = crate::sources::Source::collect_many(&*source, &[window()], &monitor())
+            .expect("the next detection");
+        let took = started.elapsed();
+        assert!(took < Duration::from_millis(1000), "waited {took:?}");
+        assert_eq!(next.targets.len(), 1, "{}", next.status);
+        late.join().expect("the late worker").expect("its result");
     }
 }
