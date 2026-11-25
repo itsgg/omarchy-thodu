@@ -1,4 +1,4 @@
-# 0030: Match frames by size, and recheck windows and bar items more closely
+# 0031: Match frames by size, and recheck windows and bar items more closely
 
 Status: proposed
 Why: Task 0034, review findings 7, 8, 9 and the XWayland and rotation parts of 17. The focused window took any ACTIVE frame of its process with no size check, and fell back to the process's only frame even when its size was known to differ, so a dialog the process does not expose could get its main window's tree. A background window needed an exact size match, but live on GG's machine a Chromium window on the special workspace reported a frame 26 units taller than Hyprland's window, the height of the bar. The stale check compared a window's address, position, size and workspace but not its process or class, and Hyprland reuses addresses. Bar items were scanned once a second, so a click could be checked against items up to a second old. XWayland windows report element extents in physical pixels under Omarchy's zero scaling, and Hyprland reports a rotated monitor's mode width and height unswapped.
