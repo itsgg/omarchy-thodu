@@ -332,12 +332,19 @@ fn exit_status(
     }
 }
 
+/// The most image detections one session takes. REQ-LABEL-01: image
+/// targets join a session beneath its reserved label prefix, which holds
+/// `labels::BENEATH_CAPACITY` labels of at most three letters, so the cap
+/// may not exceed it; the build fails if it does.
+const MAX_IMAGE_ELEMENTS: usize = 500;
+const _: () = assert!(MAX_IMAGE_ELEMENTS <= thodu_core::labels::BENEATH_CAPACITY);
+
 fn detect_params(started: Instant, budget: Duration) -> DetectParams {
     DetectParams {
         // Keep file-row text legible on common 1920-pixel outputs while
         // bounding the detector's work and mapping boxes to source pixels.
         downscale_width: 1280,
-        max_elements: 500,
+        max_elements: MAX_IMAGE_ELEMENTS,
         deadline: Some(started + budget),
         ..DetectParams::default()
     }
@@ -1097,5 +1104,18 @@ mod tests {
             Err("grim did not capture in time".to_string())
         );
         assert!(started.elapsed() < Duration::from_millis(500));
+    }
+
+    // REQ-LABEL-01: the detector's cap and the label limit are checked
+    // together; a full detector's worth of image targets gets labels of at
+    // most three letters beneath the reserved prefix.
+    #[test]
+    fn req_label_01_image_cap_fits_beneath_the_reserved_label_prefix() {
+        let params = super::detect_params(Instant::now(), Duration::from_secs(1));
+        assert_eq!(params.max_elements, super::MAX_IMAGE_ELEMENTS);
+        assert!(params.max_elements <= thodu_core::labels::BENEATH_CAPACITY);
+        let labels = thodu_core::labels::assign_beneath(params.max_elements, 'z');
+        assert_eq!(labels.len(), params.max_elements);
+        assert!(labels.iter().all(|label| label.len() <= 3), "{labels:?}");
     }
 }

@@ -35,17 +35,95 @@ impl Default for Config {
     }
 }
 
-/// The settings in `text`; an unknown key or a wrong type is an error, so a
-/// typo is reported instead of silently ignored.
+const SETTINGS: &str = "labels_only, status_display, scroll_step and scroll_shift_step";
+
+/// The settings in `text`. An unknown key, a wrong type or a value out of
+/// range is an error that names the key and what it takes, so a typo is
+/// reported instead of silently ignored.
 pub fn parse(text: &str) -> Result<Config, String> {
-    let config: Config = toml::from_str(text).map_err(|e| e.message().to_string())?;
-    for (name, value) in [
-        ("scroll_step", config.scroll_step),
-        ("scroll_shift_step", config.scroll_shift_step),
-    ] {
-        if !(1..=100).contains(&value) {
-            return Err(format!("{name} must be between 1 and 100"));
+    let table: toml::Table = toml::from_str(text).map_err(|e| match e.span() {
+        Some(span) => format!(
+            "line {}: {}",
+            text[..span.start.min(text.len())].matches('\n').count() + 1,
+            e.message()
+        ),
+        None => e.message().to_string(),
+    })?;
+    let mut config = Config::default();
+    for (key, value) in &table {
+        match key.as_str() {
+            "labels_only" => {
+                config.labels_only = value.as_bool().ok_or_else(|| {
+                    format!(
+                        "labels_only must be true or false, not a {}",
+                        value.type_str()
+                    )
+                })?;
+            }
+            "status_display" => {
+                config.status_display = match value.as_str() {
+                    Some("auto") => StatusDisplay::Auto,
+                    Some("always") => StatusDisplay::Always,
+                    Some("off") => StatusDisplay::Off,
+                    Some(other) => {
+                        return Err(format!(
+                            "status_display must be \"auto\", \"always\" or \"off\", not {other:?}"
+                        ));
+                    }
+                    None => {
+                        return Err(format!(
+                            "status_display must be \"auto\", \"always\" or \"off\", not a {}",
+                            value.type_str()
+                        ));
+                    }
+                };
+            }
+            name @ ("scroll_step" | "scroll_shift_step") => {
+                let Some(number) = value.as_integer() else {
+                    return Err(format!(
+                        "{name} must be a whole number from 1 to 100, not a {}",
+                        value.type_str()
+                    ));
+                };
+                let step = u16::try_from(number)
+                    .ok()
+                    .filter(|n| (1..=100).contains(n))
+                    .ok_or_else(|| format!("{name} must be between 1 and 100, not {number}"))?;
+                if name == "scroll_step" {
+                    config.scroll_step = step;
+                } else {
+                    config.scroll_shift_step = step;
+                }
+            }
+            other => {
+                return Err(format!(
+                    "{other} is not a setting; the settings are {SETTINGS}"
+                ));
+            }
         }
     }
     Ok(config)
+}
+
+/// The settings in the file at `path`, and why the defaults are used
+/// instead when the file exists but cannot be read, is not UTF-8 or does
+/// not parse. A missing file is the defaults, with nothing to say.
+pub fn load(path: &std::path::Path) -> (Config, Option<String>) {
+    let problem = |why: String| {
+        (
+            Config::default(),
+            Some(format!("{why}; using the defaults until it is fixed")),
+        )
+    };
+    match std::fs::read(path) {
+        Ok(bytes) => match String::from_utf8(bytes) {
+            Ok(text) => match parse(&text) {
+                Ok(config) => (config, None),
+                Err(e) => problem(format!("{}: {e}", path.display())),
+            },
+            Err(_) => problem(format!("{} is not UTF-8 text", path.display())),
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Config::default(), None),
+        Err(e) => problem(format!("cannot read {}: {e}", path.display())),
+    }
 }

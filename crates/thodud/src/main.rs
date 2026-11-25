@@ -255,7 +255,8 @@ struct Daemon {
 }
 
 /// The settings, read at each session so an edit takes effect at once; a
-/// file that does not parse gives the defaults and says why.
+/// file that cannot be read or does not parse gives the defaults and says
+/// why (config::load).
 fn settings() -> (Config, Option<String>) {
     let dir = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
@@ -263,16 +264,7 @@ fn settings() -> (Config, Option<String>) {
     let Some(path) = dir.map(|d| d.join("thodu").join("config.toml")) else {
         return (Config::default(), None);
     };
-    match std::fs::read_to_string(&path) {
-        Ok(text) => match config::parse(&text) {
-            Ok(c) => (c, None),
-            Err(e) => (
-                Config::default(),
-                Some(format!("{}: {e}; using the defaults", path.display())),
-            ),
-        },
-        Err(_) => (Config::default(), None),
-    }
+    config::load(&path)
 }
 
 fn now_us() -> u64 {
@@ -1746,7 +1738,7 @@ fn merge_fallback(
     targets.extend(fallback.targets);
     let monitor = entry.monitor.clone();
     sources::finish_visible_targets(&mut targets, visible_windows, &monitor);
-    entry.session.merge_targets_preserving_labels(targets);
+    let left_out = entry.session.merge_targets_preserving_labels(targets);
     if entry.session.targets.is_empty() {
         entry.session.open_grid();
     }
@@ -1755,6 +1747,11 @@ fn merge_fallback(
         .strip_suffix("; collecting visual targets")
         .unwrap_or(&entry.status);
     entry.status = format!("{primary_status}; {}", fallback.status.join("; "));
+    if left_out > 0 {
+        entry.status.push_str(&format!(
+            "; {left_out} visual targets past the three-letter label limit left out"
+        ));
+    }
     entry.status = with_grid_note(entry.status.clone(), &entry.session, false);
     entry.collecting = false;
     true

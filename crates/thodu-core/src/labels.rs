@@ -20,9 +20,16 @@ pub fn assign_reserving(n: usize, reserved: char) -> Vec<String> {
     assign_from(n, &alphabet)
 }
 
-/// Labels beneath a reserved prefix. The returned code remains prefix-free.
+/// REQ-LABEL-01: how many labels fit beneath one reserved letter while
+/// staying within three letters: every two-letter suffix. A source that
+/// adds targets in a later generation, such as the image detector, caps its
+/// output at this.
+pub const BENEATH_CAPACITY: usize = ALPHABET.len() * ALPHABET.len();
+
+/// Labels beneath a reserved prefix, at most `BENEATH_CAPACITY` of them so
+/// none is longer than three letters. The returned code remains prefix-free.
 pub fn assign_beneath(n: usize, prefix: char) -> Vec<String> {
-    assign(n)
+    assign(n.min(BENEATH_CAPACITY))
         .into_iter()
         .map(|label| format!("{prefix}{label}"))
         .collect()

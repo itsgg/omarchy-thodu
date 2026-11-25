@@ -255,14 +255,18 @@ impl Session {
                 self.move_focus(shift);
             }
             Key::Backspace => {
-                if self.scroll_number.pop().is_some() {
-                    if self.scroll_number.is_empty() {
-                        self.focused = self.scroll_number_origin.take().flatten();
-                    } else if let Ok(number) = self.scroll_number.parse::<usize>()
-                        && number > 0
-                        && number <= self.targets.len()
-                    {
-                        self.focused = Some(number - 1);
+                // REQ-SESSION-07: the focus after Backspace is the focus the
+                // shorter prefix gives when typed afresh, so "05" back to
+                // "0" focuses area 10, as the shown prefix says.
+                let mut digits = std::mem::take(&mut self.scroll_number);
+                if digits.pop().is_some() {
+                    let origin = self.scroll_number_origin.take().flatten();
+                    self.focused = origin;
+                    for digit in digits.bytes() {
+                        self.scroll_digit(digit - b'0');
+                    }
+                    if !self.scroll_number.is_empty() {
+                        self.scroll_number_origin = Some(origin);
                     }
                 }
             }
@@ -314,8 +318,11 @@ impl Session {
     }
 
     /// Replace targets while retaining labels for every target already shown.
-    /// New targets receive labels below the reserved prefix.
-    pub fn merge_targets_preserving_labels(&mut self, mut targets: Vec<Target>) {
+    /// New targets receive labels below the reserved prefix. REQ-LABEL-01:
+    /// labels stay within three letters, so at most
+    /// `labels::BENEATH_CAPACITY` new targets join, nearest the top-left
+    /// first; returns how many were left out.
+    pub fn merge_targets_preserving_labels(&mut self, mut targets: Vec<Target>) -> usize {
         let mut ids = std::collections::HashSet::new();
         targets.retain(|target| ids.insert(target.id.clone()));
         labels::reading_order(&mut targets);
@@ -334,15 +341,18 @@ impl Session {
         } else {
             labels::assign_beneath(added_count, self.reserved_label_prefix.unwrap_or('z'))
         };
+        let left_out = added_count - added_labels.len();
         let mut added_labels = added_labels.into_iter();
-        self.labels = targets
-            .iter()
-            .map(|target| {
-                existing
+        let (targets, labels): (Vec<Target>, Vec<String>) = targets
+            .into_iter()
+            .filter_map(|target| {
+                let label = existing
                     .remove(&target.id)
-                    .unwrap_or_else(|| added_labels.next().expect("one label per new target"))
+                    .or_else(|| added_labels.next())?;
+                Some((target, label))
             })
-            .collect();
+            .unzip();
+        self.labels = labels;
         self.targets = targets;
         self.search.clear();
         self.label_prefix.clear();
@@ -353,6 +363,7 @@ impl Session {
         self.act = None;
         self.reserved_label_prefix = None;
         self.generation = self.generation.wrapping_add(1);
+        left_out
     }
 
     /// REQ-SESSION-04: a session on `targets` over the monitor's `area`,
