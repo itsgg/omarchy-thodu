@@ -1,6 +1,6 @@
 # 0030: Retry a Chromium wake that did not take
 
-Status: proposed
+Status: merged
 Why: Task 0036. REQ-SRC-03 wakes a dormant tree "at most once per process". The daemon marked a process woken before the wake had any effect, so a GetAttributes call that failed, timed out or reached a process that was not ready yet left that process dormant for the daemon's whole life, and so did a tree that went dormant again later: every later session found no targets in it and never tried again. Once per process is the wrong unit; what must stay bounded is the cost inside one session.
 
 ## Modified
