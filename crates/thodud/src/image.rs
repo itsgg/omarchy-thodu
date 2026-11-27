@@ -1083,15 +1083,6 @@ mod tests {
         let exited = std::process::Command::new("true")
             .spawn()
             .expect("true starts");
-        // The check runs once the child has exited, so its result does not
-        // depend on how soon a loaded machine schedules `true`.
-        let stat = format!("/proc/{}/stat", exited.id());
-        while !std::fs::read_to_string(&stat).is_ok_and(|s| {
-            s.rsplit_once(") ")
-                .is_some_and(|(_, rest)| rest.starts_with('Z'))
-        }) {
-            std::thread::sleep(Duration::from_millis(1));
-        }
         assert_eq!(
             super::exit_status(exited, b"png".to_vec(), Instant::now()),
             Ok(b"png".to_vec())
