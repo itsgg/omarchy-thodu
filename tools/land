@@ -211,11 +211,12 @@ $verify || { echo 'ERROR the gate moved HEAD or changed the tree'; exit 1; }; ex
         trap 'git worktree remove --force "$workdir" >/dev/null 2>&1 || true' EXIT
         git worktree add -q --detach "$workdir" "$tip"
         # Main's own gate, settings and checks judge the branch's tree. Every
-        # check builds in one target directory: each is a fresh checkout, newer
-        # than what the last check built, so cargo rebuilds what changed, and a
-        # directory per scratch worktree would start cold and stay behind.
+        # check builds in one target directory: each is a fresh checkout at a
+        # new path, and cargo reruns a build script whose rerun-if-changed
+        # paths are gone, so nothing built for an earlier check is trusted;
+        # a directory per scratch worktree would start cold and stay behind.
         (cd "$workdir" && tools/install-hooks >/dev/null \
-            && CARGO_TARGET_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cargo-target/$(sed -n 's/^PROJECT=//p' "$root/tools/gate.conf")-land" \
+            && CARGO_TARGET_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cargo-target/$project-land" \
                GATE_BRANCH=$branch GATE_ROOT=$workdir "$root/tools/gate") \
             || die "the full gate failed on $branch"
         (cd "$workdir" && eval "$verify") || die "the gate moved HEAD or changed the tree in $workdir"
