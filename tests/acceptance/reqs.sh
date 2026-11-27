@@ -18,6 +18,9 @@ for req in "$@"; do
     printf '%s\n%s\n' "$names" "$qml" | grep -q "$id" || { echo "ERROR no test is named for $req ($id)"; exit 1; }
 done
 cargo test --workspace --locked --quiet
+# Tests that hold a wall-clock budget are ignored in the parallel run and run
+# here one at a time, so the other tests' load cannot make them miss it.
+cargo test --workspace --locked --quiet -- --ignored --test-threads=1
 if [ -n "$qml" ]; then
     QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qmltestrunner -input tests/qml -import . -import tests/qml-stubs
 fi

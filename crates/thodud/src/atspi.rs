@@ -1486,6 +1486,7 @@ mod tests {
     // REQ-SRC-05: every bus call races the time left, so one application
     // that never answers costs a collection no more than its deadline.
     #[test]
+    #[ignore = "timing: run alone"]
     fn req_src_05_every_bus_call_is_bounded_by_the_time_left() {
         use futures_lite::future::block_on as block;
         let started = Instant::now();

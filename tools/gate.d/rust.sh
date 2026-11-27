@@ -12,6 +12,10 @@ rust_turn() {
     else
         each_root Cargo.toml cargo-test cargo test --workspace --locked --quiet
     fi
+    # Tests that hold a wall-clock budget are marked #[ignore = "timing: run
+    # alone"] and run here one at a time, so the parallel run's load cannot
+    # make them miss it.
+    each_root Cargo.toml cargo-test-timing cargo test --workspace --locked --quiet -- --ignored --test-threads=1
 }
 
 rust_full() {

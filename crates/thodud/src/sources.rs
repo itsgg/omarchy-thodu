@@ -1095,6 +1095,7 @@ mod tests {
     // REQ-ACT-03: an element that cannot be read again in time counts as
     // moved, so the session refreshes instead of clicking unchecked.
     #[test]
+    #[ignore = "timing: run alone"]
     fn req_act_03_an_unreadable_element_counts_as_moved() {
         let check = ElementCheck {
             at: thodu_core::model::ElementRef {
@@ -1316,6 +1317,7 @@ mod tests {
     // named; the others' targets are shown, and the session does not wait
     // for the slow one.
     #[test]
+    #[ignore = "timing: run alone"]
     fn req_src_05_a_slow_source_is_left_out_and_named() {
         let sources: Vec<Arc<dyn Source>> = vec![
             Arc::new(Fake {
@@ -1619,6 +1621,7 @@ mod tests {
     // REQ-SRC-05: sources in time all count, and the session waits for
     // nobody once they have answered.
     #[test]
+    #[ignore = "timing: run alone"]
     fn req_src_05_sources_in_time_all_count() {
         let sources: Vec<Arc<dyn Source>> = vec![
             Arc::new(Fake {
@@ -1865,6 +1868,7 @@ mod tests {
 
     // REQ-SRC-05: a requested fallback still observes its own budget.
     #[test]
+    #[ignore = "timing: run alone"]
     fn req_src_05_requested_fallback_past_budget_is_left_out_and_named() {
         let sources: Vec<Arc<dyn Source>> = vec![
             Arc::new(Conditional {
@@ -2042,6 +2046,7 @@ mod tests {
     // focused app's targets in the session within the atspi budget, and the
     // next session is not slowed by the first one's abandoned work.
     #[test]
+    #[ignore = "timing: run alone"]
     fn req_src_05_a_hung_background_app_leaves_the_focused_targets_in_time() {
         let budget = Duration::from_millis(300);
         let bus = Desk {

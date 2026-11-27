@@ -3580,6 +3580,7 @@ mod tests {
     // only after a first click that happened; it is skipped at once when the
     // first attempt ended without a click.
     #[test]
+    #[ignore = "timing: run alone"]
     fn req_act_02_second_click_is_not_sent_without_the_first() {
         let daemon = second_click_daemon(second_click_entry(false, 1), "item");
         let started = Instant::now();
@@ -3601,6 +3602,7 @@ mod tests {
     // REQ-SESSION-02: a session that closes while the second click waits for
     // the first wakes it at once, and nothing is clicked.
     #[test]
+    #[ignore = "timing: run alone"]
     fn req_session_02_closing_wakes_a_waiting_second_click() {
         let daemon = second_click_daemon(second_click_entry(false, 2), "item");
         let closer = {

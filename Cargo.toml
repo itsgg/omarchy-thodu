@@ -29,3 +29,10 @@ wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
 png = "0.17.16"
 woints-core = { git = "https://github.com/wochap/woints.git", rev = "427ad6ada86253d7d12c2517d2649a11b97b8080" }
 woints-vision = { git = "https://github.com/wochap/woints.git", rev = "427ad6ada86253d7d12c2517d2649a11b97b8080" }
+
+# Dependencies build optimized in dev and test builds, the workspace's own
+# crates stay debug: an unoptimized png decode took 24 to 180 ms of the image
+# source's 180 ms budget under load, where a release build is far faster, so
+# timing tests measured the debug build rather than Thodu.
+[profile.dev.package."*"]
+opt-level = 2
