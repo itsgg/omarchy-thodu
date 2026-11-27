@@ -8,9 +8,10 @@ has_cargo() { cargo "$1" --version >/dev/null 2>&1; }
 # crate's build output by its path inside the workspace, so worktrees sharing
 # one target directory (a target-dir in ~/.cargo/config.toml) run each other's
 # build scripts. The directory is under ~/.cache, which /home snapshots skip,
-# and named for the checkout, so a removed worktree's is easy to find.
+# and named for the checkout, so a removed worktree's is easy to find. A
+# caller that sets CARGO_TARGET_DIR keeps it (tools/land, for its scratch trees).
 target_key=$(printf '%s' "$root" | cksum | cut -d' ' -f1)
-export CARGO_TARGET_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cargo-target/$PROJECT-$(basename "$root")-$target_key"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/cargo-target/$PROJECT-$(basename "$root")-$target_key}"
 
 rust_turn() {
     each_root Cargo.toml cargo-fmt cargo fmt --all --check

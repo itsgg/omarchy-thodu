@@ -196,7 +196,7 @@ check)
         gate_cmd="set -e; t=\$(mktemp -d); unset GIT_OBJECT_DIRECTORY; export GIT_ALTERNATE_OBJECT_DIRECTORIES='$objects'
 git clone -q --shared --no-checkout '$common' \"\$t/repo\"; cd \"\$t/repo\"; git checkout -q --detach '$tip'
 mkdir \"\$t/main\"; git archive '$main_tip' tools | tar -x -C \"\$t/main\"
-tools/install-hooks >/dev/null; status=0; GATE_BRANCH='$branch' GATE_ROOT=\"\$t/repo\" \"\$t/main/tools/gate\" || status=\$?
+tools/install-hooks >/dev/null; status=0; CARGO_TARGET_DIR=\"\$t/repo/target\" GATE_BRANCH='$branch' GATE_ROOT=\"\$t/repo\" \"\$t/main/tools/gate\" || status=\$?
 $verify || { echo 'ERROR the gate moved HEAD or changed the tree'; exit 1; }; exit \$status"
         logs="$state/agents/$agent/logs"
         before_logs=$(ls "$logs" 2>/dev/null | wc -l)
@@ -210,8 +210,13 @@ $verify || { echo 'ERROR the gate moved HEAD or changed the tree'; exit 1; }; ex
         workdir=$(mktemp -d -p "$state/land" wt.XXXXXX)
         trap 'git worktree remove --force "$workdir" >/dev/null 2>&1 || true' EXIT
         git worktree add -q --detach "$workdir" "$tip"
-        # Main's own gate, settings and checks judge the branch's tree.
-        (cd "$workdir" && tools/install-hooks >/dev/null && GATE_BRANCH=$branch GATE_ROOT=$workdir "$root/tools/gate") \
+        # Main's own gate, settings and checks judge the branch's tree. Every
+        # check builds in one target directory: each is a fresh checkout, newer
+        # than what the last check built, so cargo rebuilds what changed, and a
+        # directory per scratch worktree would start cold and stay behind.
+        (cd "$workdir" && tools/install-hooks >/dev/null \
+            && CARGO_TARGET_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/cargo-target/$(sed -n 's/^PROJECT=//p' "$root/tools/gate.conf")-land" \
+               GATE_BRANCH=$branch GATE_ROOT=$workdir "$root/tools/gate") \
             || die "the full gate failed on $branch"
         (cd "$workdir" && eval "$verify") || die "the gate moved HEAD or changed the tree in $workdir"
         summary="$workdir/.gate/summary"
