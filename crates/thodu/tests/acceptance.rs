@@ -150,7 +150,29 @@ printf 'hyprctl %s\n' "$*" >> "$HOME/.local/share/thodu/tests/hyprctl.log"
 }
 
 fn write_executable(path: &Path, contents: &str) {
-    std::fs::write(path, contents).expect("write stub command");
+    let source = path.with_extension("source");
+    std::fs::write(&source, contents).expect("write stub command");
+    place_executable(&source, path);
+    std::fs::remove_file(&source).expect("remove the stub's source");
+}
+
+/// Copy `source` to an executable `path` through a `cp` child. A file this
+/// process opened for writing can be inherited, still open, by a child that
+/// another test thread forks before it execs, and running the file then fails
+/// with ETXTBSY ("Text file busy"); a file only `cp` wrote has no such handle.
+fn place_executable(source: &Path, path: &Path) {
+    let status = Command::new("cp")
+        .arg("--")
+        .arg(source)
+        .arg(path)
+        .status()
+        .expect("run cp");
+    assert!(
+        status.success(),
+        "cp {} {}",
+        source.display(),
+        path.display()
+    );
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
         .expect("make stub command executable");
 }
@@ -1216,7 +1238,7 @@ fn req_install_01_doctor_checks_the_live_session_environment() {
 fn copied_thodu(dir: &Path) -> PathBuf {
     std::fs::create_dir_all(dir).expect("create binary directory");
     let copy = dir.join("thodu");
-    std::fs::copy(env!("CARGO_BIN_EXE_thodu"), &copy).expect("copy thodu");
+    place_executable(Path::new(env!("CARGO_BIN_EXE_thodu")), &copy);
     copy
 }
 
